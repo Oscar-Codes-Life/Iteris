@@ -2,7 +2,9 @@ import {render} from 'ink';
 import {loadConfig, resolveGithubToken} from './config.js';
 import {fetchTodoTickets} from './github/tickets.js';
 import {getCompletedTicketNumbers} from './state/manager.js';
+import type {Ticket} from './types.js';
 import {App} from './ui/App.js';
+import {TicketPicker} from './ui/TicketPicker.js';
 import {TokenError} from './ui/TokenError.js';
 import {Welcome} from './ui/Welcome.js';
 
@@ -12,6 +14,17 @@ function showWelcome(): Promise<void> {
 			<Welcome onContinue={() => {
 				unmount();
 				resolve();
+			}} />,
+		);
+	});
+}
+
+function showTicketPicker(tickets: Ticket[]): Promise<Ticket> {
+	return new Promise(resolve => {
+		const {unmount} = render(
+			<TicketPicker tickets={tickets} onSelect={(ticket) => {
+				unmount();
+				resolve(ticket);
 			}} />,
 		);
 	});
@@ -77,10 +90,15 @@ async function run() {
 		process.exit(0);
 	}
 
-	console.log(`Found ${tickets.length} ticket${tickets.length !== 1 ? 's' : ''} to process.\n`);
+	let selected: Ticket;
+	if (tickets.length === 1) {
+		selected = tickets[0]!;
+	} else {
+		selected = await showTicketPicker(tickets);
+	}
 
 	const {waitUntilExit} = render(
-		<App config={config} tickets={tickets} cwd={process.cwd()} />,
+		<App config={config} tickets={[selected]} cwd={process.cwd()} />,
 	);
 
 	await waitUntilExit();
