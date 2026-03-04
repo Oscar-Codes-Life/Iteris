@@ -2,6 +2,12 @@
 
 ![Iteris Cover](assets/Iteris-cover.png)
 
+> **⚠️ EXPERIMENTAL AGENT — USE AT YOUR OWN RISK**
+>
+> Iteris is an **experimental** autonomous agent. We are **not responsible** for any consequences resulting from its use.
+>
+> It runs Claude Code with `--dangerously-skip-permissions`, which gives it **unrestricted access to your system** — it can execute arbitrary commands, modify or delete files, install packages, and more. Only run it in environments you are comfortable exposing.
+
 A specialized autonomous software engineering agent that pulls GitHub tickets, ships them one by one via Claude Code, and manages the full lifecycle from branch to PR.
 
 ## What It Does
@@ -12,9 +18,10 @@ No GitHub Actions. No YAML pipelines. Just a local process you run.
 
 ## Prerequisites
 
-1. **Node.js 22+**
-2. **Claude Code** installed and authenticated
-3. **`GITHUB_TOKEN`** set as a global environment variable
+1. **Claude Account** — preferably the [Max plan](https://claude.ai) for higher usage limits
+2. **Node.js 22+**
+3. **Claude Code** installed and authenticated
+4. **`GITHUB_TOKEN`** set as a global environment variable
 
 ```bash
 export GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx
