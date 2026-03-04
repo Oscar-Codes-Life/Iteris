@@ -5,6 +5,7 @@ import {readProgress, appendProgress} from '../state/progress.js';
 import {findPrForBranch, addLabelToIssue} from '../github/pr.js';
 import {expandPrompt} from './prompt.js';
 import {OutputWatcher} from './watcher.js';
+import {generateSummary} from './summarizer.js';
 
 export type RunnerCallbacks = {
 	onStatusChange: (ticketNumber: number, state: TicketState) => void;
@@ -135,6 +136,12 @@ async function runSingleTicket(
 
 				await writeStatus(folder, state);
 				await appendProgress(cwd, `#${ticket.number} (${ticket.title}) — completed successfully`);
+				try {
+					await generateSummary(folder);
+				} catch {
+					// Summary generation failed, not critical
+				}
+
 				callbacks.onComplete(ticket.number, {...state});
 			} else if (code !== 0 || state.elapsedMs >= config.timeout * 1000) {
 				state.status = state.elapsedMs >= config.timeout * 1000 ? 'stale' : 'failed';

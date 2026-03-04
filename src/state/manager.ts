@@ -1,4 +1,4 @@
-import {mkdir, writeFile, appendFile, readdir} from 'node:fs/promises';
+import {mkdir, writeFile, appendFile, readdir, readFile} from 'node:fs/promises';
 import path from 'node:path';
 import type {Ticket, TicketState} from '../types.js';
 
@@ -42,6 +42,14 @@ export async function writePrompt(folder: string, prompt: string): Promise<void>
 
 export async function appendLog(folder: string, chunk: string): Promise<void> {
 	await appendFile(path.join(folder, 'log.txt'), chunk);
+}
+
+export async function writeSummary(folder: string, content: string): Promise<void> {
+	await writeFile(path.join(folder, 'summary.md'), content);
+}
+
+export async function readLog(folder: string): Promise<string> {
+	return readFile(path.join(folder, 'log.txt'), 'utf-8');
 }
 
 export async function getCompletedTicketNumbers(cwd: string): Promise<Set<number>> {
