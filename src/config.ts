@@ -4,7 +4,7 @@ import path from 'node:path';
 import {z} from 'zod';
 import type {IterisConfig} from './types.js';
 
-function resolveGithubToken(): string | undefined {
+export function resolveGithubToken(): string | undefined {
 	const envToken = process.env['GITHUB_TOKEN'];
 	if (envToken) return envToken;
 

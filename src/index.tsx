@@ -1,10 +1,41 @@
 import {render} from 'ink';
-import {loadConfig} from './config.js';
+import {loadConfig, resolveGithubToken} from './config.js';
 import {fetchTodoTickets} from './github/tickets.js';
 import {getCompletedTicketNumbers} from './state/manager.js';
 import {App} from './ui/App.js';
+import {TokenError} from './ui/TokenError.js';
 
 async function main() {
+	// Check for token first
+	if (!resolveGithubToken()) {
+		const {rerender, waitUntilExit} = render(
+			<TokenError onRetry={() => handleRetry()} />,
+		);
+
+		function handleRetry() {
+			if (resolveGithubToken()) {
+				rerender(<></>);
+				void startApp();
+			}
+		}
+
+		async function startApp() {
+			try {
+				await run();
+			} catch (error) {
+				console.error(error instanceof Error ? error.message : error);
+				process.exit(1);
+			}
+		}
+
+		await waitUntilExit();
+		return;
+	}
+
+	await run();
+}
+
+async function run() {
 	let config;
 	try {
 		config = await loadConfig();
