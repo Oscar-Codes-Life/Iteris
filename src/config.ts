@@ -80,14 +80,12 @@ export async function loadConfig(): Promise<IterisConfig> {
 		}
 	}
 
-	let repoAutoDetected = false;
 	if (!parsed['repo']) {
 		const detected = detectRepoFromRemote();
 		if (!detected) {
 			throw new Error('Could not auto-detect GitHub repo. Either create .iteris.json with a "repo" field (e.g. {"repo": "owner/repo"}) or ensure this is a git repository with a GitHub remote.');
 		}
 		parsed['repo'] = detected;
-		repoAutoDetected = true;
 	}
 
 	const result = configSchema.safeParse(parsed);
@@ -96,8 +94,8 @@ export async function loadConfig(): Promise<IterisConfig> {
 		throw new Error(`.iteris.json validation failed:\n${issues}`);
 	}
 
-	if (repoAutoDetected) {
-		await writeFile(configPath, JSON.stringify(parsed, null, '\t') + '\n', 'utf8');
+	if (!fileExisted) {
+		await writeFile(configPath, JSON.stringify(result.data, null, '\t') + '\n', 'utf8');
 	}
 
 	return result.data as IterisConfig;
