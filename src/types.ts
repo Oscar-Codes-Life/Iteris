@@ -23,7 +23,8 @@ export type TicketState = {
 
 export type IterisConfig = {
 	repo: string;
-	todoLabel: string;
+	todoStatus: string;
+	projectNumber?: number;
 	baseBranch: string;
 	timeout: number;
 	claudeFlags: string[];

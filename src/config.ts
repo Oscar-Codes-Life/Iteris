@@ -49,7 +49,8 @@ function detectRepoFromRemote(): string | undefined {
 
 const configSchema = z.object({
 	repo: z.string().regex(/^[^/]+\/[^/]+$/, 'Must be in "owner/repo" format').optional(),
-	todoLabel: z.string().default('Todo'),
+	todoStatus: z.string().default('Todo'),
+	projectNumber: z.number().int().positive().optional(),
 	baseBranch: z.string().default('main'),
 	timeout: z.number().positive().default(1200),
 	claudeFlags: z.array(z.string()).default(['--dangerously-skip-permissions']),
