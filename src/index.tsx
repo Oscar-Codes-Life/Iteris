@@ -4,8 +4,22 @@ import {fetchTodoTickets} from './github/tickets.js';
 import {getCompletedTicketNumbers} from './state/manager.js';
 import {App} from './ui/App.js';
 import {TokenError} from './ui/TokenError.js';
+import {Welcome} from './ui/Welcome.js';
+
+function showWelcome(): Promise<void> {
+	return new Promise(resolve => {
+		const {unmount} = render(
+			<Welcome onContinue={() => {
+				unmount();
+				resolve();
+			}} />,
+		);
+	});
+}
 
 async function main() {
+	await showWelcome();
+
 	// Check for token first
 	if (!resolveGithubToken()) {
 		const {rerender, waitUntilExit} = render(
