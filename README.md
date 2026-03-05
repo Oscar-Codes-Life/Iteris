@@ -83,6 +83,13 @@ Iteris maintains state in `.iteris/runs/<ticket-id>-<slug>/`:
 
 Ticket statuses: `running` → `done` | `stale` | `failed`
 
+## Recommendations
+
+- **Claude Code Max subscription** — Use the Max plan with the latest Opus model for the best performance and higher usage limits.
+- **CLAUDE.md file** — Maintain a well-crafted `CLAUDE.md` in your project root with coding conventions, standards, and agent behavior preferences so every spawned instance follows consistent rules.
+- **Detailed ticket definitions** — Write thorough, well-explained GitHub issues to maximize one-shot success rate.
+- **Small, well-scoped issues** — Break work into small, clearly defined issues rather than large, vaguely described features.
+
 ## Project Structure
 
 ```
