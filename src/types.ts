@@ -21,8 +21,17 @@ export type TicketState = {
 	elapsedMs: number;
 };
 
+export type Provider = 'github' | 'trello';
+
+export type TrelloConfig = {
+	boardId?: string;
+	listId?: string;
+	moveOnComplete?: string;
+};
+
 export type IterisConfig = {
 	repo: string;
+	provider?: Provider;
 	todoStatus: string;
 	projectNumber?: number;
 	baseBranch: string;
@@ -33,4 +42,5 @@ export type IterisConfig = {
 		draft: boolean;
 		addLabelOnOpen?: string;
 	};
+	trello?: TrelloConfig;
 };

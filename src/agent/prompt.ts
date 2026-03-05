@@ -23,7 +23,7 @@ ${qualityCheckLines}
 5. Push the branch to origin
 6. Open a PR${prDraftNote} targeting \`${config.baseBranch}\` with:
    - Title: \`${ticket.title}\`
-   - Body referencing the ticket: \`Closes #${ticket.number}\`
+   - Body referencing the ticket: \`${config.provider === 'trello' ? `Implements Trello card: ${ticket.htmlUrl}` : `Closes #${ticket.number}`}\`
 7. When fully done, print exactly: <task>done</task>
 
 ## Memory from Previous Runs

@@ -3,6 +3,7 @@ import type {IterisConfig, Ticket, TicketState} from '../types.js';
 import {createRunFolder, writeStatus, writePrompt, appendLog} from '../state/manager.js';
 import {readProgress, appendProgress} from '../state/progress.js';
 import {findPrForBranch, addLabelToIssue} from '../github/pr.js';
+import {moveCardOnComplete} from '../trello/completion.js';
 import {expandPrompt} from './prompt.js';
 import {OutputWatcher} from './watcher.js';
 import {generateSummary} from './summarizer.js';
@@ -132,6 +133,14 @@ async function runSingleTicket(
 					}
 				} catch {
 					// PR lookup failed, not critical
+				}
+
+				if (config.provider === 'trello') {
+					try {
+						await moveCardOnComplete(config, ticket.number);
+					} catch {
+						// Card move failed, not critical
+					}
 				}
 
 				await writeStatus(folder, state);

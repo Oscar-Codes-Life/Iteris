@@ -4,6 +4,8 @@ import path from 'node:path';
 import {z} from 'zod';
 import type {IterisConfig} from './types.js';
 
+export type TrelloCredentials = {apiKey: string; token: string};
+
 export function resolveGithubToken(): string | undefined {
 	const envToken = process.env['GITHUB_TOKEN'];
 	if (envToken) return envToken;
@@ -17,6 +19,34 @@ export function resolveGithubToken(): string | undefined {
 			if (output) {
 				process.env['GITHUB_TOKEN'] = output;
 				return output;
+			}
+		} catch {
+			// Shell not available, try next
+		}
+	}
+
+	return undefined;
+}
+
+export function resolveTrelloCredentials(): TrelloCredentials | undefined {
+	let apiKey = process.env['TRELLO_API_KEY'];
+	let token = process.env['TRELLO_TOKEN'];
+
+	if (apiKey && token) return {apiKey, token};
+
+	for (const shell of ['zsh', 'bash']) {
+		try {
+			const output = execSync(`${shell} -ilc 'echo "$TRELLO_API_KEY|$TRELLO_TOKEN"'`, {
+				encoding: 'utf8',
+				stdio: ['pipe', 'pipe', 'pipe'],
+			}).trim();
+			const [key, tok] = output.split('|');
+			if (key && tok) {
+				apiKey ??= key;
+				token ??= tok;
+				process.env['TRELLO_API_KEY'] = apiKey;
+				process.env['TRELLO_TOKEN'] = token;
+				return {apiKey, token};
 			}
 		} catch {
 			// Shell not available, try next
@@ -49,6 +79,7 @@ function detectRepoFromRemote(): string | undefined {
 
 const configSchema = z.object({
 	repo: z.string().regex(/^[^/]+\/[^/]+$/, 'Must be in "owner/repo" format').optional(),
+	provider: z.enum(['github', 'trello']).optional(),
 	todoStatus: z.string().default('Todo'),
 	projectNumber: z.number().int().positive().optional(),
 	baseBranch: z.string().default('main'),
@@ -59,14 +90,38 @@ const configSchema = z.object({
 		draft: z.boolean().default(false),
 		addLabelOnOpen: z.string().optional(),
 	}).default({}),
+	trello: z.object({
+		boardId: z.string().optional(),
+		listId: z.string().optional(),
+		moveOnComplete: z.string().optional(),
+	}).optional(),
 });
 
-export async function loadConfig(): Promise<IterisConfig> {
-	const token = resolveGithubToken();
-	if (!token) {
-		throw new Error('GITHUB_TOKEN environment variable is not set. Iteris requires a GitHub token to fetch issues and create PRs.');
+export async function saveConfigField(key: string, value: unknown): Promise<void> {
+	const configPath = path.join(process.cwd(), '.iteris.json');
+
+	let data: Record<string, unknown> = {};
+	try {
+		const raw = await readFile(configPath, 'utf8');
+		data = JSON.parse(raw) as Record<string, unknown>;
+	} catch {
+		// File doesn't exist or invalid — start fresh
 	}
 
+	const parts = key.split('.');
+	if (parts.length === 2) {
+		const [outer, inner] = parts as [string, string];
+		const nested = (data[outer] ?? {}) as Record<string, unknown>;
+		nested[inner] = value;
+		data[outer] = nested;
+	} else {
+		data[key] = value;
+	}
+
+	await writeFile(configPath, JSON.stringify(data, null, '\t') + '\n', 'utf8');
+}
+
+export async function loadConfig(): Promise<IterisConfig> {
 	const configPath = path.join(process.cwd(), '.iteris.json');
 
 	let parsed: Record<string, unknown> = {};
