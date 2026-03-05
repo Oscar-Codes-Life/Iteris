@@ -113,6 +113,10 @@ src/
   types.ts           # Shared TypeScript types
 ```
 
+## Roadmap
+
+See [roadmap.md](roadmap.md) for planned integrations and upcoming features.
+
 ## License
 
 NOT YET
