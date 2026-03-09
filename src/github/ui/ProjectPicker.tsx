@@ -1,6 +1,6 @@
 import {useState} from 'react';
 import {Box, Text, useInput} from 'ink';
-import type {ProjectInfo} from '../github/projects.js';
+import type {ProjectInfo} from '../projects.js';
 
 type ProjectPickerProps = {
 	projects: ProjectInfo[];

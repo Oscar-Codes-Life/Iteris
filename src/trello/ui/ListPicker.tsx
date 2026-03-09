@@ -1,38 +1,38 @@
 import {useState} from 'react';
 import {Box, Text, useInput} from 'ink';
-import type {TrelloBoard} from '../trello/api.js';
+import type {TrelloList} from '../api.js';
 
-type BoardPickerProps = {
-	boards: TrelloBoard[];
-	onSelect: (board: TrelloBoard) => void;
+type ListPickerProps = {
+	lists: TrelloList[];
+	onSelect: (list: TrelloList) => void;
 };
 
-export function BoardPicker({boards, onSelect}: BoardPickerProps) {
+export function ListPicker({lists, onSelect}: ListPickerProps) {
 	const [cursor, setCursor] = useState(0);
 
 	useInput((_input, key) => {
 		if (key.upArrow || _input === 'k') {
 			setCursor(prev => (prev > 0 ? prev - 1 : prev));
 		} else if (key.downArrow || _input === 'j') {
-			setCursor(prev => (prev < boards.length - 1 ? prev + 1 : prev));
+			setCursor(prev => (prev < lists.length - 1 ? prev + 1 : prev));
 		} else if (key.return) {
-			onSelect(boards[cursor]!);
+			onSelect(lists[cursor]!);
 		}
 	});
 
 	return (
 		<Box flexDirection="column" padding={1}>
 			<Box marginBottom={1}>
-				<Text bold color="magenta">Select a Trello board</Text>
-				<Text dimColor> ({boards.length} available)</Text>
+				<Text bold color="magenta">Select a Trello list (column)</Text>
+				<Text dimColor> ({lists.length} available)</Text>
 			</Box>
 
-			{boards.map((board, i) => {
+			{lists.map((list, i) => {
 				const isCurrent = i === cursor;
 				return (
-					<Box key={board.id} gap={1}>
+					<Box key={list.id} gap={1}>
 						<Text color={isCurrent ? 'magenta' : 'gray'}>{isCurrent ? '>' : ' '}</Text>
-						<Text color={isCurrent ? 'white' : 'gray'}>{board.name}</Text>
+						<Text color={isCurrent ? 'white' : 'gray'}>{list.name}</Text>
 					</Box>
 				);
 			})}

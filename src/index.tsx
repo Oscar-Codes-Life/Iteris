@@ -1,19 +1,21 @@
 import {render} from 'ink';
-import {loadConfig, resolveGithubToken, resolveTrelloCredentials, saveConfigField} from './config.js';
+import {loadConfig, saveConfigField} from './config.js';
+import {resolveGithubToken} from './github/auth.js';
 import type {ProjectInfo} from './github/projects.js';
 import {fetchTodoTickets} from './github/tickets.js';
+import {ProjectPicker} from './github/ui/ProjectPicker.js';
+import {TokenError} from './github/ui/TokenError.js';
 import {getTicketStatuses} from './state/manager.js';
 import type {TrelloBoard, TrelloList} from './trello/api.js';
+import {resolveTrelloCredentials} from './trello/auth.js';
 import {fetchTrelloTickets} from './trello/tickets.js';
+import {BoardPicker} from './trello/ui/BoardPicker.js';
+import {ListPicker} from './trello/ui/ListPicker.js';
+import {TrelloTokenError} from './trello/ui/TrelloTokenError.js';
 import type {IterisConfig, Provider, Ticket, TicketStatus} from './types.js';
 import {App} from './ui/App.js';
-import {BoardPicker} from './ui/BoardPicker.js';
-import {ListPicker} from './ui/ListPicker.js';
-import {ProjectPicker} from './ui/ProjectPicker.js';
 import {ProviderPicker} from './ui/ProviderPicker.js';
 import {TicketPicker} from './ui/TicketPicker.js';
-import {TokenError} from './ui/TokenError.js';
-import {TrelloTokenError} from './ui/TrelloTokenError.js';
 import {Welcome} from './ui/Welcome.js';
 
 function showWelcome(): Promise<void> {
@@ -128,7 +130,28 @@ function waitForTrelloCredentials(): Promise<void> {
 async function main() {
 	await showWelcome();
 
-	// GitHub token is always needed (for PRs)
+	let config: IterisConfig;
+	try {
+		config = await loadConfig();
+	} catch (error) {
+		console.error(error instanceof Error ? error.message : error);
+		process.exit(1);
+	}
+
+	if (!config.provider) {
+		const provider = await showProviderPicker();
+		await saveConfigField('provider', provider);
+		config.provider = provider;
+	}
+
+	if (config.provider === 'trello' && !resolveTrelloCredentials()) {
+		try {
+			await waitForTrelloCredentials();
+		} catch {
+			process.exit(1);
+		}
+	}
+
 	if (!resolveGithubToken()) {
 		try {
 			await waitForGithubToken();
@@ -137,7 +160,7 @@ async function main() {
 		}
 	}
 
-	await run();
+	await run(config);
 }
 
 async function fetchTicketsForProvider(config: IterisConfig): Promise<Ticket[]> {
@@ -192,31 +215,7 @@ async function fetchTrelloFlow(config: IterisConfig): Promise<Ticket[]> {
 	return result.tickets;
 }
 
-async function run() {
-	let config: IterisConfig;
-	try {
-		config = await loadConfig();
-	} catch (error) {
-		console.error(error instanceof Error ? error.message : error);
-		process.exit(1);
-	}
-
-	// Provider selection
-	if (!config.provider) {
-		const provider = await showProviderPicker();
-		await saveConfigField('provider', provider);
-		config.provider = provider;
-	}
-
-	// Trello credential check
-	if (config.provider === 'trello' && !resolveTrelloCredentials()) {
-		try {
-			await waitForTrelloCredentials();
-		} catch {
-			process.exit(1);
-		}
-	}
-
+async function run(config: IterisConfig) {
 	let tickets: Ticket[];
 	try {
 		tickets = await fetchTicketsForProvider(config);

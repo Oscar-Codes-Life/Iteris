@@ -1,81 +1,8 @@
-import {execSync} from 'node:child_process';
 import {readFile, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {z} from 'zod';
+import {detectRepoFromRemote} from './github/repo.js';
 import type {IterisConfig} from './types.js';
-
-export type TrelloCredentials = {apiKey: string; token: string};
-
-export function resolveGithubToken(): string | undefined {
-	const envToken = process.env['GITHUB_TOKEN'];
-	if (envToken) return envToken;
-
-	for (const shell of ['zsh', 'bash']) {
-		try {
-			const output = execSync(`${shell} -ilc 'echo $GITHUB_TOKEN'`, {
-				encoding: 'utf8',
-				stdio: ['pipe', 'pipe', 'pipe'],
-			}).trim();
-			if (output) {
-				process.env['GITHUB_TOKEN'] = output;
-				return output;
-			}
-		} catch {
-			// Shell not available, try next
-		}
-	}
-
-	return undefined;
-}
-
-export function resolveTrelloCredentials(): TrelloCredentials | undefined {
-	let apiKey = process.env['TRELLO_API_KEY'];
-	let token = process.env['TRELLO_TOKEN'];
-
-	if (apiKey && token) return {apiKey, token};
-
-	for (const shell of ['zsh', 'bash']) {
-		try {
-			const output = execSync(`${shell} -ilc 'echo "$TRELLO_API_KEY|$TRELLO_TOKEN"'`, {
-				encoding: 'utf8',
-				stdio: ['pipe', 'pipe', 'pipe'],
-			}).trim();
-			const [key, tok] = output.split('|');
-			if (key && tok) {
-				apiKey ??= key;
-				token ??= tok;
-				process.env['TRELLO_API_KEY'] = apiKey;
-				process.env['TRELLO_TOKEN'] = token;
-				return {apiKey, token};
-			}
-		} catch {
-			// Shell not available, try next
-		}
-	}
-
-	return undefined;
-}
-
-function detectRepoFromRemote(): string | undefined {
-	try {
-		const url = execSync('git remote get-url origin', {
-			encoding: 'utf8',
-			stdio: ['pipe', 'pipe', 'pipe'],
-		}).trim();
-
-		// SSH: git@github.com:owner/repo.git
-		const sshMatch = url.match(/^git@github\.com:([^/]+\/[^/]+?)(?:\.git)?$/);
-		if (sshMatch) return sshMatch[1];
-
-		// HTTPS: https://github.com/owner/repo.git
-		const httpsMatch = url.match(/^https:\/\/github\.com\/([^/]+\/[^/]+?)(?:\.git)?$/);
-		if (httpsMatch) return httpsMatch[1];
-
-		return undefined;
-	} catch {
-		return undefined;
-	}
-}
 
 const configSchema = z.object({
 	repo: z.string().regex(/^[^/]+\/[^/]+$/, 'Must be in "owner/repo" format').optional(),

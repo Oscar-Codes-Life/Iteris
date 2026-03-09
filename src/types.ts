@@ -23,11 +23,8 @@ export type TicketState = {
 
 export type Provider = 'github' | 'trello';
 
-export type TrelloConfig = {
-	boardId?: string;
-	listId?: string;
-	moveOnComplete?: string;
-};
+export type {TrelloConfig} from './trello/types.js';
+import type {TrelloConfig} from './trello/types.js';
 
 export type IterisConfig = {
 	repo: string;
