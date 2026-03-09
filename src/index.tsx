@@ -10,11 +10,11 @@ import {ProjectPicker} from './github/ui/ProjectPicker.js';
 import {TokenError} from './github/ui/TokenError.js';
 import {getTicketStatuses} from './state/manager.js';
 import type {TrelloBoard, TrelloList} from './trello/api.js';
-import {resolveTrelloCredentials} from './trello/auth.js';
+import {resolveTrelloCredentials, saveTrelloCredentials} from './trello/auth.js';
 import {fetchTrelloTickets} from './trello/tickets.js';
 import {BoardPicker} from './trello/ui/BoardPicker.js';
 import {ListPicker} from './trello/ui/ListPicker.js';
-import {TrelloTokenError} from './trello/ui/TrelloTokenError.js';
+import {TrelloSetup} from './trello/ui/TrelloSetup.js';
 import type {IterisConfig, Provider, Ticket, TicketStatus} from './types.js';
 import {App} from './ui/App.js';
 import {ProviderPicker} from './ui/ProviderPicker.js';
@@ -115,16 +115,14 @@ function waitForGithubToken(): Promise<void> {
 
 function waitForTrelloCredentials(): Promise<void> {
 	return new Promise((resolve, reject) => {
-		const {rerender, waitUntilExit} = render(
-			<TrelloTokenError onRetry={() => handleRetry()} />,
-		);
-
-		function handleRetry() {
-			if (resolveTrelloCredentials()) {
-				rerender(<></>);
+		const {unmount, waitUntilExit} = render(
+			<TrelloSetup onComplete={(credentials) => {
+				saveTrelloCredentials(credentials);
+				unmount();
+				console.log('Trello credentials saved to your shell profile.');
 				resolve();
-			}
-		}
+			}} />,
+		);
 
 		void waitUntilExit().then(() => {
 			if (!resolveTrelloCredentials()) {
