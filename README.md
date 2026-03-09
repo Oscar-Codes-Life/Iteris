@@ -10,6 +10,27 @@
 
 A specialized autonomous software engineering agent that pulls GitHub tickets, ships them one by one via Claude Code, and manages the full lifecycle from branch to PR.
 
+## Installation
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Oscar-Codes-Life/Iteris/main/install.sh | bash
+```
+
+This clones Iteris to `~/.iteris`, builds it, and symlinks the binary so `iteris` is available globally.
+
+**Prerequisites:**
+- **Node.js 22+**
+- **Claude Code** installed and authenticated (`npm install -g @anthropic-ai/claude-code`)
+- **`GITHUB_TOKEN`** set as an environment variable
+
+**Re-run to update** — the script pulls the latest changes and rebuilds.
+
+**Uninstall:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Oscar-Codes-Life/Iteris/main/install.sh | bash -s -- --uninstall
+```
+
 ## What It Does
 
 Iteris takes GitHub issues labeled `Todo`, works through them sequentially using Claude Code as a subprocess, and lands each one as an open PR — with full state tracking and a live terminal UI.
