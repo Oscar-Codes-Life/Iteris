@@ -72,15 +72,40 @@ Get your API key and generate a token from the [Trello Power-Ups admin page](htt
 
 ## How It Works
 
-```
-Ticket (GitHub Issue or Trello Card) → fetch → pick next → spawn Claude Code → implement → push → open PR → next ticket
-```
+### Step 1 — Choose your GitHub Project
+
+![Step 1: Choose your GitHub Project](assets/step1.jpg)
+
+Iteris discovers all GitHub Projects in your organization and presents them for selection.
+
+### Step 2 — Select the project to work on
+
+![Step 2: Select the project to work on](assets/step2.jpg)
+
+Navigate the list of projects with arrow keys and press Enter to select one. Iteris fetches tickets with the configured status (e.g. "Todo").
+
+### Step 3 — Select your tickets
+
+![Step 3: Select your tickets](assets/step3.jpg)
+
+Pick which tickets to build from the available list. Use Space to toggle and Enter to confirm.
+
+### Step 4 — Watch tickets get worked on
+
+![Step 4: Watch tickets get worked on](assets/step4.jpg)
+
+Iteris works through each ticket sequentially — creating branches, spawning Claude Code, implementing changes, and opening PRs. The live UI shows status, branch names, and PR numbers.
+
+<details>
+<summary><strong>Under the hood</strong></summary>
 
 For each ticket, Iteris:
 1. Creates a branch: `iteris/<ticket-id>-<slug>`
 2. Spawns a Claude Code instance with the ticket context
 3. Claude Code implements the changes, runs quality checks, commits, pushes, and opens a PR
 4. Iteris detects the completion signal (`<task>done</task>`) and moves to the next ticket
+
+</details>
 
 ## Configuration
 
