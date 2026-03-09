@@ -1,4 +1,7 @@
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {render} from 'ink';
+import terminalImage from 'terminal-image';
 import {loadConfig, saveConfigField} from './config.js';
 import {resolveGithubToken} from './github/auth.js';
 import type {ProjectInfo} from './github/projects.js';
@@ -16,19 +19,23 @@ import type {IterisConfig, Provider, Ticket, TicketStatus} from './types.js';
 import {App} from './ui/App.js';
 import {ProviderPicker} from './ui/ProviderPicker.js';
 import {TicketPicker} from './ui/TicketPicker.js';
-import {Welcome} from './ui/Welcome.js';
 
-function showWelcome(): Promise<void> {
-	return new Promise(resolve => {
-		const {unmount} = render(
-			<Welcome onContinue={() => {
-				unmount();
-				resolve();
-			}} />,
-		);
-	});
+async function printBranding() {
+	const dirname = path.dirname(fileURLToPath(import.meta.url));
+	const iconPath = path.resolve(dirname, '..', 'assets', 'iteris-icon.png');
+
+	try {
+		const icon = await terminalImage.file(iconPath, {width: 20});
+		console.log(icon);
+	} catch {
+		// Terminal doesn't support images — skip
+	}
+
+	console.log('\x1b[1m\x1b[35mIteris\x1b[0m \x1b[2m—\x1b[0m Autonomous agent that pulls GitHub tickets, ships them via Claude Code,');
+	console.log('and manages the full lifecycle from branch to PR.');
+	console.log('\x1b[2mPowered by Claude Code · Built by Oscar Gallo\x1b[0m');
+	console.log();
 }
-
 function showProviderPicker(): Promise<Provider> {
 	return new Promise(resolve => {
 		const {unmount} = render(
@@ -128,7 +135,7 @@ function waitForTrelloCredentials(): Promise<void> {
 }
 
 async function main() {
-	await showWelcome();
+	await printBranding();
 
 	let config: IterisConfig;
 	try {
