@@ -1,4 +1,4 @@
-export type TicketStatus = 'pending' | 'running' | 'done' | 'stale' | 'failed';
+export type TicketStatus = 'pending' | 'running' | 'reviewing' | 'done' | 'stale' | 'failed';
 
 export type Ticket = {
 	number: number;

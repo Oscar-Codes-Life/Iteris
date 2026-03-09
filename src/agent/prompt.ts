@@ -5,8 +5,6 @@ export function expandPrompt(ticket: Ticket, config: IterisConfig, progressConte
 		? config.qualityChecks.map(cmd => `   - \`${cmd}\``).join('\n')
 		: '   - (no quality checks configured)';
 
-	const prDraftNote = config.pr.draft ? ' (as draft)' : '';
-
 	return `You are an autonomous software engineer working on a GitHub repository.
 
 ## Your Task
@@ -21,10 +19,9 @@ ${ticket.body}
 ${qualityCheckLines}
 4. If checks pass: commit all changes with message \`fix: #${ticket.number} — ${ticket.title}\`
 5. Push the branch to origin
-6. Open a PR${prDraftNote} targeting \`${config.baseBranch}\` with:
-   - Title: \`${ticket.title}\`
-   - Body referencing the ticket: \`${config.provider === 'trello' ? `Implements Trello card: ${ticket.htmlUrl}` : `Closes #${ticket.number}`}\`
-7. When fully done, print exactly: <task>done</task>
+6. When fully done, print exactly: <task>done</task>
+
+Do NOT create a pull request — a separate review agent will handle that.
 
 ## Memory from Previous Runs
 ${progressContent || '(no previous runs)'}

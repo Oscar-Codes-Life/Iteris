@@ -7,6 +7,7 @@ import {moveCardOnComplete} from '../trello/completion.js';
 import {expandPrompt} from './prompt.js';
 import {OutputWatcher} from './watcher.js';
 import {generateSummary} from './summarizer.js';
+import {runCodeReview} from './reviewer.js';
 
 export type RunnerCallbacks = {
 	onStatusChange: (ticketNumber: number, state: TicketState) => void;
@@ -118,40 +119,70 @@ async function runSingleTicket(
 			state.finishedAt = new Date();
 
 			if (watcher.isDone) {
-				state.status = 'done';
+				// Transition to reviewing phase
+				state.status = 'reviewing';
+				callbacks.onStatusChange(ticket.number, {...state});
+				await writeStatus(folder, state);
 
-				// Check for PR
-				try {
-					const pr = await findPrForBranch(config, branch);
-					if (pr) {
-						state.prUrl = pr.url;
-						state.prNumber = pr.number;
+				const reviewSuccess = await runCodeReview({
+					ticket,
+					config,
+					cwd,
+					folder,
+					onLogLine(line) {
+						state.logLines = [...state.logLines.slice(-49), line];
+						state.elapsedMs = Date.now() - startTime;
+						callbacks.onLogLine(ticket.number, line);
+						callbacks.onStatusChange(ticket.number, {...state});
+					},
+					onProcess(reviewProc) {
+						activeProcess = reviewProc;
+					},
+				});
 
-						if (config.pr.addLabelOnOpen) {
-							await addLabelToIssue(config, ticket.number, config.pr.addLabelOnOpen);
+				activeProcess = null;
+				state.elapsedMs = Date.now() - startTime;
+				state.finishedAt = new Date();
+
+				if (reviewSuccess) {
+					state.status = 'done';
+
+					// Check for PR
+					try {
+						const pr = await findPrForBranch(config, branch);
+						if (pr) {
+							state.prUrl = pr.url;
+							state.prNumber = pr.number;
+
+							if (config.pr.addLabelOnOpen) {
+								await addLabelToIssue(config, ticket.number, config.pr.addLabelOnOpen);
+							}
+						}
+					} catch {
+						// PR lookup failed, not critical
+					}
+
+					if (config.provider === 'trello') {
+						try {
+							await moveCardOnComplete(config, ticket.number);
+						} catch {
+							// Card move failed, not critical
 						}
 					}
-				} catch {
-					// PR lookup failed, not critical
-				}
 
-				if (config.provider === 'trello') {
+					await writeStatus(folder, state);
+					await appendProgress(cwd, `#${ticket.number} (${ticket.title}) — completed successfully`);
 					try {
-						await moveCardOnComplete(config, ticket.number);
+						await generateSummary(folder);
 					} catch {
-						// Card move failed, not critical
+						// Summary generation failed, not critical
 					}
-				}
 
-				await writeStatus(folder, state);
-				await appendProgress(cwd, `#${ticket.number} (${ticket.title}) — completed successfully`);
-				try {
-					await generateSummary(folder);
-				} catch {
-					// Summary generation failed, not critical
+					callbacks.onComplete(ticket.number, {...state});
+				} else {
+					state.status = 'failed';
+					await writeStatus(folder, state);
 				}
-
-				callbacks.onComplete(ticket.number, {...state});
 			} else if (code !== 0 || state.elapsedMs >= config.timeout * 1000) {
 				state.status = state.elapsedMs >= config.timeout * 1000 ? 'stale' : 'failed';
 				await writeStatus(folder, state);

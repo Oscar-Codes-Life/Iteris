@@ -45,7 +45,7 @@ export function App({config, tickets, cwd}: AppProps) {
 			setStates(prev => {
 				const next = new Map(prev);
 				const current = next.get(activeTicket);
-				if (current?.status === 'running' && current.startedAt) {
+				if ((current?.status === 'running' || current?.status === 'reviewing') && current.startedAt) {
 					next.set(activeTicket, {
 						...current,
 						elapsedMs: Date.now() - current.startedAt.getTime(),
@@ -118,7 +118,7 @@ export function App({config, tickets, cwd}: AppProps) {
 		}
 	});
 
-	const remaining = [...states.values()].filter(s => s.status === 'pending' || s.status === 'running').length;
+	const remaining = [...states.values()].filter(s => s.status === 'pending' || s.status === 'running' || s.status === 'reviewing').length;
 	const activeState = activeTicket ? states.get(activeTicket) : null;
 
 	return (
@@ -141,7 +141,7 @@ export function App({config, tickets, cwd}: AppProps) {
 			</Box>
 
 			{/* Live log for active ticket */}
-			{activeState && activeState.status === 'running' && (
+			{activeState && (activeState.status === 'running' || activeState.status === 'reviewing') && (
 				<LiveLog lines={activeState.logLines} />
 			)}
 
