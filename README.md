@@ -8,7 +8,7 @@
 >
 > It runs Claude Code with `--dangerously-skip-permissions`, which gives it **unrestricted access to your system** — it can execute arbitrary commands, modify or delete files, install packages, and more. Only run it in environments you are comfortable exposing.
 
-A specialized autonomous software engineering agent that pulls GitHub tickets, ships them one by one via Claude Code, and manages the full lifecycle from branch to PR.
+A specialized autonomous software engineering agent that pulls tickets from **GitHub Issues or Trello boards**, ships them one by one via Claude Code, and manages the full lifecycle from branch to PR.
 
 ## Installation
 
@@ -33,7 +33,7 @@ curl -fsSL https://raw.githubusercontent.com/Oscar-Codes-Life/Iteris/main/instal
 
 ## What It Does
 
-Iteris takes GitHub issues labeled `Todo`, works through them sequentially using Claude Code as a subprocess, and lands each one as an open PR — with full state tracking and a live terminal UI.
+Iteris takes GitHub issues labeled `Todo` (or Trello cards from a board/list), works through them sequentially using Claude Code as a subprocess, and lands each one as an open PR — with full state tracking and a live terminal UI.
 
 No GitHub Actions. No YAML pipelines. Just a local process you run.
 
@@ -42,7 +42,7 @@ No GitHub Actions. No YAML pipelines. Just a local process you run.
 1. **Claude Account** — preferably the [Max plan](https://claude.ai) for higher usage limits
 2. **Node.js 22+**
 3. **Claude Code** installed and authenticated
-4. **`GITHUB_TOKEN`** set as a global environment variable
+4. **`GITHUB_TOKEN`** set as a global environment variable (required for GitHub provider)
 
 ```bash
 export GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx
@@ -52,6 +52,15 @@ A fine-grained personal access token scoped to the target repo is recommended. R
 - `issues: read`
 - `contents: write`
 - `pull_requests: write`
+
+5. **`TRELLO_API_KEY`** and **`TRELLO_TOKEN`** set as global environment variables (required only when using Trello)
+
+```bash
+export TRELLO_API_KEY=your_trello_api_key
+export TRELLO_TOKEN=your_trello_token
+```
+
+Get your API key and generate a token from the [Trello Power-Ups admin page](https://trello.com/power-ups/admin).
 
 ## Tech Stack
 
@@ -64,7 +73,7 @@ A fine-grained personal access token scoped to the target repo is recommended. R
 ## How It Works
 
 ```
-GitHub Issue (Todo) → fetch → pick next → spawn Claude Code → implement → push → open PR → next ticket
+Ticket (GitHub Issue or Trello Card) → fetch → pick next → spawn Claude Code → implement → push → open PR → next ticket
 ```
 
 For each ticket, Iteris:
@@ -88,6 +97,11 @@ Create `.iteris.json` at the project root:
   "pr": {
     "draft": false,
     "addLabelOnOpen": "in-review"
+  },
+  "trello": {
+    "boardId": "optional_board_id",
+    "listId": "optional_list_id",
+    "moveOnComplete": "Done"
   }
 }
 ```
