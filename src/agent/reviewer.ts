@@ -3,6 +3,7 @@ import {readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {dirname, resolve} from 'node:path';
 import type {IterisConfig, Ticket} from '../types.js';
+import {buildClaudeArgs} from '../config.js';
 import {OutputWatcher} from './watcher.js';
 import {appendLog} from '../state/manager.js';
 
@@ -54,7 +55,7 @@ export async function runCodeReview({
 		: prompt;
 
 	return new Promise<boolean>(resolve => {
-		const proc = spawn('claude', [...config.claudeFlags, '--print'], {
+		const proc = spawn('claude', buildClaudeArgs(config), {
 			stdio: ['pipe', 'pipe', 'pipe'],
 			cwd,
 		});

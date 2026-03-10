@@ -1,5 +1,6 @@
 import {spawn, type ChildProcess} from 'node:child_process';
 import type {IterisConfig, Ticket, TicketState} from '../types.js';
+import {buildClaudeArgs} from '../config.js';
 import {createRunFolder, writeStatus, writePrompt, appendLog} from '../state/manager.js';
 import {readProgress, appendProgress} from '../state/progress.js';
 import {findPrForBranch, addLabelToIssue} from '../github/pr.js';
@@ -74,7 +75,7 @@ async function runSingleTicket(
 	await writePrompt(folder, prompt);
 
 	return new Promise<TicketState>(resolve => {
-		const proc = spawn('claude', [...config.claudeFlags, '--print'], {
+		const proc = spawn('claude', buildClaudeArgs(config), {
 			stdio: ['pipe', 'pipe', 'pipe'],
 			cwd,
 		});

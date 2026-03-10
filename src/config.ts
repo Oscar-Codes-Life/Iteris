@@ -11,6 +11,7 @@ const configSchema = z.object({
 	projectNumber: z.number().int().positive().optional(),
 	baseBranch: z.string().default('main'),
 	timeout: z.number().positive().default(1200),
+	planMode: z.boolean().default(true),
 	claudeFlags: z.array(z.string()).default(['--dangerously-skip-permissions']),
 	qualityChecks: z.array(z.string()).default([]),
 	pr: z.object({
@@ -23,6 +24,15 @@ const configSchema = z.object({
 		moveOnComplete: z.string().optional(),
 	}).optional(),
 });
+
+export function buildClaudeArgs(config: IterisConfig): string[] {
+	const args = [...config.claudeFlags];
+	if (config.planMode) {
+		args.push('--plan');
+	}
+	args.push('--print');
+	return args;
+}
 
 export async function saveConfigField(key: string, value: unknown): Promise<void> {
 	const configPath = path.join(process.cwd(), '.iteris.json');

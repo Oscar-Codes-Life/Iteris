@@ -101,7 +101,7 @@ Iteris works through each ticket sequentially — creating branches, spawning Cl
 
 For each ticket, Iteris:
 1. Creates a branch: `iteris/<ticket-id>-<slug>`
-2. Spawns a Claude Code instance with the ticket context
+2. Spawns a Claude Code instance with the ticket context (in plan mode by default — Claude drafts an execution plan before coding)
 3. Claude Code implements the changes, runs quality checks, commits, pushes, and opens a PR
 4. Iteris detects the completion signal (`<task>done</task>`) and moves to the next ticket
 
@@ -117,6 +117,7 @@ Create `.iteris.json` at the project root:
   "todoLabel": "Todo",
   "baseBranch": "main",
   "timeout": 1200,
+  "planMode": true,
   "claudeFlags": ["--dangerously-skip-permissions"],
   "qualityChecks": ["tsc --noEmit", "eslint .", "vitest run"],
   "pr": {
@@ -130,6 +131,10 @@ Create `.iteris.json` at the project root:
   }
 }
 ```
+
+| Field | Default | Description |
+| ----- | ------- | ----------- |
+| `planMode` | `true` | When enabled, Claude Code generates an execution plan before taking action (`--plan` flag). This "think first" step improves output quality. Set to `false` to skip planning and execute immediately. |
 
 ## State Tracking
 

@@ -33,6 +33,7 @@ export type IterisConfig = {
 	projectNumber?: number;
 	baseBranch: string;
 	timeout: number;
+	planMode: boolean;
 	claudeFlags: string[];
 	qualityChecks: string[];
 	pr: {
