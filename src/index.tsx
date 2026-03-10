@@ -196,21 +196,29 @@ async function fetchGithubFlow(config: IterisConfig): Promise<Ticket[]> {
 
 async function fetchTrelloFlow(config: IterisConfig): Promise<Ticket[]> {
 	console.log('Fetching tickets from Trello...');
+	console.log(`[debug] Config boardId=${config.trello?.boardId}, listId=${config.trello?.listId}`);
 
 	let result = await fetchTrelloTickets(config);
+	let boardId = config.trello?.boardId;
+	console.log(`[debug] Initial fetch result: kind=${result.kind}`);
 
 	if (result.kind === 'pickBoard') {
 		const selected = await showBoardPicker(result.boards);
 		console.log(`[debug] User selected board "${selected.name}"`);
 		await saveConfigField('trello.boardId', selected.id);
+		boardId = selected.id;
+		console.log(`[debug] Fetching lists for boardId=${boardId}`);
 		result = await fetchTrelloTickets(config, selected.id);
+		console.log(`[debug] After board selection result: kind=${result.kind}`);
 	}
 
 	if (result.kind === 'pickList') {
 		const selected = await showListPicker(result.lists);
 		console.log(`[debug] User selected list "${selected.name}"`);
 		await saveConfigField('trello.listId', selected.id);
-		result = await fetchTrelloTickets(config, config.trello?.boardId, selected.id);
+		console.log(`[debug] Fetching tickets for boardId=${boardId}, listId=${selected.id}`);
+		result = await fetchTrelloTickets(config, boardId, selected.id);
+		console.log(`[debug] After list selection result: kind=${result.kind}`);
 	}
 
 	if (result.kind !== 'tickets') {
