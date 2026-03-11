@@ -8,7 +8,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "postbuild": "echo '#!/usr/bin/env node' | cat - dist/index.js > dist/index.tmp && mv dist/index.tmp dist/index.js && chmod +x dist/index.js",
+    "postbuild": "mkdir -p dist/github/commands && cp src/github/commands/code-review.md dist/github/commands/ && echo '#!/usr/bin/env node' | cat - dist/index.js > dist/index.tmp && mv dist/index.tmp dist/index.js && chmod +x dist/index.js",
     "dev": "tsc --watch",
     "typecheck": "tsc --noEmit"
   },
