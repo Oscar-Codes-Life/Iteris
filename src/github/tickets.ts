@@ -17,6 +17,7 @@ export async function fetchTodoTickets(
 	config: IterisConfig,
 	selectedProjectNumber?: number,
 	octokit: Octokit = createOctokit(),
+	cwd = process.cwd(),
 ): Promise<ProjectSelectionResult> {
 	const [owner] = config.repo.split('/') as [string, string];
 
@@ -38,15 +39,16 @@ export async function fetchTodoTickets(
 	const projects = await listProjects(octokit, owner);
 
 	if (projects.length === 0) {
-		if (config.githubSource === 'projects') throw new Error(`No visible GitHub Projects V2 found for "${owner}". Check project access, or set githubSource to "issues" to use repository issues.`);
-		console.log(`No visible GitHub Projects found for ${owner}. Showing open repository issues instead.`);
+		await saveConfigField('githubSource', 'issues', cwd);
+		config.githubSource = 'issues';
+		console.log(`No visible GitHub Projects found for ${owner}. Saved githubSource=issues. Showing open repository issues instead.`);
 		return {kind: 'tickets', tickets: await fetchRepositoryIssues(octokit, config.repo)};
 	}
 
 	if (projects.length === 1) {
 		console.log(`[debug] Auto-selecting the only project: #${projects[0]!.number} "${projects[0]!.title}"`);
 		config.projectNumber = projects[0]!.number;
-		await saveConfigField('projectNumber', config.projectNumber);
+		await saveConfigField('projectNumber', config.projectNumber, cwd);
 		const tickets = await fetchProjectItems(octokit, owner, projects[0]!.number, config.todoStatus);
 		return {kind: 'tickets', tickets};
 	}

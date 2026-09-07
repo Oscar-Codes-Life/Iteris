@@ -87,7 +87,7 @@ Iteris creates `.iteris.json` in the project root, inferring `repo` from a GitHu
 }
 ```
 
-For ordinary repository issues, add `"githubSource": "issues"` to skip Project discovery and its `read:project` permission requirement. The default, `"auto"`, uses a configured/discovered Project when available and falls back to open repository issues when no Projects are visible. `"projects"` explicitly requires a Project. In issues mode, `projectNumber` and `todoStatus` do not filter the list: all open issues are shown, pull requests are excluded, and you choose which tickets to run. Issues are ordered by `p0`, `p1`, `p2`, then oldest first. Explicit project lookup failures and authentication errors are reported instead of silently changing sources.
+For ordinary repository issues, add `"githubSource": "issues"` to skip Project discovery and its `read:project` permission requirement. The default, `"auto"`, uses a configured/discovered Project when available and automatically saves `"githubSource": "issues"` before fetching open repository issues when no Projects are visible. Later runs skip Project discovery. `"projects"` starts with Project discovery and also saves the issues fallback if no Projects are found. In issues mode, `projectNumber` and `todoStatus` do not filter the list: all open issues are shown, pull requests are excluded, and you choose which tickets to run. Issues are ordered by `p0`, `p1`, `p2`, then oldest first. Explicit project lookup failures and authentication errors are reported instead of silently changing sources.
 
 Choose Codex's model and effort through its picker to use the current account catalog. Trello options remain `trello.boardId`, `trello.listId`, and `trello.moveOnComplete`.
 
