@@ -1,9 +1,10 @@
 import {execSync} from 'node:child_process';
 
-export function detectRepoFromRemote(): string | undefined {
+export function detectRepoFromRemote(cwd = process.cwd()): string | undefined {
 	try {
 		const url = execSync('git remote get-url origin', {
 			encoding: 'utf8',
+			cwd,
 			stdio: ['pipe', 'pipe', 'pipe'],
 		}).trim();
 

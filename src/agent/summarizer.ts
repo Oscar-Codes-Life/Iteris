@@ -1,4 +1,6 @@
-import {spawn} from 'node:child_process';
+import type {ChildProcess} from 'node:child_process';
+import type {IterisConfig} from '../types.js';
+import {runHarness} from '../harness/process.js';
 import {readLog, writeSummary} from '../state/manager.js';
 
 const SUMMARY_TIMEOUT = 60_000;
@@ -15,7 +17,7 @@ function truncateLog(log: string): string {
 	);
 }
 
-const PROMPT = `You are summarizing the output of a Claude Code session that worked on a GitHub ticket. Write a concise summary in markdown covering:
+const PROMPT = `You are summarizing the output of an agent session that worked on a GitHub ticket. Write a concise summary in markdown covering:
 
 - **Changes made**: What files were created, modified, or deleted
 - **Commands run**: Key shell commands executed (builds, tests, git operations)
@@ -24,7 +26,7 @@ const PROMPT = `You are summarizing the output of a Claude Code session that wor
 
 Keep it brief and factual. Use bullet points. Do not include the raw log.`;
 
-export async function generateSummary(folder: string): Promise<string | null> {
+export async function generateSummary(folder: string, config: IterisConfig, cwd: string, onProcess?: (proc: ChildProcess) => void, signal?: AbortSignal): Promise<string | null> {
 	let log: string;
 	try {
 		log = await readLog(folder);
@@ -35,43 +37,8 @@ export async function generateSummary(folder: string): Promise<string | null> {
 	const truncated = truncateLog(log);
 	const input = `${PROMPT}\n\n---\n\nSession log:\n\n${truncated}`;
 
-	return new Promise<string | null>(resolve => {
-		const proc = spawn('claude', ['--print'], {
-			stdio: ['pipe', 'pipe', 'pipe'],
-		});
-
-		let output = '';
-		const timeout = setTimeout(() => {
-			proc.kill('SIGTERM');
-			resolve(null);
-		}, SUMMARY_TIMEOUT);
-
-		proc.stdout!.on('data', (chunk: Buffer) => {
-			output += chunk.toString();
-		});
-
-		proc.on('exit', async (code) => {
-			clearTimeout(timeout);
-
-			if (code !== 0 || !output.trim()) {
-				resolve(null);
-				return;
-			}
-
-			try {
-				await writeSummary(folder, output.trim());
-				resolve(output.trim());
-			} catch {
-				resolve(null);
-			}
-		});
-
-		proc.on('error', () => {
-			clearTimeout(timeout);
-			resolve(null);
-		});
-
-		proc.stdin!.write(input);
-		proc.stdin!.end();
-	});
+	const result = await runHarness({config, phase: 'summary', prompt: input, cwd, timeoutMs: SUMMARY_TIMEOUT, onProcess, signal});
+	if (!result.success || !result.text) return null;
+	await writeSummary(folder, result.text);
+	return result.text;
 }

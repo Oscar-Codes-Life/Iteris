@@ -2,13 +2,9 @@
 
 ![Iteris Cover](assets/Iteris-cover.png)
 
-> **⚠️ EXPERIMENTAL AGENT — USE AT YOUR OWN RISK**
->
-> Iteris is an **experimental** autonomous agent. We are **not responsible** for any consequences resulting from its use.
->
-> It runs Claude Code with `--dangerously-skip-permissions`, which gives it **unrestricted access to your system** — it can execute arbitrary commands, modify or delete files, install packages, and more. Only run it in environments you are comfortable exposing.
+Iteris pulls tickets from **GitHub Issues, GitHub Projects, or Trello**, implements them with **Claude Code or Codex**, reviews the changes, and opens pull requests. It runs locally with a live terminal UI.
 
-A specialized autonomous software engineering agent that pulls tickets from **GitHub Issues or Trello boards**, ships them one by one via Claude Code, and manages the full lifecycle from branch to PR.
+> **Experimental autonomous agent.** Implementation and review use full-access Codex execution by default; Claude retains its configured permission flags (the default skips permission prompts). These agents can run commands and change files beyond the repository. Use a controlled environment appropriate for autonomous execution.
 
 ## Installation
 
@@ -16,171 +12,134 @@ A specialized autonomous software engineering agent that pulls tickets from **Gi
 curl -fsSL https://raw.githubusercontent.com/Oscar-Codes-Life/Iteris/main/install.sh | bash
 ```
 
-This clones Iteris to `~/.iteris`, builds it, and symlinks the binary so `iteris` is available globally.
+Requires macOS/Linux, Node.js 22+, Git, and [GitHub CLI](https://cli.github.com/). The installer clones Iteris into `~/.iteris`, builds it, and links `iteris` globally. Rerun the installer to update Iteris.
 
-**Prerequisites:**
-- **Node.js 22+**
-- **Claude Code** installed and authenticated (`npm install -g @anthropic-ai/claude-code`)
-- **`GITHUB_TOKEN`** set as an environment variable
+Choose either harness:
 
-**Re-run to update** — the script pulls the latest changes and rebuilds.
+- **Codex:** Iteris installs it automatically if missing, checks for updates, waits for completion, and opens login when needed. Existing installations use `codex update` where available; older installations use their detected npm, Homebrew, or standalone installer. Unknown installations require a manual update or explicit continuation after capability checks.
+- **Claude Code:** install it separately and authenticate. Iteris can launch `claude auth login` when required. It does not install or update Claude automatically.
 
-**Uninstall:**
+GitHub credentials are resolved from `GH_TOKEN`, then `GITHUB_TOKEN`, then `gh auth token`. If missing, setup launches GitHub CLI browser login. Credentials stay out of `.iteris.json`; GitHub CLI manages their storage and may fall back to a plaintext user file if its credential store is unavailable. See [GitHub CLI authentication](https://cli.github.com/manual/gh_auth_login).
+
+GitHub Projects access and repository permissions must allow reading project items/issues, writing repository content, and opening pull requests. Trello additionally requires `TRELLO_API_KEY` and `TRELLO_TOKEN`; its existing credential wizard remains available. GitHub authentication is required with either source because Iteris ships PRs to GitHub.
+
+## Setup and usage
+
+```bash
+cd your-repository
+iteris
+```
+
+First run follows this order:
+
+1. Choose **Claude Code** or **Codex**; wait for prerequisite checks and login.
+2. Choose a model.
+3. Choose a supported effort level. Models without configurable effort show **Not supported**.
+4. Authenticate with GitHub, if needed.
+5. Choose GitHub or Trello, then the project or board/list as needed. If no GitHub Projects are visible, Iteris shows open repository issues instead.
+6. Select tickets and watch the active ticket, phase, harness, model, effort, and logs.
+
+Subsequent launches reuse project settings and proceed to ticket selection after prerequisite checks. `iteris setup` repeats harness/model/effort, authentication, and source setup, then exits without running tickets. Project/board and ticket selection happen when you next run `iteris`.
+
+If a Codex update fails, the UI offers retry or another harness. Explicit continuation is available only when the installed CLI supports the required execution capabilities; model discovery and authentication must still succeed. No updates run during an active ticket.
+
+## Change harness, model, or effort
+
+| Terminal command | Command inside the live UI |
+| --- | --- |
+| `iteris harness [claude\|codex]` | `/harness [claude\|codex]` |
+| `iteris model [model-id]` | `/model [model-id]` |
+| `iteris effort [level]` | `/effort [level]` |
+
+Omit the argument to open a picker. Type `/` in the live UI to enter a command; press Enter to submit or Escape to cancel. Terminal commands save settings and exit without running tickets.
+
+Each harness remembers its own model and effort. Model changes retain compatible effort settings; otherwise they use the selected model's advertised default. Codex models and effort identifiers come from the installed CLI's paginated `model/list` catalog, not a fixed OpenAI API list. Claude's model capability catalog follows [Anthropic's model configuration documentation](https://code.claude.com/docs/en/model-config).
+
+Changes are saved immediately and apply to the **next ticket**. An active ticket uses the same selection through planning, implementation, review, summary, and retries. A switch to a missing Codex installation is saved for setup at the next ticket boundary. External harness/model/effort commands also defer installation and updates while a queue is running in the same repository. Externally edited execution settings are read at each boundary; invalid settings pause the queue. Correct the JSON and retry, or cancel the queue and use the terminal commands to repair selections.
+
+## Configuration and migration
+
+Iteris creates `.iteris.json` in the project root, inferring `repo` from a GitHub Git remote when possible:
+
+```json
+{
+  "version": 2,
+  "harness": "claude",
+  "setupComplete": false,
+  "harnesses": {
+    "claude": {
+      "model": "opus",
+      "effort": "xhigh",
+      "flags": ["--dangerously-skip-permissions"]
+    },
+    "codex": {
+      "flags": []
+    }
+  },
+  "repo": "org/repo-name",
+  "provider": "github",
+  "todoStatus": "Todo",
+  "baseBranch": "main",
+  "timeout": 1200,
+  "planMode": true,
+  "qualityChecks": ["npm test"],
+  "pr": {"draft": false, "addLabelOnOpen": "in-review"}
+}
+```
+
+For ordinary repository issues, add `"githubSource": "issues"` to skip Project discovery and its `read:project` permission requirement. The default, `"auto"`, uses a configured/discovered Project when available and falls back to open repository issues when no Projects are visible. `"projects"` explicitly requires a Project. In issues mode, `projectNumber` and `todoStatus` do not filter the list: all open issues are shown, pull requests are excluded, and you choose which tickets to run. Issues are ordered by `p0`, `p1`, `p2`, then oldest first. Explicit project lookup failures and authentication errors are reported instead of silently changing sources.
+
+Choose Codex's model and effort through its picker to use the current account catalog. Trello options remain `trello.boardId`, `trello.listId`, and `trello.moveOnComplete`.
+
+Legacy configurations migrate automatically on load:
+
+- Save an unchanged backup at `.iteris.json.v1.bak` without overwriting an existing backup.
+- Set version 2, preselect Claude, and move `claudeFlags` into `harnesses.claude.flags`.
+- Preserve repository, ticket-source, quality-check, PR, and unknown settings. Previously inherited model/effort remain unset until setup.
+- Run the new setup once. Validate before atomically replacing the original file.
+
+Invalid JSON, unsupported future versions, and conflicting custom flags produce errors without overwriting the configuration. Use the structured model/effort fields instead of flags that override Iteris's selection, transport, or phase permissions. To undo migration, restore the backup and use an older Iteris version.
+
+`planMode: true` now means **plan, then implement automatically**. Planning is a separate read-only/restricted-tools phase, saved as `plan.md`. Implementation receives that plan; review executes separately. Set `planMode: false` to implement directly. `timeout` applies separately to planning and implementation; review has a five-minute limit and summary a one-minute limit. Summaries use the selected harness with restricted permissions and are best-effort.
+
+## Execution and state
+
+For each selected ticket, Iteris:
+
+1. Optionally generates a plan.
+2. Asks the harness to create `iteris/<ticket-id>-<slug>`, implement, check, commit, and push.
+3. Runs a review agent using the same harness/model/effort to review and open the PR.
+4. Looks up the PR, applies completion actions, and generates a summary.
+
+Success requires a clean process exit and an assistant completion marker; tool output cannot signal completion. Failed or timed-out tickets offer retry or skip. Cancellation terminates the active process and records a stale run. A repository run lock prevents overlapping queues. If Iteris was forcibly killed and reports a stale lock, remove `.iteris/active.json` after confirming that the previous process has stopped.
+
+State lives in `.iteris/runs/<ticket-id>-<slug>/`:
+
+| File | Content |
+| --- | --- |
+| `status.md` | Phase, result, branch, PR, harness, model, effort, timing, and failure reason |
+| `execution.json` | The ticket's selected harness/model/effort |
+| `prompt.md` | Implementation prompt |
+| `plan.md` | Generated plan when planning is enabled |
+| `log.txt` | Normalized harness output |
+| `summary.md` | Best-effort session summary |
+
+## Development
+
+TypeScript, Node.js 22+, React/Ink, Octokit, and Zod. Package manager: pnpm (npm also works).
+
+```bash
+npm run typecheck
+npm test
+```
+
+Tests build the application and use isolated fake CLI executables for discovery, update/login behavior, subprocess failures, configuration migration, setup, switching, and complete ticket lifecycles. They do not need real model calls or create real PRs.
+
+## Uninstall
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Oscar-Codes-Life/Iteris/main/install.sh | bash -s -- --uninstall
 ```
-
-## What It Does
-
-Iteris takes GitHub issues labeled `Todo` (or Trello cards from a board/list), works through them sequentially using Claude Code as a subprocess, and lands each one as an open PR — with full state tracking and a live terminal UI.
-
-No GitHub Actions. No YAML pipelines. Just a local process you run.
-
-## Prerequisites
-
-1. **Claude Account** — preferably the [Max plan](https://claude.ai) for higher usage limits
-2. **Node.js 22+**
-3. **Claude Code** installed and authenticated
-4. **`GITHUB_TOKEN`** set as a global environment variable (required for GitHub provider)
-
-```bash
-export GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx
-```
-
-A fine-grained personal access token scoped to the target repo is recommended. Required permissions:
-- `issues: read`
-- `contents: write`
-- `pull_requests: write`
-
-5. **`TRELLO_API_KEY`** and **`TRELLO_TOKEN`** set as global environment variables (required only when using Trello)
-
-```bash
-export TRELLO_API_KEY=your_trello_api_key
-export TRELLO_TOKEN=your_trello_token
-```
-
-Get your API key and generate a token from the [Trello Power-Ups admin page](https://trello.com/power-ups/admin).
-
-## Tech Stack
-
-- **Runtime**: Node.js 22+
-- **Language**: TypeScript (strict mode)
-- **CLI UI**: [Ink](https://github.com/vadimdemedes/ink) (React for terminals)
-- **GitHub**: Octokit (`@octokit/rest`)
-- **Package manager**: pnpm
-
-## How It Works
-
-### Step 1 — Choose your GitHub Project
-
-![Step 1: Choose your GitHub Project](assets/step1.jpg)
-
-Iteris discovers all GitHub Projects in your organization and presents them for selection.
-
-### Step 2 — Select the project to work on
-
-![Step 2: Select the project to work on](assets/step2.jpg)
-
-Navigate the list of projects with arrow keys and press Enter to select one. Iteris fetches tickets with the configured status (e.g. "Todo").
-
-### Step 3 — Select your tickets
-
-![Step 3: Select your tickets](assets/step3.jpg)
-
-Pick which tickets to build from the available list. Use Space to toggle and Enter to confirm.
-
-### Step 4 — Watch tickets get worked on
-
-![Step 4: Watch tickets get worked on](assets/step4.jpg)
-
-Iteris works through each ticket sequentially — creating branches, spawning Claude Code, implementing changes, and opening PRs. The live UI shows status, branch names, and PR numbers.
-
-<details>
-<summary><strong>Under the hood</strong></summary>
-
-For each ticket, Iteris:
-1. Creates a branch: `iteris/<ticket-id>-<slug>`
-2. Spawns a Claude Code instance with the ticket context (in plan mode by default — Claude drafts an execution plan before coding)
-3. Claude Code implements the changes, runs quality checks, commits, pushes, and opens a PR
-4. Iteris detects the completion signal (`<task>done</task>`) and moves to the next ticket
-
-</details>
-
-## Configuration
-
-Create `.iteris.json` at the project root:
-
-```json
-{
-  "repo": "org/repo-name",
-  "todoLabel": "Todo",
-  "baseBranch": "main",
-  "timeout": 1200,
-  "planMode": true,
-  "claudeFlags": ["--dangerously-skip-permissions"],
-  "qualityChecks": ["tsc --noEmit", "eslint .", "vitest run"],
-  "pr": {
-    "draft": false,
-    "addLabelOnOpen": "in-review"
-  },
-  "trello": {
-    "boardId": "optional_board_id",
-    "listId": "optional_list_id",
-    "moveOnComplete": "Done"
-  }
-}
-```
-
-| Field | Default | Description |
-| ----- | ------- | ----------- |
-| `planMode` | `true` | When enabled, Claude Code generates an execution plan before taking action (`--plan` flag). This "think first" step improves output quality. Set to `false` to skip planning and execute immediately. |
-
-## State Tracking
-
-Iteris maintains state in `.iteris/runs/<ticket-id>-<slug>/`:
-
-| File          | Purpose                              |
-| ------------- | ------------------------------------ |
-| `status.md`   | Current status and metadata          |
-| `prompt.md`   | Prompt sent to Claude Code           |
-| `log.txt`     | Full stdout/stderr from the instance |
-
-Ticket statuses: `running` → `done` | `stale` | `failed`
-
-## Recommendations
-
-- **Claude Code Max subscription** — Use the Max plan with the latest Opus model for the best performance and higher usage limits.
-- **CLAUDE.md file** — Maintain a well-crafted `CLAUDE.md` in your project root with coding conventions, standards, and agent behavior preferences so every spawned instance follows consistent rules.
-- **Detailed ticket definitions** — Write thorough, well-explained GitHub issues to maximize one-shot success rate.
-- **Small, well-scoped issues** — Break work into small, clearly defined issues rather than large, vaguely described features.
-
-## Project Structure
-
-```
-src/
-  index.tsx          # Entry point, Ink app root
-  agent/
-    runner.ts        # Spawn + manage Claude Code instances
-    watcher.ts       # Stdout watcher, signal detection
-    prompt.ts        # Prompt template expansion
-  github/
-    tickets.ts       # Fetch + filter GitHub issues
-    pr.ts            # Open PRs, manage labels
-  state/
-    manager.ts       # Create/update state folders and status.md
-    progress.ts      # Read/write progress.md
-  ui/
-    App.tsx          # Main Ink UI component
-    TicketRow.tsx    # Per-ticket status row
-    LiveLog.tsx      # Streaming Claude Code output panel
-  config.ts          # Load + validate config
-  types.ts           # Shared TypeScript types
-```
-
-## Roadmap
-
-See [roadmap.md](roadmap.md) for planned integrations and upcoming features.
 
 ## License
 

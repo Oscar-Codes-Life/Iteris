@@ -20,6 +20,8 @@ export async function writeStatus(folder: string, state: TicketState): Promise<v
 		`**Branch**: ${state.branch}`,
 	];
 
+	if (state.selection) lines.push(`**Harness**: ${state.selection.harness}`, `**Model**: ${state.selection.model ?? 'default'}`, `**Effort**: ${state.selection.effort ?? 'Not supported'}`);
+
 	if (state.prUrl) {
 		lines.push(`**PR**: ${state.prUrl}`);
 	}
@@ -30,6 +32,10 @@ export async function writeStatus(folder: string, state: TicketState): Promise<v
 
 	if (state.finishedAt) {
 		lines.push(`**Finished**: ${state.finishedAt.toISOString()}`);
+	}
+
+	if (state.failureReason) {
+		lines.push(`**Failure Reason**: ${state.failureReason}`);
 	}
 
 	lines.push('');

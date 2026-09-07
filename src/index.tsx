@@ -1,13 +1,15 @@
+import {hasActiveRun} from './state/active.js';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {render} from 'ink';
 import terminalImage from 'terminal-image';
 import {loadConfig, saveConfigField} from './config.js';
-import {resolveGithubToken} from './github/auth.js';
+import {ensureGithubAuth} from './github/auth.js';
+import {setupHarness, prepareHarness, configure} from './setup.js';
+import {selectionLabel} from './harness/settings.js';
 import type {ProjectInfo} from './github/projects.js';
 import {fetchTodoTickets} from './github/tickets.js';
 import {ProjectPicker} from './github/ui/ProjectPicker.js';
-import {TokenError} from './github/ui/TokenError.js';
 import {getTicketStatuses} from './state/manager.js';
 import type {TrelloBoard, TrelloList} from './trello/api.js';
 import {resolveTrelloCredentials, saveTrelloCredentials} from './trello/auth.js';
@@ -31,9 +33,9 @@ async function printBranding() {
 		// Terminal doesn't support images — skip
 	}
 
-	console.log('\x1b[1m\x1b[35mIteris\x1b[0m \x1b[2m—\x1b[0m Autonomous agent that pulls GitHub tickets, ships them via Claude Code,');
+	console.log('\x1b[1m\x1b[35mIteris\x1b[0m \x1b[2m—\x1b[0m Autonomous agent that pulls GitHub tickets, ships them via Claude Code or Codex,');
 	console.log('and manages the full lifecycle from branch to PR.');
-	console.log('\x1b[2mPowered by Claude Code · Built by Oscar Gallo\x1b[0m');
+	console.log('\x1b[2mClaude Code + Codex · Built by Oscar Gallo\x1b[0m');
 	console.log();
 }
 function showProviderPicker(): Promise<Provider> {
@@ -91,28 +93,6 @@ function showTicketPicker(tickets: Ticket[], previousStatuses: Map<number, Ticke
 	});
 }
 
-function waitForGithubToken(): Promise<void> {
-	return new Promise((resolve, reject) => {
-		const {rerender, waitUntilExit} = render(
-			<TokenError onRetry={() => handleRetry()} />,
-		);
-
-		function handleRetry() {
-			if (resolveGithubToken()) {
-				rerender(<></>);
-				resolve();
-			}
-		}
-
-		void waitUntilExit().then(() => {
-			// If user quit without resolving token, exit
-			if (!resolveGithubToken()) {
-				reject(new Error('GitHub token required'));
-			}
-		});
-	});
-}
-
 function waitForTrelloCredentials(): Promise<void> {
 	return new Promise((resolve, reject) => {
 		const {unmount, waitUntilExit} = render(
@@ -133,38 +113,33 @@ function waitForTrelloCredentials(): Promise<void> {
 }
 
 async function main() {
+	const [command, argument, ...extra] = process.argv.slice(2);
+	if (command === '--help' || command === '-h') {
+		console.log('iteris [setup | harness [claude|codex] | model [id] | effort [level]]');
+		return;
+	}
+	if (extra.length || (command === 'setup' && argument) || (command && !['setup', 'harness', 'model', 'effort'].includes(command))) throw new Error('Unknown command. Run iteris --help.');
 	await printBranding();
-
-	let config: IterisConfig;
-	try {
-		config = await loadConfig();
-	} catch (error) {
-		console.error(error instanceof Error ? error.message : error);
-		process.exit(1);
+	let config = await loadConfig();
+	if (command && command !== 'setup') {
+		config = await configure(command, argument);
+		console.log(`Saved: ${selectionLabel(config)}`);
+		return;
 	}
-
-	if (!config.provider) {
-		const provider = await showProviderPicker();
-		await saveConfigField('provider', provider);
-		config.provider = provider;
+	if (await hasActiveRun()) throw new Error('An Iteris queue is already running here. Use iteris harness/model/effort to change pending settings.');
+	if (command === 'setup' || !config.setupComplete) config = await setupHarness();
+	else config = await prepareHarness(config);
+	await ensureGithubAuth();
+	if (!config.provider || command === 'setup') {
+		config.provider = await showProviderPicker();
+		await saveConfigField('provider', config.provider);
 	}
-
-	if (config.provider === 'trello' && !resolveTrelloCredentials()) {
-		try {
-			await waitForTrelloCredentials();
-		} catch {
-			process.exit(1);
-		}
+	if (config.provider === 'trello' && !resolveTrelloCredentials()) await waitForTrelloCredentials();
+	await saveConfigField('setupComplete', true);
+	if (command === 'setup') {
+		console.log('Setup complete. Run iteris to select tickets.');
+		return;
 	}
-
-	if (!resolveGithubToken()) {
-		try {
-			await waitForGithubToken();
-		} catch {
-			process.exit(1);
-		}
-	}
-
 	await run(config);
 }
 
@@ -184,6 +159,8 @@ async function fetchGithubFlow(config: IterisConfig): Promise<Ticket[]> {
 	if (result.kind === 'pickProject') {
 		const selected = await showProjectPicker(result.projects);
 		console.log(`[debug] User selected project #${selected.number} "${selected.title}"`);
+		await saveConfigField('projectNumber', selected.number);
+		config.projectNumber = selected.number;
 		result = await fetchTodoTickets(config, selected.number);
 	}
 
@@ -257,4 +234,4 @@ async function run(config: IterisConfig) {
 	await waitUntilExit();
 }
 
-void main();
+void main().catch(error => {console.error(error instanceof Error ? error.message : String(error)); process.exitCode = 1;});

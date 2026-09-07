@@ -1,165 +1,92 @@
-import {useState, useEffect, useCallback} from 'react';
+import {useState, useEffect, useRef} from 'react';
 import {Box, Text, useApp, useInput} from 'ink';
 import type {IterisConfig, Ticket, TicketState} from '../types.js';
-import {runAllTickets, type RunnerCallbacks} from '../agent/runner.js';
+import {runAllTickets} from '../agent/runner.js';
+import {loadConfig} from '../config.js';
+import {prepareHarness, configure, type Picker} from '../setup.js';
+import {selectionLabel} from '../harness/settings.js';
+import {Choice, type ChoiceOption} from './Choice.js';
 import {TicketRow} from './TicketRow.js';
 import {LiveLog} from './LiveLog.js';
 
-type AppProps = {
-	config: IterisConfig;
-	tickets: Ticket[];
-	cwd: string;
-};
-
-type FailurePrompt = {
-	ticketNumber: number;
-	resolve: (decision: 'retry' | 'skip') => void;
-};
-
-export function App({config, tickets, cwd}: AppProps) {
+type Dialog = {title: string; options: ChoiceOption[]; initial?: string; resolve: (value: string) => void; reject: (error: Error) => void};
+const activeStatuses = new Set(['planning', 'running', 'reviewing', 'summarizing']);
+export function App({config, tickets, cwd}: {config: IterisConfig; tickets: Ticket[]; cwd: string}) {
 	const {exit} = useApp();
-	const [states, setStates] = useState<Map<number, TicketState>>(() => {
-		const initial = new Map<number, TicketState>();
-		for (const ticket of tickets) {
-			initial.set(ticket.number, {
-				ticket,
-				status: 'pending',
-				branch: `iteris/${ticket.number}-${ticket.slug}`,
-				logLines: [],
-				elapsedMs: 0,
-			});
-		}
-
-		return initial;
+	const [states, setStates] = useState<Map<number, TicketState>>(() => new Map(tickets.map(ticket => [ticket.number, {ticket, status: 'pending', branch: `iteris/${ticket.number}-${ticket.slug}`, logLines: [], elapsedMs: 0}])));
+	const [finished, setFinished] = useState(false);
+	const [error, setError] = useState('');
+	const [pending, setPending] = useState(config);
+	const [commandText, setCommandText] = useState<string | null>(null);
+	const [busy, setBusy] = useState(false);
+	const [dialog, setDialog] = useState<Dialog | null>(null);
+	const dialogRef = useRef<Dialog | null>(null);
+	const gate = useRef<Promise<void>>(Promise.resolve());
+	const controller = useRef(new AbortController());
+	const pick: Picker = (title, options, initial) => new Promise((resolve, reject) => {
+		if (controller.current.signal.aborted) {reject(new Error('Cancelled')); return;}
+		const next: Dialog = {title, options, initial, resolve, reject}; dialogRef.current = next; setDialog(next);
 	});
-
-	const [activeTicket, setActiveTicket] = useState<number | null>(null);
-	const [isFinished, setIsFinished] = useState(false);
-	const [failurePrompt, setFailurePrompt] = useState<FailurePrompt | null>(null);
-
-	// Elapsed time ticker
+	function closeDialog(value?: string) {
+		const current = dialogRef.current; dialogRef.current = null; setDialog(null);
+		if (value === undefined) current?.reject(new Error('Cancelled')); else current?.resolve(value);
+	}
 	useEffect(() => {
-		const interval = setInterval(() => {
-			if (activeTicket === null) return;
-
-			setStates(prev => {
-				const next = new Map(prev);
-				const current = next.get(activeTicket);
-				if ((current?.status === 'running' || current?.status === 'reviewing') && current.startedAt) {
-					next.set(activeTicket, {
-						...current,
-						elapsedMs: Date.now() - current.startedAt.getTime(),
-					});
+		const update = (number: number, state: TicketState) => {setStates(previous => new Map(previous).set(number, state));};
+		void runAllTickets(tickets, config, cwd, {
+			onStatusChange: update, onLogLine() {}, onComplete: update,
+			async onFailure(_number, state) {return await pick(`Ticket #${state.ticket.number}: ${state.failureReason ?? 'failed'}`, [{value: 'retry', label: 'Retry with same settings'}, {value: 'skip', label: 'Skip ticket'}]) as 'retry' | 'skip';},
+			async beforeTicket() {
+				for (;;) {
+					if (controller.current.signal.aborted) throw new Error('Cancelled');
+					await gate.current;
+					try {
+						setBusy(true);
+						const fresh = await prepareHarness(await loadConfig(cwd), pick, cwd);
+						setPending(fresh); setBusy(false); return fresh;
+					} catch (failure) {
+						if (controller.current.signal.aborted) throw failure;
+						setBusy(false);
+						await pick(`Queue paused: ${failure instanceof Error ? failure.message : String(failure)}`, [{value: 'retry', label: 'Reload configuration and retry'}]);
+					}
 				}
-
-				return next;
-			});
-		}, 1000);
-
-		return () => {
-			clearInterval(interval);
-		};
-	}, [activeTicket]);
-
-	const updateState = useCallback((ticketNumber: number, state: TicketState) => {
-		setStates(prev => {
-			const next = new Map(prev);
-			next.set(ticketNumber, state);
-			return next;
-		});
+			},
+		}, controller.current.signal).then(() => setFinished(true), failure => {setError(String(failure)); setFinished(true);});
+		return () => {controller.current.abort(); dialogRef.current?.reject(new Error('Cancelled'));};
 	}, []);
-
-	// Start runner
 	useEffect(() => {
-		const callbacks: RunnerCallbacks = {
-			onStatusChange(ticketNumber, state) {
-				if (state.status === 'running') {
-					setActiveTicket(ticketNumber);
-				}
-
-				updateState(ticketNumber, state);
-			},
-			onLogLine(_ticketNumber, _line) {
-				// State updates handled by onStatusChange
-			},
-			onComplete(ticketNumber, state) {
-				updateState(ticketNumber, state);
-				setActiveTicket(null);
-			},
-			async onFailure(ticketNumber, state) {
-				updateState(ticketNumber, state);
-				setActiveTicket(null);
-
-				return new Promise<'retry' | 'skip'>(resolve => {
-					setFailurePrompt({ticketNumber, resolve});
-				});
-			},
-		};
-
-		void runAllTickets(tickets, config, cwd, callbacks).then(() => {
-			setIsFinished(true);
-		});
-	}, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-	// Handle keyboard input
-	useInput((input, _key) => {
-		if (failurePrompt) {
-			if (input === 'r') {
-				failurePrompt.resolve('retry');
-				setFailurePrompt(null);
-			} else if (input === 's') {
-				failurePrompt.resolve('skip');
-				setFailurePrompt(null);
-			}
-		}
-
-		if (isFinished && input === 'q') {
-			exit();
-		}
+		const timer = setInterval(() => setStates(previous => new Map([...previous].map(([number, state]) => [number, activeStatuses.has(state.status) && state.startedAt ? {...state, elapsedMs: Date.now() - state.startedAt.getTime()} : state]))), 1000);
+		return () => clearInterval(timer);
+	}, []);
+	function submit(text: string) {
+		const parts = text.trim().replace(/^\//, '').split(/\s+/);
+		if (parts.length > 2 || !['harness', 'model', 'effort'].includes(parts[0]!)) {setError('Commands: /harness [claude|codex], /model [id], /effort [level]'); return;}
+		setBusy(true); setError('');
+		gate.current = configure(parts[0]!, parts[1], {picker: pick, cwd, active: true}).then(next => {setPending(next);}, failure => {setError(failure instanceof Error ? failure.message : String(failure));}).finally(() => setBusy(false));
+	}
+	useInput((input, key) => {
+		if (dialog || busy) return;
+		if (commandText !== null) {
+			if (key.escape) setCommandText(null);
+			else if (key.return) {setCommandText(null); submit(commandText);}
+			else if (key.backspace || key.delete) setCommandText(value => value?.slice(0, -1) ?? '');
+			else if (!key.ctrl && !key.meta) setCommandText(value => (value ?? '') + input);
+		} else if (input === '/') setCommandText('/');
+		else if (input === 'q' && finished) exit();
 	});
-
-	const remaining = [...states.values()].filter(s => s.status === 'pending' || s.status === 'running' || s.status === 'reviewing').length;
-	const activeState = activeTicket ? states.get(activeTicket) : null;
-
-	return (
-		<Box flexDirection="column" padding={1}>
-			{/* Header */}
-			<Box gap={1}>
-				<Text bold color="magenta">Iteris</Text>
-				<Text dimColor>{config.repo}</Text>
-				{!isFinished && <Text>{remaining} ticket{remaining !== 1 ? 's' : ''} remaining</Text>}
-				{isFinished && <Text color="green">All tickets complete</Text>}
-			</Box>
-
-			<Box marginTop={1} />
-
-			{/* Ticket rows */}
-			<Box flexDirection="column">
-				{[...states.values()].map(state => (
-					<TicketRow key={state.ticket.number} state={state} />
-				))}
-			</Box>
-
-			{/* Live log for active ticket */}
-			{activeState && (activeState.status === 'running' || activeState.status === 'reviewing') && (
-				<LiveLog lines={activeState.logLines} />
-			)}
-
-			{/* Failure prompt */}
-			{failurePrompt && (
-				<Box marginTop={1}>
-					<Text color="red" bold>
-						Ticket #{failurePrompt.ticketNumber} failed. Press <Text color="white">r</Text> to retry, <Text color="white">s</Text> to skip
-					</Text>
-				</Box>
-			)}
-
-			{/* Footer */}
-			{isFinished && (
-				<Box marginTop={1}>
-					<Text dimColor>Press q to exit</Text>
-				</Box>
-			)}
-		</Box>
-	);
+	const active = [...states.values()].find(state => activeStatuses.has(state.status));
+	const hasFailures = [...states.values()].some(state => state.status === 'failed' || state.status === 'stale');
+	return <Box flexDirection="column" padding={1}>
+		<Text bold color="magenta">Iteris · {config.repo}</Text>
+		<Text dimColor>Saved settings for the next ticket: {selectionLabel(pending)}</Text>
+		{active && <Box flexDirection="column" marginY={1}><Text bold>Working on #{active.ticket.number}: {active.ticket.title} · {active.status}</Text><Text>{active.selection?.harness} · {active.selection?.model} · effort: {active.selection?.effort ?? 'Not supported'}</Text></Box>}
+		{[...states.values()].map(state => <TicketRow key={state.ticket.number} state={state} />)}
+		{active && <LiveLog lines={active.logLines} harness={active.selection?.harness ?? config.harness} />}
+		{error && <Text color="red">{error}</Text>}
+		{dialog && <Choice key={dialog.title} {...dialog} onSelect={value => closeDialog(value)} onCancel={() => closeDialog()} />}
+		{commandText !== null && <Text color="cyan">{commandText}▌</Text>}
+		{busy && !dialog && <Text dimColor>Checking settings…</Text>}
+		{finished && <Text color={hasFailures || error ? 'yellow' : 'green'}>{hasFailures || error ? 'Queue finished with failures.' : 'All tickets complete.'} Press q to exit.</Text>}
+		{!dialog && !busy && <Text dimColor>/harness · /model · /effort (changes apply to the next ticket)</Text>}
+	</Box>;
 }

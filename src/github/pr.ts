@@ -1,8 +1,9 @@
+import {resolveGithubToken} from './auth.js';
 import {Octokit} from '@octokit/rest';
 import type {IterisConfig} from '../types.js';
 
 function createOctokit(): Octokit {
-	return new Octokit({auth: process.env['GITHUB_TOKEN']});
+	return new Octokit({auth: resolveGithubToken()});
 }
 
 export async function findPrForBranch(config: IterisConfig, branch: string): Promise<{url: string; number: number} | undefined> {

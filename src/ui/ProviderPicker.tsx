@@ -3,7 +3,7 @@ import {Box, Text, useInput} from 'ink';
 import type {Provider} from '../types.js';
 
 const providers: {value: Provider; label: string}[] = [
-	{value: 'github', label: 'GitHub Projects'},
+	{value: 'github', label: 'GitHub (issues or projects)'},
 	{value: 'trello', label: 'Trello'},
 ];
 

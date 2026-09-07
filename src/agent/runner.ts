@@ -1,246 +1,105 @@
-import {spawn, type ChildProcess} from 'node:child_process';
+import {writeFile} from 'node:fs/promises';
+import path from 'node:path';
 import type {IterisConfig, Ticket, TicketState} from '../types.js';
-import {buildClaudeArgs} from '../config.js';
+import {acquireRun} from '../state/active.js';
+import {loadConfig} from '../config.js';
 import {createRunFolder, writeStatus, writePrompt, appendLog} from '../state/manager.js';
 import {readProgress, appendProgress} from '../state/progress.js';
 import {findPrForBranch, addLabelToIssue} from '../github/pr.js';
 import {moveCardOnComplete} from '../trello/completion.js';
 import {expandPrompt} from './prompt.js';
-import {OutputWatcher} from './watcher.js';
 import {generateSummary} from './summarizer.js';
 import {runCodeReview} from './reviewer.js';
+import {runHarness} from '../harness/process.js';
 
 export type RunnerCallbacks = {
 	onStatusChange: (ticketNumber: number, state: TicketState) => void;
 	onLogLine: (ticketNumber: number, line: string) => void;
 	onComplete: (ticketNumber: number, state: TicketState) => void;
 	onFailure: (ticketNumber: number, state: TicketState) => Promise<'retry' | 'skip'>;
+	beforeTicket?: () => Promise<IterisConfig>;
 };
-
-let activeProcess: ChildProcess | null = null;
-
-function setupSignalHandlers(getCurrentState: () => {ticket: Ticket; folder: string; state: TicketState} | undefined): void {
-	const cleanup = async () => {
-		if (activeProcess) {
-			activeProcess.kill('SIGTERM');
-			activeProcess = null;
-		}
-
-		const current = getCurrentState();
-		if (current) {
-			const staleState: TicketState = {
-				...current.state,
-				status: 'stale',
-				finishedAt: new Date(),
-			};
-
-			await writeStatus(current.folder, staleState);
-		}
-
-		process.exit(0);
-	};
-
-	process.on('SIGINT', () => {
-		void cleanup();
-	});
-
-	process.on('SIGTERM', () => {
-		void cleanup();
-	});
-}
-
-async function runSingleTicket(
-	ticket: Ticket,
-	config: IterisConfig,
-	cwd: string,
-	callbacks: RunnerCallbacks,
-): Promise<TicketState> {
-	const branch = `iteris/${ticket.number}-${ticket.slug}`;
-	const folder = await createRunFolder(cwd, ticket);
-
-	const state: TicketState = {
-		ticket,
-		status: 'running',
-		branch,
-		logLines: [],
-		elapsedMs: 0,
-		startedAt: new Date(),
-	};
-
-	callbacks.onStatusChange(ticket.number, {...state});
-	await writeStatus(folder, state);
-
-	const progressContent = await readProgress(cwd);
-	const prompt = expandPrompt(ticket, config, progressContent);
-	await writePrompt(folder, prompt);
-
-	return new Promise<TicketState>(resolve => {
-		const proc = spawn('claude', buildClaudeArgs(config), {
-			stdio: ['pipe', 'pipe', 'pipe'],
-			cwd,
-		});
-
-		activeProcess = proc;
-
-		const watcher = new OutputWatcher(proc.stdout!);
-		const stderrWatcher = new OutputWatcher(proc.stderr!);
-
-		const startTime = Date.now();
-
-		const timeoutId = setTimeout(() => {
-			proc.kill('SIGTERM');
-		}, config.timeout * 1000);
-
-		watcher.on('line', (line: string) => {
-			state.logLines = [...watcher.lines];
-			state.elapsedMs = Date.now() - startTime;
-			callbacks.onLogLine(ticket.number, line);
-			callbacks.onStatusChange(ticket.number, {...state});
-			void appendLog(folder, line + '\n');
-		});
-
-		stderrWatcher.on('line', (line: string) => {
-			void appendLog(folder, `[stderr] ${line}\n`);
-		});
-
-		watcher.on('done', () => {
-			// Don't kill immediately — wait for process to exit naturally
-			// Give it a few seconds to finish cleanly
-			setTimeout(() => {
-				if (activeProcess === proc) {
-					proc.kill('SIGTERM');
-				}
-			}, 3000);
-		});
-
-		proc.on('exit', async (code) => {
-			clearTimeout(timeoutId);
-			activeProcess = null;
-			state.elapsedMs = Date.now() - startTime;
-			state.finishedAt = new Date();
-
-			if (watcher.isDone) {
-				// Transition to reviewing phase
-				state.status = 'reviewing';
-				callbacks.onStatusChange(ticket.number, {...state});
-				await writeStatus(folder, state);
-
-				const reviewSuccess = await runCodeReview({
-					ticket,
-					config,
-					cwd,
-					folder,
-					onLogLine(line) {
-						state.logLines = [...state.logLines.slice(-49), line];
-						state.elapsedMs = Date.now() - startTime;
-						callbacks.onLogLine(ticket.number, line);
-						callbacks.onStatusChange(ticket.number, {...state});
-					},
-					onProcess(reviewProc) {
-						activeProcess = reviewProc;
-					},
-				});
-
-				activeProcess = null;
-				state.elapsedMs = Date.now() - startTime;
-				state.finishedAt = new Date();
-
-				if (reviewSuccess) {
-					state.status = 'done';
-
-					// Check for PR
-					try {
-						const pr = await findPrForBranch(config, branch);
-						if (pr) {
-							state.prUrl = pr.url;
-							state.prNumber = pr.number;
-
-							if (config.pr.addLabelOnOpen) {
-								await addLabelToIssue(config, ticket.number, config.pr.addLabelOnOpen);
-							}
-						}
-					} catch {
-						// PR lookup failed, not critical
-					}
-
-					if (config.provider === 'trello') {
-						try {
-							await moveCardOnComplete(config, ticket.number);
-						} catch {
-							// Card move failed, not critical
-						}
-					}
-
-					await writeStatus(folder, state);
-					await appendProgress(cwd, `#${ticket.number} (${ticket.title}) — completed successfully`);
-					try {
-						await generateSummary(folder);
-					} catch {
-						// Summary generation failed, not critical
-					}
-
-					callbacks.onComplete(ticket.number, {...state});
-				} else {
-					state.status = 'failed';
-					await writeStatus(folder, state);
-				}
-			} else if (code !== 0 || state.elapsedMs >= config.timeout * 1000) {
-				state.status = state.elapsedMs >= config.timeout * 1000 ? 'stale' : 'failed';
-				await writeStatus(folder, state);
-			} else {
-				state.status = 'stale';
-				await writeStatus(folder, state);
-			}
-
-			resolve({...state});
-		});
-
-		proc.stdin!.write(prompt);
-		proc.stdin!.end();
-	});
-}
-
-export async function runAllTickets(
-	tickets: Ticket[],
-	config: IterisConfig,
-	cwd: string,
-	callbacks: RunnerCallbacks,
-): Promise<void> {
-	let currentContext: {ticket: Ticket; folder: string; state: TicketState} | undefined;
-
-	setupSignalHandlers(() => currentContext);
-
-	for (const ticket of tickets) {
-		const branch = `iteris/${ticket.number}-${ticket.slug}`;
-		const folder = await createRunFolder(cwd, ticket);
-
-		let result: TicketState | undefined;
-		let shouldRetry = true;
-
-		while (shouldRetry) {
-			shouldRetry = false;
-
-			const initialState: TicketState = {
-				ticket,
-				status: 'pending',
-				branch,
-				logLines: [],
-				elapsedMs: 0,
-			};
-
-			currentContext = {ticket, folder, state: initialState};
-
-			result = await runSingleTicket(ticket, config, cwd, callbacks);
-			currentContext = undefined;
-
-			if (result.status === 'failed' || result.status === 'stale') {
-				const decision = await callbacks.onFailure(ticket.number, {...result});
-				if (decision === 'retry') {
-					shouldRetry = true;
-				}
-
-				// 'skip' → continue to next ticket
+export type RunnerServices = {findPr: typeof findPrForBranch; addLabel: typeof addLabelToIssue; moveCard: typeof moveCardOnComplete};
+const defaultServices: RunnerServices = {findPr: findPrForBranch, addLabel: addLabelToIssue, moveCard: moveCardOnComplete};
+export async function runAllTickets(tickets: Ticket[], config: IterisConfig, cwd: string, callbacks: RunnerCallbacks, externalSignal?: AbortSignal, services: RunnerServices = defaultServices): Promise<void> {
+	const release = await acquireRun(cwd);
+	const controller = new AbortController();
+	const abort = () => controller.abort();
+	process.on('SIGINT', abort); process.on('SIGTERM', abort);
+	externalSignal?.addEventListener('abort', abort, {once: true});
+	if (externalSignal?.aborted) abort();
+	try {
+		for (const ticket of tickets) {
+			if (controller.signal.aborted) break;
+			const latest = callbacks.beforeTicket ? await callbacks.beforeTicket() : await loadConfig(cwd);
+			// Ticket source/repository belong to the fetched queue. Only execution
+			// preferences change at boundaries. Retries retain this snapshot.
+			const snapshot = structuredClone({...config, harness: latest.harness, harnesses: latest.harnesses, planMode: latest.planMode, timeout: latest.timeout});
+			let retry = true;
+			while (retry && !controller.signal.aborted) {
+				const result = await runSingleTicket(ticket, snapshot, cwd, callbacks, controller.signal, services);
+				retry = !controller.signal.aborted && (result.status === 'failed' || result.status === 'stale') && await callbacks.onFailure(ticket.number, result) === 'retry';
 			}
 		}
+	} finally {
+		process.off('SIGINT', abort); process.off('SIGTERM', abort);
+		externalSignal?.removeEventListener('abort', abort);
+		await release();
 	}
+}
+
+async function runSingleTicket(ticket: Ticket, config: IterisConfig, cwd: string, callbacks: RunnerCallbacks, signal: AbortSignal, services: RunnerServices): Promise<TicketState> {
+	const folder = await createRunFolder(cwd, ticket);
+	const settings = config.harnesses[config.harness];
+	const state: TicketState = {ticket, status: 'running', branch: `iteris/${ticket.number}-${ticket.slug}`, logLines: [], elapsedMs: 0, startedAt: new Date(),
+		selection: {harness: config.harness, model: settings.model, effort: settings.effort}};
+	let logWrites = Promise.resolve();
+	let logError: unknown;
+	const log = (line: string) => {
+		state.logLines = [...state.logLines, ...line.split('\n')].slice(-50);
+		state.elapsedMs = Date.now() - state.startedAt!.getTime();
+		callbacks.onLogLine(ticket.number, line); callbacks.onStatusChange(ticket.number, {...state});
+		logWrites = logWrites.then(() => appendLog(folder, line + '\n')).catch(error => {logError = error;});
+	};
+	const phase = async (status: TicketState['status']) => {state.status = status; callbacks.onStatusChange(ticket.number, {...state}); await writeStatus(folder, state);};
+	try {
+		await writeFile(path.join(folder, 'execution.json'), JSON.stringify(state.selection, null, 2) + '\n');
+		const prompt = expandPrompt(ticket, config, await readProgress(cwd));
+		await writePrompt(folder, prompt);
+		let plan = '';
+		if (config.planMode) {
+			await phase('planning');
+			const result = await runHarness({config, phase: 'planning', prompt: `Inspect this task and produce an implementation plan. Do not edit files, execute changes, or print a completion marker.\n\n${prompt}`, cwd, timeoutMs: config.timeout * 1000, onLine: log, signal});
+			if (!result.success || !result.text) {state.status = result.timedOut ? 'stale' : 'failed'; throw new Error(result.error ?? 'Planning produced no plan');}
+			plan = result.text; await writeFile(path.join(folder, 'plan.md'), plan + '\n');
+		}
+		await phase('running');
+		const result = await runHarness({config, phase: 'implementation', prompt: `${prompt}${plan ? `\n\nImplement this plan:\n${plan}` : ''}`, cwd, timeoutMs: config.timeout * 1000, onLine: log, signal});
+		if (!result.success || !result.done) {state.status = result.timedOut ? 'stale' : 'failed'; throw new Error(result.error ?? 'Process exited without the completion signal');}
+		await phase('reviewing');
+		const reviewed = await runCodeReview({ticket, config, cwd, folder, onLogLine: log, onProcess() {}, signal});
+		if (!reviewed) throw new Error('Code review did not complete successfully');
+		const pr = await services.findPr(config, state.branch);
+		if (!pr) throw new Error('Review finished but no pull request was found for this branch');
+		state.prUrl = pr.url; state.prNumber = pr.number;
+		if (config.pr.addLabelOnOpen && config.provider !== 'trello') await services.addLabel(config, ticket.number, config.pr.addLabelOnOpen);
+		if (config.provider === 'trello') await services.moveCard(config, ticket.number);
+		await phase('summarizing'); await logWrites;
+		try {await generateSummary(folder, config, cwd, undefined, signal);} catch (error) {log(`Summary failed: ${String(error)}`);}
+		if (signal.aborted) throw new Error('Cancelled');
+		state.status = 'done';
+		await appendProgress(cwd, `#${ticket.number} (${ticket.title}) — completed successfully`);
+	} catch (error) {
+		state.status = signal.aborted || state.status === 'stale' ? 'stale' : 'failed';
+		state.failureReason = error instanceof Error ? error.message : String(error);
+		log(`[iteris] ${state.failureReason}`);
+	} finally {
+		state.finishedAt = new Date(); state.elapsedMs = Date.now() - state.startedAt!.getTime();
+		await logWrites;
+		if (logError) {state.status = 'failed'; state.failureReason = `Could not save run log: ${String(logError)}`;}
+		await writeStatus(folder, state);
+		callbacks.onStatusChange(ticket.number, {...state});
+	}
+	if (state.status === 'done') callbacks.onComplete(ticket.number, {...state});
+	return {...state};
 }

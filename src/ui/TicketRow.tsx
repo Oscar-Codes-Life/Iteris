@@ -3,6 +3,8 @@ import type { TicketState } from "../types.js";
 
 const statusIcons: Record<string, string> = {
   pending: "○",
+  planning: "◌",
+  summarizing: "◌",
   running: "◉",
   reviewing: "⊙",
   done: "✓",
@@ -12,6 +14,8 @@ const statusIcons: Record<string, string> = {
 
 const statusColors: Record<string, string> = {
   pending: "gray",
+  planning: "cyan",
+  summarizing: "cyan",
   running: "yellow",
   reviewing: "cyan",
   done: "green",
@@ -46,13 +50,16 @@ export function TicketRow({ state }: TicketRowProps) {
       </Text>
       <Text>{state.ticket.title}</Text>
       <Text color={color}>{state.status}</Text>
-      {(state.status === "running" || state.status === "reviewing") && (
+      {(["planning", "running", "reviewing", "summarizing"].includes(state.status)) && (
         <Text dimColor>elapsed: {formatElapsed(state.elapsedMs)}</Text>
       )}
       {state.branch && state.status !== "pending" && (
         <Text dimColor>branch: {state.branch}</Text>
       )}
       {state.prNumber && <Text color="cyan">PR #{state.prNumber}</Text>}
+      {state.failureReason && (state.status === "failed" || state.status === "stale") && (
+        <Text dimColor>({state.failureReason})</Text>
+      )}
     </Box>
   );
 }

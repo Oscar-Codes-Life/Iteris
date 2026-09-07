@@ -1,11 +1,9 @@
-import {spawn, type ChildProcess} from 'node:child_process';
+import type {ChildProcess} from 'node:child_process';
 import {readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {dirname, resolve} from 'node:path';
 import type {IterisConfig, Ticket} from '../types.js';
-import {buildClaudeArgs} from '../config.js';
-import {OutputWatcher} from './watcher.js';
-import {appendLog} from '../state/manager.js';
+import {runHarness} from '../harness/process.js';
 
 const REVIEW_TIMEOUT = 300_000;
 
@@ -22,15 +20,16 @@ type ReviewOptions = {
 	folder: string;
 	onLogLine: (line: string) => void;
 	onProcess: (proc: ChildProcess) => void;
+	signal?: AbortSignal;
 };
 
 export async function runCodeReview({
 	ticket,
 	config,
 	cwd,
-	folder,
 	onLogLine,
 	onProcess,
+	signal,
 }: ReviewOptions): Promise<boolean> {
 	const template = loadPromptTemplate();
 
@@ -54,49 +53,8 @@ export async function runCodeReview({
 		)
 		: prompt;
 
-	return new Promise<boolean>(resolve => {
-		const proc = spawn('claude', buildClaudeArgs(config), {
-			stdio: ['pipe', 'pipe', 'pipe'],
-			cwd,
-		});
-
-		onProcess(proc);
-
-		const watcher = new OutputWatcher(proc.stdout!);
-		const stderrWatcher = new OutputWatcher(proc.stderr!);
-
-		const timeoutId = setTimeout(() => {
-			proc.kill('SIGTERM');
-		}, REVIEW_TIMEOUT);
-
-		watcher.on('line', (line: string) => {
-			onLogLine(`[review] ${line}`);
-			void appendLog(folder, `[review] ${line}\n`);
-		});
-
-		stderrWatcher.on('line', (line: string) => {
-			void appendLog(folder, `[review][stderr] ${line}\n`);
-		});
-
-		watcher.on('done', () => {
-			setTimeout(() => {
-				if (!proc.killed) {
-					proc.kill('SIGTERM');
-				}
-			}, 3000);
-		});
-
-		proc.on('exit', () => {
-			clearTimeout(timeoutId);
-			resolve(watcher.isDone);
-		});
-
-		proc.on('error', () => {
-			clearTimeout(timeoutId);
-			resolve(false);
-		});
-
-		proc.stdin!.write(fullPrompt);
-		proc.stdin!.end();
+	const result = await runHarness({config, phase: 'review', prompt: fullPrompt, cwd, timeoutMs: REVIEW_TIMEOUT, onProcess, signal,
+		onLine(line) {onLogLine(`[review] ${line}`);},
 	});
+	return result.success && result.done;
 }

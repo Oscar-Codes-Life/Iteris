@@ -1,3 +1,4 @@
+import {saveConfigField} from '../config.js';
 import slugify_ from 'slugify';
 
 const slugify = slugify_ as unknown as (input: string, options?: {lower?: boolean; strict?: boolean}) => string;
@@ -25,6 +26,8 @@ export async function fetchTrelloTickets(
 		}
 
 		if (boards.length === 1) {
+			config.trello = {...config.trello, boardId: boards[0]!.id};
+			await saveConfigField('trello.boardId', boards[0]!.id);
 			return fetchTrelloTickets(config, boards[0]!.id, resolvedListId);
 		}
 
@@ -38,9 +41,11 @@ export async function fetchTrelloTickets(
 		}
 
 		if (lists.length === 1) {
+			await saveConfigField('trello.listId', lists[0]!.id);
 			return fetchTrelloTickets(config, resolvedBoardId, lists[0]!.id);
 		}
 
+		config.trello = {...config.trello, boardId: resolvedBoardId};
 		return {kind: 'pickList', lists};
 	}
 

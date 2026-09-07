@@ -61,11 +61,11 @@ else
   warn "pnpm not found — falling back to npm (pnpm is recommended)."
 fi
 
-# claude (soft warning)
-if ! command -v claude >/dev/null 2>&1; then
-  warn "Claude Code CLI not found. You'll need it to run Iteris."
-  warn "Install: npm install -g @anthropic-ai/claude-code"
+# Harness selection happens in the setup wizard.
+if ! command -v gh >/dev/null 2>&1; then
+  warn "GitHub CLI (gh) is required for authentication and PRs. Install it from https://cli.github.com/"
 fi
+info "Choose Claude Code or Codex in setup. Missing Codex is installed automatically."
 
 # ------------------------------------------------------------------
 # Clone or update
@@ -106,9 +106,10 @@ echo ""
 ok "Iteris installed successfully!"
 echo ""
 info "Before running, make sure you have:"
-info "  1. Set GITHUB_TOKEN as an environment variable"
-info "  2. Installed and authenticated Claude Code (claude)"
+info "  1. Install GitHub CLI (gh); setup will guide authentication"
+info "  2. Install Claude Code if you plan to select it; Codex is installed by setup"
 echo ""
 info "Usage:"
 info "  cd your-repo && iteris"
+info "  iteris setup   # configure without running tickets"
 echo ""

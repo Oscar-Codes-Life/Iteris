@@ -1,7 +1,7 @@
 {
   "name": "iteris",
   "version": "1.0.0",
-  "description": "Autonomous GitHub ticket shipper powered by Claude Code",
+  "description": "Autonomous ticket shipper powered by Claude Code and Codex",
   "type": "module",
   "bin": {
     "iteris": "./dist/index.js"
@@ -10,7 +10,8 @@
     "build": "tsc",
     "postbuild": "mkdir -p dist/github/commands && cp src/github/commands/code-review.md dist/github/commands/ && echo '#!/usr/bin/env node' | cat - dist/index.js > dist/index.tmp && mv dist/index.tmp dist/index.js && chmod +x dist/index.js",
     "dev": "tsc --watch",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test tests/*.test.mjs"
   },
   "engines": {
     "node": ">=22"

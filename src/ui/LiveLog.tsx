@@ -1,16 +1,18 @@
 import {Box, Text} from 'ink';
+import type {Harness} from '../types.js';
 
 type LiveLogProps = {
 	lines: string[];
+	harness: Harness;
 	maxLines?: number;
 };
 
-export function LiveLog({lines, maxLines = 8}: LiveLogProps) {
+export function LiveLog({lines, harness, maxLines = 8}: LiveLogProps) {
 	const visible = lines.slice(-maxLines);
 
 	return (
 		<Box flexDirection="column" borderStyle="single" borderColor="gray" paddingX={1} marginTop={1}>
-			<Text bold dimColor>Claude Code output:</Text>
+			<Text bold dimColor>{harness === 'codex' ? 'Codex' : 'Claude Code'} output:</Text>
 			{visible.length === 0 && (
 				<Text dimColor>(waiting for output...)</Text>
 			)}

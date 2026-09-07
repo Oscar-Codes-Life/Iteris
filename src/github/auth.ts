@@ -1,23 +1,24 @@
-import {execSync} from 'node:child_process';
+import {registerSecret} from '../harness/redact.js';
+import {execFileSync} from 'node:child_process';
+import {command, findExecutable} from '../harness/readiness.js';
 
 export function resolveGithubToken(): string | undefined {
-	const envToken = process.env['GITHUB_TOKEN'];
-	if (envToken) return envToken;
-
-	for (const shell of ['zsh', 'bash']) {
-		try {
-			const output = execSync(`${shell} -ilc 'echo $GITHUB_TOKEN'`, {
-				encoding: 'utf8',
-				stdio: ['pipe', 'pipe', 'pipe'],
-			}).trim();
-			if (output) {
-				process.env['GITHUB_TOKEN'] = output;
-				return output;
-			}
-		} catch {
-			// Shell not available, try next
-		}
+	const envToken = process.env['GH_TOKEN'] || process.env['GITHUB_TOKEN'];
+	if (envToken) {registerSecret(envToken); return envToken;}
+	try {
+		const token = execFileSync('gh', ['auth', 'token', '--hostname', 'github.com'], {
+			encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000,
+		}).trim() || undefined;
+		registerSecret(token);
+		return token;
+	} catch {return undefined;}
+}
+export async function ensureGithubAuth(): Promise<void> {
+	if (!await findExecutable('gh')) throw new Error('GitHub CLI (gh) is required to create PRs. Install gh, then retry.');
+	if (!resolveGithubToken()) {
+		const result = await command('gh', ['auth', 'login', '--hostname', 'github.com', '--web', '--scopes', 'read:project'], true);
+		if (result.code !== 0 || !resolveGithubToken()) throw new Error('GitHub login did not complete.');
 	}
-
-	return undefined;
+	const result = await command('gh', ['api', 'user', '--silent']);
+	if (result.code !== 0) throw new Error('GitHub authentication failed. Check GH_TOKEN/GITHUB_TOKEN or run gh auth login.');
 }
