@@ -24,7 +24,7 @@ export const configSchema = z.object({
 	todoStatus: z.string().default('Todo'),
 	projectNumber: z.number().int().positive().optional(),
 	baseBranch: z.string().default('main'),
-	timeout: z.number().positive().default(1200),
+	timeout: z.number().positive().default(3600),
 	planMode: z.boolean().default(true),
 	qualityChecks: z.array(z.string()).default([]),
 	pr: z.object({draft: z.boolean().default(false), addLabelOnOpen: z.string().optional()}).passthrough().default({}),

@@ -80,7 +80,7 @@ Iteris creates `.iteris.json` in the project root, inferring `repo` from a GitHu
   "provider": "github",
   "todoStatus": "Todo",
   "baseBranch": "main",
-  "timeout": 1200,
+  "timeout": 3600,
   "planMode": true,
   "qualityChecks": ["npm test"],
   "pr": {"draft": false, "addLabelOnOpen": "in-review"}
@@ -100,7 +100,7 @@ Legacy configurations migrate automatically on load:
 
 Invalid JSON, unsupported future versions, and conflicting custom flags produce errors without overwriting the configuration. Use the structured model/effort fields instead of flags that override Iteris's selection, transport, or phase permissions. To undo migration, restore the backup and use an older Iteris version.
 
-`planMode: true` now means **plan, then implement automatically**. Planning is a separate read-only/restricted-tools phase, saved as `plan.md`. Implementation receives that plan; review executes separately. Set `planMode: false` to implement directly. `timeout` applies separately to planning and implementation; review has a five-minute limit and summary a one-minute limit. Summaries use the selected harness with restricted permissions and are best-effort.
+`planMode: true` now means **plan, then implement automatically**. Planning is a separate read-only/restricted-tools phase, saved as `plan.md`. Implementation receives that plan; review executes separately. Set `planMode: false` to implement directly. `timeout` defaults to 3600 seconds (60 minutes) and applies separately to planning and implementation; review has a five-minute limit and summary a one-minute limit. Summaries use the selected harness with restricted permissions and are best-effort.
 
 ## Execution and state
 
