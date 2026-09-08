@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import path from 'node:path';
 import {atomicWriteConfig,updateConfig,loadConfig} from '../dist/config.js';
+import {runCodeReview} from '../dist/agent/reviewer.js';
 import {runAllTickets} from '../dist/agent/runner.js';
 import {temporary,environment,executable,config,fakeAgent} from './helpers.mjs';
 const ticket=number=>({number,title:`Ticket ${number}`,body:'Implement feature',slug:`ticket-${number}`,labels:[],htmlUrl:'https://example.com/ticket'});
@@ -30,4 +31,25 @@ test('Trello completion uses same pipeline without GitHub issue labeling',async 
  const cfg=config('codex');cfg.provider='trello';cfg.planMode=false;cfg.pr.addLabelOnOpen='review';await atomicWriteConfig(cfg,cwd);let moved=0;
  await runAllTickets([ticket(1)],cfg,cwd,{onStatusChange(){},onLogLine(){},onComplete(){},onFailure:async()=>assert.fail('unexpected failure')},undefined,{...services,addLabel:async()=>assert.fail('must not label a GitHub issue using a Trello number'),moveCard:async()=>{moved++;}});
  assert.equal(moved,1);
+});
+
+test('review failure preserves cause and retries review without repeating implementation or planning',async t=>{
+ const cwd=await temporary(t);await executable(cwd,'codex',fakeAgent);
+ environment(t,{PATH:cwd,FAKE_MODE:undefined,CAPTURE:path.join(cwd,'calls.jsonl')});
+ const cfg=config('codex');await atomicWriteConfig(cfg,cwd);let reviews=0,failures=0;
+ await runAllTickets([ticket(1)],cfg,cwd,{onStatusChange(_,s){if(s.status==='reviewing')process.env.FAKE_MODE=++reviews===1?'fail':undefined;},onLogLine(){},onComplete(){},onFailure:async(_,s)=>{
+  failures++;assert.match(s.failureReason,/review.*Process exited with 2/i);return 'retry';
+ }},undefined,services);
+ const calls=(await readFile(path.join(cwd,'calls.jsonl'),'utf8')).trim().split('\n').map(JSON.parse);
+ assert.equal(failures,1);assert.equal(calls.length,5);
+ assert.equal(calls.filter(c=>c.prompt.startsWith('Inspect this task')).length,1);
+ assert.equal(calls.filter(c=>c.prompt.startsWith('You are an autonomous')).length,1);
+});
+
+test('review obeys configured timeout and exposes timeout result',async t=>{
+ const cwd=await temporary(t);await executable(cwd,'codex',fakeAgent);
+ environment(t,{PATH:cwd,FAKE_MODE:'hang'});
+ const cfg=config('codex');cfg.timeout=0.05;
+ const result=await runCodeReview({ticket:ticket(1),config:cfg,cwd,folder:cwd,onLogLine(){},onProcess(){}});
+ assert.equal(result.success,false);assert.equal(result.timedOut,true);assert.equal(result.error,'Process timed out');
 });

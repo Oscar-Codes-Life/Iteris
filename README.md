@@ -80,7 +80,7 @@ Iteris creates `.iteris.json` in the project root, inferring `repo` from a GitHu
   "provider": "github",
   "todoStatus": "Todo",
   "baseBranch": "main",
-  "timeout": 3600,
+  "timeout": 7200,
   "planMode": true,
   "qualityChecks": ["npm test"],
   "pr": {"draft": false, "addLabelOnOpen": "in-review"}
@@ -100,7 +100,7 @@ Legacy configurations migrate automatically on load:
 
 Invalid JSON, unsupported future versions, and conflicting custom flags produce errors without overwriting the configuration. Use the structured model/effort fields instead of flags that override Iteris's selection, transport, or phase permissions. To undo migration, restore the backup and use an older Iteris version.
 
-`planMode: true` now means **plan, then implement automatically**. Planning is a separate read-only/restricted-tools phase, saved as `plan.md`. Implementation receives that plan; review executes separately. Set `planMode: false` to implement directly. `timeout` defaults to 3600 seconds (60 minutes) and applies separately to planning and implementation; review has a five-minute limit and summary a one-minute limit. Summaries use the selected harness with restricted permissions and are best-effort.
+`planMode: true` now means **plan, then implement automatically**. Planning is a separate read-only/restricted-tools phase, saved as `plan.md`. Implementation receives that plan; review executes separately. Set `planMode: false` to implement directly. `timeout` defaults to 7200 seconds (two hours) and applies separately to planning, implementation, and review; summary has a one-minute limit. Existing configurations retain their explicit timeout; set `"timeout": 7200` to use two hours. Summaries use the selected harness with restricted permissions and are best-effort.
 
 ## Execution and state
 
@@ -111,7 +111,7 @@ For each selected ticket, Iteris:
 3. Runs a review agent using the same harness/model/effort to review and open the PR.
 4. Looks up the PR, applies completion actions, and generates a summary.
 
-Success requires a clean process exit and an assistant completion marker; tool output cannot signal completion. Failed or timed-out tickets offer retry or skip. Cancellation terminates the active process and records a stale run. A repository run lock prevents overlapping queues. If Iteris was forcibly killed and reports a stale lock, remove `.iteris/active.json` after confirming that the previous process has stopped.
+Success requires a clean process exit and an assistant completion marker; tool output cannot signal completion. Planning, implementation, and review each use the configured `timeout` (seconds). Failed or timed-out tickets offer retry or skip, preserving the underlying error. Within the running queue, retries reuse completed planning, implementation, and review phases; restarting Iteris starts a new attempt. Iteris detects the remote default branch for configurations without `baseBranch` and checks that the configured base exists before starting the queue. Cancellation terminates the active process and records a stale run. A repository run lock prevents overlapping queues. If Iteris was forcibly killed and reports a stale lock, remove `.iteris/active.json` after confirming that the previous process has stopped.
 
 State lives in `.iteris/runs/<ticket-id>-<slug>/`:
 

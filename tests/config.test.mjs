@@ -1,3 +1,5 @@
+import {execFileSync} from 'node:child_process';
+import {detectDefaultBranch, validateBaseBranch} from '../dist/github/repo.js';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {writeFile, readFile, mkdir, readdir} from 'node:fs/promises';
@@ -33,4 +35,25 @@ test('managed flags reject hidden overrides',()=>{
  for(const flag of ['--model=foo','-mfoo','--effort','-c','--output-format','--permission-mode','--sandbox']) {
   const value=config();value.harnesses.claude.flags=[flag]; assert.equal(configSchema.safeParse(value).success,false,flag);
  }
+});
+
+test('detects master default and rejects a missing configured base before work',async t=>{
+ const cwd=await temporary(t);
+ const git=(...args)=>execFileSync('git',args,{cwd,stdio:'pipe'});
+ git('init','-b','master');
+ git('-c','user.name=Test','-c','user.email=test@example.com','commit','--allow-empty','-m','initial');
+ git('update-ref','refs/remotes/origin/master','HEAD');
+ git('symbolic-ref','refs/remotes/origin/HEAD','refs/remotes/origin/master');
+ assert.equal(detectDefaultBranch(cwd),'master');
+ await writeFile(path.join(cwd,'.iteris.json'),JSON.stringify({version:2,repo:'org/repo'}));
+ assert.equal((await loadConfig(cwd)).baseBranch,'master');
+ assert.throws(()=>validateBaseBranch('main',cwd),/Set baseBranch to "master"/);
+ validateBaseBranch('master',cwd);
+ git('update-ref','refs/remotes/origin/develop','HEAD');
+ validateBaseBranch('develop',cwd);
+});
+
+test('default phase timeout is two hours; explicit settings are preserved',()=>{
+ assert.equal(configSchema.parse({version:2,repo:'org/repo'}).timeout,7200);
+ assert.equal(configSchema.parse({version:2,repo:'org/repo',timeout:3600}).timeout,3600);
 });

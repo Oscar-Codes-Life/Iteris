@@ -3,9 +3,8 @@ import {readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {dirname, resolve} from 'node:path';
 import type {IterisConfig, Ticket} from '../types.js';
-import {runHarness} from '../harness/process.js';
+import {runHarness, type ProcessResult} from '../harness/process.js';
 
-const REVIEW_TIMEOUT = 300_000;
 
 function loadPromptTemplate(): string {
 	const currentDir = dirname(fileURLToPath(import.meta.url));
@@ -30,7 +29,7 @@ export async function runCodeReview({
 	onLogLine,
 	onProcess,
 	signal,
-}: ReviewOptions): Promise<boolean> {
+}: ReviewOptions): Promise<ProcessResult> {
 	const template = loadPromptTemplate();
 
 	const ticketRef = config.provider === 'trello'
@@ -53,8 +52,8 @@ export async function runCodeReview({
 		)
 		: prompt;
 
-	const result = await runHarness({config, phase: 'review', prompt: fullPrompt, cwd, timeoutMs: REVIEW_TIMEOUT, onProcess, signal,
+	const result = await runHarness({config, phase: 'review', prompt: fullPrompt, cwd, timeoutMs: config.timeout * 1000, onProcess, signal,
 		onLine(line) {onLogLine(`[review] ${line}`);},
 	});
-	return result.success && result.done;
+	return result;
 }

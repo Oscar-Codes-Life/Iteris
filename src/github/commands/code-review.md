@@ -9,7 +9,7 @@ Your task is to review the code changes on the current branch for ticket #$TICKE
 ## Process
 Work through these steps in order:
 
-1. **Code Examination** — Use your tools to read the changed files (use `git diff $BASE_BRANCH...HEAD` to find them) and any relevant dependencies. Understand the full context before forming opinions.
+1. **Code Examination** — Use your tools to read the changed files (use `git diff $BASE_BRANCH...HEAD` to find them; if the base exists only as a remote-tracking ref, use `git diff origin/$BASE_BRANCH...HEAD`) and any relevant dependencies. Also inspect `git status --short`, `git diff`, and `git diff --cached`: a retried review may contain uncommitted fixes from its previous attempt. Preserve existing work and finish any relevant fixes. Understand the full context before forming opinions.
 
 2. **Multi-dimensional Review** — Analyze through each specialist lens:
    - Quality Auditor: naming, structure, complexity, documentation
@@ -54,6 +54,7 @@ After completing the review above, take these actions:
 3. If you made changes, commit with message: `review: #$TICKET_NUMBER — code review fixes`
 4. Push the branch to origin.
 5. Create a pull request targeting `$BASE_BRANCH` with:
+   - First check for an existing pull request from the current branch and reuse it if present.
    - Title: `$TICKET_TITLE`
    - Body: `$TICKET_REF`
 6. When fully done, print exactly: <task>done</task>

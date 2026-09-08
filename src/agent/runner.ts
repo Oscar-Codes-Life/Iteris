@@ -1,6 +1,7 @@
 import {writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import type {IterisConfig, Ticket, TicketState} from '../types.js';
+import {validateBaseBranch} from '../github/repo.js';
 import {acquireRun} from '../state/active.js';
 import {loadConfig} from '../config.js';
 import {createRunFolder, writeStatus, writePrompt, appendLog} from '../state/manager.js';
@@ -22,6 +23,7 @@ export type RunnerCallbacks = {
 export type RunnerServices = {findPr: typeof findPrForBranch; addLabel: typeof addLabelToIssue; moveCard: typeof moveCardOnComplete};
 const defaultServices: RunnerServices = {findPr: findPrForBranch, addLabel: addLabelToIssue, moveCard: moveCardOnComplete};
 export async function runAllTickets(tickets: Ticket[], config: IterisConfig, cwd: string, callbacks: RunnerCallbacks, externalSignal?: AbortSignal, services: RunnerServices = defaultServices): Promise<void> {
+	validateBaseBranch(config.baseBranch, cwd);
 	const release = await acquireRun(cwd);
 	const controller = new AbortController();
 	const abort = () => controller.abort();
@@ -35,9 +37,10 @@ export async function runAllTickets(tickets: Ticket[], config: IterisConfig, cwd
 			// Ticket source/repository belong to the fetched queue. Only execution
 			// preferences change at boundaries. Retries retain this snapshot.
 			const snapshot = structuredClone({...config, harness: latest.harness, harnesses: latest.harnesses, planMode: latest.planMode, timeout: latest.timeout});
+			const checkpoint: TicketCheckpoint = {};
 			let retry = true;
 			while (retry && !controller.signal.aborted) {
-				const result = await runSingleTicket(ticket, snapshot, cwd, callbacks, controller.signal, services);
+				const result = await runSingleTicket(ticket, snapshot, cwd, callbacks, controller.signal, services, checkpoint);
 				retry = !controller.signal.aborted && (result.status === 'failed' || result.status === 'stale') && await callbacks.onFailure(ticket.number, result) === 'retry';
 			}
 		}
@@ -48,7 +51,9 @@ export async function runAllTickets(tickets: Ticket[], config: IterisConfig, cwd
 	}
 }
 
-async function runSingleTicket(ticket: Ticket, config: IterisConfig, cwd: string, callbacks: RunnerCallbacks, signal: AbortSignal, services: RunnerServices): Promise<TicketState> {
+type TicketCheckpoint = {plan?: string; implemented?: boolean; reviewed?: boolean};
+
+async function runSingleTicket(ticket: Ticket, config: IterisConfig, cwd: string, callbacks: RunnerCallbacks, signal: AbortSignal, services: RunnerServices, checkpoint: TicketCheckpoint): Promise<TicketState> {
 	const folder = await createRunFolder(cwd, ticket);
 	const settings = config.harnesses[config.harness];
 	const state: TicketState = {ticket, status: 'running', branch: `iteris/${ticket.number}-${ticket.slug}`, logLines: [], elapsedMs: 0, startedAt: new Date(),
@@ -66,19 +71,28 @@ async function runSingleTicket(ticket: Ticket, config: IterisConfig, cwd: string
 		await writeFile(path.join(folder, 'execution.json'), JSON.stringify(state.selection, null, 2) + '\n');
 		const prompt = expandPrompt(ticket, config, await readProgress(cwd));
 		await writePrompt(folder, prompt);
-		let plan = '';
-		if (config.planMode) {
+		let plan = checkpoint.plan ?? '';
+		if (config.planMode && checkpoint.plan === undefined) {
 			await phase('planning');
 			const result = await runHarness({config, phase: 'planning', prompt: `Inspect this task and produce an implementation plan. Do not edit files, execute changes, or print a completion marker.\n\n${prompt}`, cwd, timeoutMs: config.timeout * 1000, onLine: log, signal});
 			if (!result.success || !result.text) {state.status = result.timedOut ? 'stale' : 'failed'; throw new Error(result.error ?? 'Planning produced no plan');}
-			plan = result.text; await writeFile(path.join(folder, 'plan.md'), plan + '\n');
+			plan = result.text; checkpoint.plan = plan; await writeFile(path.join(folder, 'plan.md'), plan + '\n');
 		}
-		await phase('running');
-		const result = await runHarness({config, phase: 'implementation', prompt: `${prompt}${plan ? `\n\nImplement this plan:\n${plan}` : ''}`, cwd, timeoutMs: config.timeout * 1000, onLine: log, signal});
-		if (!result.success || !result.done) {state.status = result.timedOut ? 'stale' : 'failed'; throw new Error(result.error ?? 'Process exited without the completion signal');}
-		await phase('reviewing');
-		const reviewed = await runCodeReview({ticket, config, cwd, folder, onLogLine: log, onProcess() {}, signal});
-		if (!reviewed) throw new Error('Code review did not complete successfully');
+		if (!checkpoint.implemented) {
+			await phase('running');
+			const result = await runHarness({config, phase: 'implementation', prompt: `${prompt}${plan ? `\n\nImplement this plan:\n${plan}` : ''}`, cwd, timeoutMs: config.timeout * 1000, onLine: log, signal});
+			if (!result.success || !result.done) {state.status = result.timedOut ? 'stale' : 'failed'; throw new Error(result.error ?? 'Process exited without the completion signal');}
+			checkpoint.implemented = true;
+		}
+		if (!checkpoint.reviewed) {
+			await phase('reviewing');
+			const reviewed = await runCodeReview({ticket, config, cwd, folder, onLogLine: log, onProcess() {}, signal});
+			if (!reviewed.success || !reviewed.done) {
+				state.status = reviewed.timedOut ? 'stale' : 'failed';
+				throw new Error(`Code review: ${reviewed.error ?? 'Process exited without the completion signal'}`);
+			}
+			checkpoint.reviewed = true;
+		}
 		const pr = await services.findPr(config, state.branch);
 		if (!pr) throw new Error('Review finished but no pull request was found for this branch');
 		state.prUrl = pr.url; state.prNumber = pr.number;

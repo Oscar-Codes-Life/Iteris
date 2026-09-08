@@ -2,7 +2,7 @@ import {readFile, writeFile, rename, unlink, copyFile, constants} from 'node:fs/
 import {randomUUID} from 'node:crypto';
 import path from 'node:path';
 import {z} from 'zod';
-import {detectRepoFromRemote} from './github/repo.js';
+import {detectRepoFromRemote, detectDefaultBranch} from './github/repo.js';
 import type {IterisConfig} from './types.js';
 
 const settings = z.object({
@@ -24,7 +24,7 @@ export const configSchema = z.object({
 	todoStatus: z.string().default('Todo'),
 	projectNumber: z.number().int().positive().optional(),
 	baseBranch: z.string().default('main'),
-	timeout: z.number().positive().default(3600),
+	timeout: z.number().positive().default(7200),
 	planMode: z.boolean().default(true),
 	qualityChecks: z.array(z.string()).default([]),
 	pr: z.object({draft: z.boolean().default(false), addLabelOnOpen: z.string().optional()}).passthrough().default({}),
@@ -89,6 +89,7 @@ export async function loadConfig(cwd = process.cwd()): Promise<IterisConfig> {
 		if (!detected) throw new Error('Could not auto-detect GitHub repo. Set repo to "owner/repo" in .iteris.json.');
 		data['repo'] = detected;
 	}
+	if (!data['baseBranch']) data['baseBranch'] = detectDefaultBranch(cwd) ?? 'main';
 	const config = validate(data);
 	if (existed && needsMigration) {
 		await copyFile(configPath, `${configPath}.v1.bak`, constants.COPYFILE_EXCL).catch(error => {
