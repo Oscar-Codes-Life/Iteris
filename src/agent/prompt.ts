@@ -1,3 +1,4 @@
+import {ticketBranch} from '../types.js';
 import type {IterisConfig, Ticket} from '../types.js';
 
 export function expandPrompt(ticket: Ticket, config: IterisConfig, progressContent: string): string {
@@ -13,7 +14,7 @@ Description:
 ${ticket.body}
 
 ## Instructions
-1. Create and checkout a new branch: \`iteris/${ticket.number}-${ticket.slug}\`
+1. ${ticket.custom ? 'Checkout the task branch if it already exists locally or on origin; otherwise create it' : 'Create and checkout a new branch'}: \`${ticketBranch(ticket)}\`
 2. Implement the changes described in the ticket
 3. Run quality checks:
 ${qualityCheckLines}

@@ -3,24 +3,29 @@ import {spawn, type ChildProcess} from 'node:child_process';
 import {createInterface} from 'node:readline';
 import type {IterisConfig} from '../types.js';
 
-export type Phase = 'planning' | 'implementation' | 'review' | 'summary';
+export type Phase = 'planning' | 'implementation' | 'review' | 'summary' | 'import';
 export type ProcessResult = {success: boolean; text: string; done: boolean; timedOut: boolean; error?: string};
-export function invocation(config: IterisConfig, phase: Phase): {command: string; args: string[]; env: NodeJS.ProcessEnv} {
+export function invocation(config: IterisConfig, phase: Phase, images: string[] = []): {command: string; args: string[]; env: NodeJS.ProcessEnv} {
 	const settings = config.harnesses[config.harness];
-	const readOnly = phase === 'planning' || phase === 'summary';
+	const readOnly = phase === 'planning' || phase === 'summary' || phase === 'import';
 	const flags = readOnly ? [] : settings.flags;
 	const env = {...process.env};
+	if (config.custom) delete env[config.custom.apiKeyEnv];
 	if (config.harness === 'codex') {
 		const args = ['exec', '--json', ...flags];
 		args.push(...(readOnly ? ['--sandbox', 'read-only', '-c', 'approval_policy="never"'] : ['--dangerously-bypass-approvals-and-sandbox']));
 		if (settings.model) args.push('--model', settings.model);
 		if (settings.effort) args.push('-c', `model_reasoning_effort=${JSON.stringify(settings.effort)}`);
+		if (phase === 'import') {
+			args.push('--skip-git-repo-check');
+			for (const file of images) args.push('--image', file);
+		}
 		args.push('-');
 		return {command: 'codex', args, env};
 	}
 	delete env['CLAUDE_CODE_EFFORT_LEVEL'];
 	const args = ['--print', '--verbose', '--output-format', 'stream-json', ...flags];
-	if (readOnly) args.push('--permission-mode', 'plan', '--tools', phase === 'summary' ? '' : 'Read,Glob,Grep', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}');
+	if (readOnly) args.push('--permission-mode', 'plan', '--tools', phase === 'summary' ? '' : phase === 'import' ? 'Read' : 'Read,Glob,Grep', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}');
 	if (settings.model) args.push('--model', settings.model);
 	if (settings.effort) {args.push('--effort', settings.effort); env['CLAUDE_CODE_EFFORT_LEVEL'] = settings.effort;}
 	return {command: 'claude', args, env};
@@ -47,9 +52,10 @@ export function decodeEvent(harness: 'claude' | 'codex', line: string): Normaliz
 
 export async function runHarness(options: {
 	config: IterisConfig; phase: Phase; prompt: string; cwd: string; timeoutMs: number;
+	images?: string[];
 	onLine?: (line: string) => void; onProcess?: (process: ChildProcess) => void; signal?: AbortSignal;
 }): Promise<ProcessResult> {
-	const {command, args, env} = invocation(options.config, options.phase);
+	const {command, args, env} = invocation(options.config, options.phase, options.images);
 	return new Promise(resolve => {
 		if (options.signal?.aborted) {resolve({success: false, done: false, text: '', timedOut: false, error: 'Cancelled'}); return;}
 		const proc = spawn(command, args, {cwd: options.cwd, env, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe']});

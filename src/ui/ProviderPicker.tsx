@@ -5,6 +5,7 @@ import type {Provider} from '../types.js';
 const providers: {value: Provider; label: string}[] = [
 	{value: 'github', label: 'GitHub (issues or projects)'},
 	{value: 'trello', label: 'Trello'},
+	{value: 'custom', label: 'Custom REST endpoint'},
 ];
 
 type ProviderPickerProps = {

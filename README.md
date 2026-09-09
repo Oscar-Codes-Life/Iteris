@@ -144,3 +144,48 @@ curl -fsSL https://raw.githubusercontent.com/Oscar-Codes-Life/Iteris/main/instal
 ## License
 
 NOT YET
+
+### Custom REST endpoints
+
+Run `iteris setup`, choose **Custom REST endpoint**, and enter the endpoint URL and the **name** of your API-key environment variable. Export the value in your shell before running Iteris:
+
+```sh
+export CUSTOM_API_KEY='your-api-key'
+iteris
+```
+
+The provider settings in `.iteris.json` look like this (alongside your existing repository and harness settings):
+
+```json
+{
+  "provider": "custom",
+  "custom": {
+    "endpoint": "https://api.example.com/tasks",
+    "apiKeyEnv": "CUSTOM_API_KEY",
+    "itemsPath": "data.tasks",
+    "idPath": "ticket.id"
+  }
+}
+```
+
+`itemsPath` is a dot-separated path to the response array; omit it or use `""` when the response itself is an array. `idPath` is optional: without it, Iteris checks each item's top-level `id`, then `key`. During setup, enter `-` to clear a previously saved path.
+
+Iteris makes one GET request with `Authorization: Bearer <environment value>`. The endpoint must return all items in one JSON response; pagination and endpoint redirects are not supported. The request timeout is 30 seconds and the response limit is 10 MiB. Credentials are not stored in configuration or passed to the conversion harness.
+
+Each item is converted using your selected Claude Code or Codex model and effort, independently of the execution `planMode` setting. Both conversion stages use Zod validation and retry invalid output once. Conversion uses the configured phase timeout. Text, Markdown, JSON, CSV, PNG, JPEG, and WebP attachments are downloaded and analyzed. Other formats and failed downloads are listed with warnings. Downloads are limited to 10 MiB and 30 seconds per attachment, and 100 MiB per import. The Bearer token is sent only to the endpoint's origin; other attachment origins must accept public or signed URLs.
+
+Successful imports produce a directory such as:
+
+```text
+.tasks/2026-09-09T14-30-45.123+0300/
+  task1.md
+  task2.md
+  manifest.json
+  attachments/
+```
+
+Iteris prints that location, then opens the normal task picker. Nothing is published until every task validates. Generated files are locally excluded from Git through its `info/exclude` file. GitHub authentication is still required: selected custom tasks use the normal branch, review, and PR workflow, without closing or labeling GitHub issues or updating the custom API.
+
+Tasks with IDs retain their local number, branch, and execution history when edited. Numeric `123` and string `"123"` are the same ID. Tasks without IDs use a fingerprint of their source JSON; object-key order does not matter, but content edits create a new task. Mixed responses with and without IDs are supported. Identical duplicates are collapsed; conflicting records with the same ID reject the import. An item that later gains an ID becomes a new identity.
+
+Unchanged completed tasks are unchecked by default. Edited tasks with stable IDs show **Changed** and are checked for another run. Identity allocation lives in `.iteris/custom/`; execution records live in `.iteris/runs/custom-{identity}/`, with earlier attempts retained in `history/`. Keep `.iteris/` to preserve identity allocation and completion history.

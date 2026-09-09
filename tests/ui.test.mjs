@@ -28,3 +28,18 @@ test('empty queue renders completion and live slash command persists effort',asy
  assert.equal((await loadConfig(cwd)).harnesses.claude.effort,'low');
  assert.match(ui.output(),/Saved settings for the next ticket/);
 });
+
+test('custom picker checks changed completed tasks and allows an empty selection',async t=>{
+ const {TicketPicker}=await import('../dist/ui/TicketPicker.js');let selected;
+ const tickets=[{number:1,title:'Unchanged',labels:[],custom:{changed:false}},{number:2,title:'Edited',labels:[],custom:{changed:true}}];
+ const ui=terminal(t,React.createElement(TicketPicker,{tickets,previousStatuses:new Map([[1,'done'],[2,'done']]),onSelect:value=>selected=value}));
+ await wait(50);assert.match(ui.output(),/Changed/);ui.stdin.write('\r');await wait(30);assert.deepEqual(selected.map(t=>t.number),[2]);
+ ui.stdin.write('\u001b[B');await wait(30);ui.stdin.write(' ');await wait(30);ui.stdin.write('\r');await wait(30);assert.deepEqual(selected,[]);
+});
+
+test('provider picker offers Custom after GitHub and Trello',async t=>{
+ const {ProviderPicker}=await import('../dist/ui/ProviderPicker.js');let selected;
+ const ui=terminal(t,React.createElement(ProviderPicker,{onSelect:value=>selected=value}));
+ await wait(40);ui.stdin.write('\u001b[B');await wait(30);ui.stdin.write('\u001b[B');await wait(30);ui.stdin.write('\r');await wait(30);
+ assert.equal(selected,'custom');assert.match(ui.output(),/Custom REST endpoint/);
+});

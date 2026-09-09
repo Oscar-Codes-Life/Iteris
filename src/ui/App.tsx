@@ -1,3 +1,4 @@
+import {ticketBranch} from '../types.js';
 import {useState, useEffect, useRef} from 'react';
 import {Box, Text, useApp, useInput} from 'ink';
 import type {IterisConfig, Ticket, TicketState} from '../types.js';
@@ -13,7 +14,7 @@ type Dialog = {title: string; options: ChoiceOption[]; initial?: string; resolve
 const activeStatuses = new Set(['planning', 'running', 'reviewing', 'summarizing']);
 export function App({config, tickets, cwd}: {config: IterisConfig; tickets: Ticket[]; cwd: string}) {
 	const {exit} = useApp();
-	const [states, setStates] = useState<Map<number, TicketState>>(() => new Map(tickets.map(ticket => [ticket.number, {ticket, status: 'pending', branch: `iteris/${ticket.number}-${ticket.slug}`, logLines: [], elapsedMs: 0}])));
+	const [states, setStates] = useState<Map<number, TicketState>>(() => new Map(tickets.map(ticket => [ticket.number, {ticket, status: 'pending', branch: ticketBranch(ticket), logLines: [], elapsedMs: 0}])));
 	const [finished, setFinished] = useState(false);
 	const [error, setError] = useState('');
 	const [pending, setPending] = useState(config);

@@ -1,3 +1,4 @@
+import {ticketBranch} from '../types.js';
 import {writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import type {IterisConfig, Ticket, TicketState} from '../types.js';
@@ -56,7 +57,7 @@ type TicketCheckpoint = {plan?: string; implemented?: boolean; reviewed?: boolea
 async function runSingleTicket(ticket: Ticket, config: IterisConfig, cwd: string, callbacks: RunnerCallbacks, signal: AbortSignal, services: RunnerServices, checkpoint: TicketCheckpoint): Promise<TicketState> {
 	const folder = await createRunFolder(cwd, ticket);
 	const settings = config.harnesses[config.harness];
-	const state: TicketState = {ticket, status: 'running', branch: `iteris/${ticket.number}-${ticket.slug}`, logLines: [], elapsedMs: 0, startedAt: new Date(),
+	const state: TicketState = {ticket, status: 'running', branch: ticketBranch(ticket), logLines: [], elapsedMs: 0, startedAt: new Date(),
 		selection: {harness: config.harness, model: settings.model, effort: settings.effort}};
 	let logWrites = Promise.resolve();
 	let logError: unknown;
@@ -96,7 +97,7 @@ async function runSingleTicket(ticket: Ticket, config: IterisConfig, cwd: string
 		const pr = await services.findPr(config, state.branch);
 		if (!pr) throw new Error('Review finished but no pull request was found for this branch');
 		state.prUrl = pr.url; state.prNumber = pr.number;
-		if (config.pr.addLabelOnOpen && config.provider !== 'trello') await services.addLabel(config, ticket.number, config.pr.addLabelOnOpen);
+		if (config.pr.addLabelOnOpen && (config.provider === 'github' || config.provider === undefined)) await services.addLabel(config, ticket.number, config.pr.addLabelOnOpen);
 		if (config.provider === 'trello') await services.moveCard(config, ticket.number);
 		await phase('summarizing'); await logWrites;
 		try {await generateSummary(folder, config, cwd, undefined, signal);} catch (error) {log(`Summary failed: ${String(error)}`);}

@@ -9,11 +9,12 @@ import {temporary, config} from './helpers.mjs';
 
 test('migrates legacy settings, preserves unknown fields and backup, and is idempotent', async t => {
  const cwd=await temporary(t), file=path.join(cwd,'.iteris.json');
- const old=JSON.stringify({repo:'org/repo',claudeFlags:['--dangerously-skip-permissions'],timeout:12,custom:{x:1},trello:{boardId:'abc',extension:true}});
+ // custom is now a reserved provider configuration key; use an unrelated extension.
+ const old=JSON.stringify({repo:'org/repo',claudeFlags:['--dangerously-skip-permissions'],timeout:12,extensionData:{x:1},trello:{boardId:'abc',extension:true}});
  await writeFile(file,old);
  const migrated=await loadConfig(cwd);
  assert.equal(migrated.version,2); assert.equal(migrated.harness,'claude'); assert.equal(migrated.setupComplete,false);
- assert.equal(migrated.harnesses.claude.model,undefined); assert.deepEqual(migrated.custom,{x:1}); assert.equal(migrated.trello.extension,true);
+ assert.equal(migrated.harnesses.claude.model,undefined); assert.deepEqual(migrated.extensionData,{x:1}); assert.equal(migrated.trello.extension,true);
  assert.equal('claudeFlags' in migrated,false); assert.equal(await readFile(file+'.v1.bak','utf8'),old);
  const first=await readFile(file,'utf8'); await loadConfig(cwd); assert.equal(await readFile(file,'utf8'),first);
  await updateConfig(c=>{c.timeout=20;},cwd); assert.equal(await readFile(file+'.v1.bak','utf8'),old);

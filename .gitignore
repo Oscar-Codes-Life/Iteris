@@ -6,3 +6,5 @@ node_modules/
 
 .iteris.json.v1.bak
 .iteris.json.*.tmp
+
+.tasks/

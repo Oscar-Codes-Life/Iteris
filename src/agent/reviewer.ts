@@ -32,7 +32,9 @@ export async function runCodeReview({
 }: ReviewOptions): Promise<ProcessResult> {
 	const template = loadPromptTemplate();
 
-	const ticketRef = config.provider === 'trello'
+	const ticketRef = config.provider === 'custom'
+		? `Implements custom task: ${ticket.title}${ticket.htmlUrl ? ` (${ticket.htmlUrl})` : ''}`
+		: config.provider === 'trello'
 		? `Implements Trello card: ${ticket.htmlUrl}`
 		: `Closes #${ticket.number}`;
 

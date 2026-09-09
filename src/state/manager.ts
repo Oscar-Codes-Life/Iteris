@@ -1,18 +1,30 @@
-import {mkdir, writeFile, appendFile, readdir, readFile} from 'node:fs/promises';
+import {mkdir, writeFile, appendFile, readdir, readFile, copyFile, unlink} from 'node:fs/promises';
 import path from 'node:path';
+import {randomUUID} from 'node:crypto';
 import type {Ticket, TicketState, TicketStatus} from '../types.js';
 
 function runFolder(cwd: string, ticket: Ticket): string {
-	return path.join(cwd, '.iteris', 'runs', `${ticket.number}-${ticket.slug}`);
+	return path.join(cwd, '.iteris', 'runs', ticket.custom ? `custom-${ticket.custom.identity}` : `${ticket.number}-${ticket.slug}`);
 }
 
 export async function createRunFolder(cwd: string, ticket: Ticket): Promise<string> {
 	const folder = runFolder(cwd, ticket);
 	await mkdir(folder, {recursive: true});
+	if (ticket.custom) {
+		const files = (await readdir(folder, {withFileTypes: true})).filter(entry => entry.isFile());
+		if (files.length) {
+			const archive = path.join(folder, 'history', randomUUID());
+			await mkdir(archive, {recursive: true});
+			for (const file of files) await copyFile(path.join(folder, file.name), path.join(archive, file.name));
+			for (const file of files) await unlink(path.join(folder, file.name));
+		}
+		await writeFile(path.join(folder, 'log.txt'), '');
+	}
 	return folder;
 }
 
 export async function writeStatus(folder: string, state: TicketState): Promise<void> {
+	if (state.ticket.custom) await writeFile(path.join(folder, 'custom.json'), JSON.stringify({identity: state.ticket.custom.identity, fingerprint: state.ticket.custom.fingerprint, status: state.status}));
 	const lines = [
 		`# Ticket #${state.ticket.number} — ${state.ticket.title}`,
 		'',

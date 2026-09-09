@@ -1,3 +1,5 @@
+import {setupCustom} from './custom/setup.js';
+import {importCustom, customStatuses} from './custom/import.js';
 import {hasActiveRun} from './state/active.js';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -135,6 +137,7 @@ async function main() {
 		await saveConfigField('provider', config.provider);
 	}
 	if (config.provider === 'trello' && !resolveTrelloCredentials()) await waitForTrelloCredentials();
+	if (config.provider === 'custom' && (!config.custom || command === 'setup')) config = await setupCustom(config);
 	await saveConfigField('setupComplete', true);
 	if (command === 'setup') {
 		console.log('Setup complete. Run iteris to select tickets.');
@@ -144,6 +147,12 @@ async function main() {
 }
 
 async function fetchTicketsForProvider(config: IterisConfig): Promise<Ticket[]> {
+	if (config.provider === 'custom') {
+		const imported = await importCustom(config, process.cwd(), {onProgress: message => console.log(message)});
+		if (imported.directory) console.log(`Tasks saved to ${imported.directory}`);
+		if (imported.duplicates) console.log(`Collapsed ${imported.duplicates} duplicate records.`);
+		return imported.tickets;
+	}
 	if (config.provider === 'trello') {
 		return fetchTrelloFlow(config);
 	}
@@ -219,7 +228,7 @@ async function run(config: IterisConfig) {
 		process.exit(0);
 	}
 
-	const previousStatuses = await getTicketStatuses(process.cwd());
+	const previousStatuses = config.provider === 'custom' ? await customStatuses(process.cwd(), tickets) : await getTicketStatuses(process.cwd());
 	const selected = await showTicketPicker(tickets, previousStatuses);
 
 	if (selected.length === 0) {

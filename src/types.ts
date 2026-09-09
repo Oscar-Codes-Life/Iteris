@@ -1,6 +1,7 @@
 export type TicketStatus = 'pending' | 'planning' | 'summarizing' | 'running' | 'reviewing' | 'done' | 'stale' | 'failed';
 
 export type Ticket = {
+	custom?: {identity: string; fingerprint: string; taskFile: string; changed?: boolean};
 	number: number;
 	title: string;
 	body: string;
@@ -27,7 +28,7 @@ export type TicketState = {
 	elapsedMs: number;
 };
 
-export type Provider = 'github' | 'trello';
+export type Provider = 'github' | 'trello' | 'custom';
 
 export type {TrelloConfig} from './trello/types.js';
 import type {TrelloConfig} from './trello/types.js';
@@ -51,4 +52,9 @@ export type IterisConfig = {
 		addLabelOnOpen?: string;
 	};
 	trello?: TrelloConfig;
+	custom?: import('./custom/schema.js').CustomConfig;
 };
+
+export function ticketBranch(ticket: Ticket): string {
+	return ticket.custom ? `iteris/custom-${ticket.custom.identity}` : `iteris/${ticket.number}-${ticket.slug}`;
+}

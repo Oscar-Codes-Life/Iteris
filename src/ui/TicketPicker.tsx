@@ -26,7 +26,7 @@ export function TicketPicker({tickets, previousStatuses, onSelect}: TicketPicker
 		const initial = new Set<number>();
 		for (const ticket of tickets) {
 			const status = previousStatuses.get(ticket.number);
-			if (status !== 'done') {
+			if (status !== 'done' || ticket.custom?.changed) {
 				initial.add(ticket.number);
 			}
 		}
@@ -60,7 +60,7 @@ export function TicketPicker({tickets, previousStatuses, onSelect}: TicketPicker
 
 				return new Set(tickets.map(t => t.number));
 			});
-		} else if (key.return && selected.size > 0) {
+		} else if (key.return) {
 			const chosen = tickets.filter(t => selected.has(t.number));
 			onSelect(chosen);
 		}
@@ -90,6 +90,7 @@ export function TicketPicker({tickets, previousStatuses, onSelect}: TicketPicker
 						{pConfig && (
 							<Text color={pConfig.color}>[{pConfig.label}]</Text>
 						)}
+						{ticket.custom?.changed && <Text color="yellow">[Changed]</Text>}
 						{badge && (
 							<Text color={badge.color}>{badge.label}</Text>
 						)}

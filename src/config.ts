@@ -2,6 +2,7 @@ import {readFile, writeFile, rename, unlink, copyFile, constants} from 'node:fs/
 import {randomUUID} from 'node:crypto';
 import path from 'node:path';
 import {z} from 'zod';
+import {customConfigSchema} from './custom/schema.js';
 import {detectRepoFromRemote, detectDefaultBranch} from './github/repo.js';
 import type {IterisConfig} from './types.js';
 
@@ -19,7 +20,7 @@ export const configSchema = z.object({
 	}).passthrough().default({}),
 	setupComplete: z.boolean().default(false),
 	repo: z.string().regex(/^[^/]+\/[^/]+$/, 'Must be in "owner/repo" format'),
-	provider: z.enum(['github', 'trello']).optional(),
+	provider: z.enum(['github', 'trello', 'custom']).optional(),
 	githubSource: z.enum(['auto', 'issues', 'projects']).default('auto'),
 	todoStatus: z.string().default('Todo'),
 	projectNumber: z.number().int().positive().optional(),
@@ -28,6 +29,7 @@ export const configSchema = z.object({
 	planMode: z.boolean().default(true),
 	qualityChecks: z.array(z.string()).default([]),
 	pr: z.object({draft: z.boolean().default(false), addLabelOnOpen: z.string().optional()}).passthrough().default({}),
+	custom: customConfigSchema.optional(),
 	trello: z.object({boardId: z.string().optional(), listId: z.string().optional(), moveOnComplete: z.string().optional()}).passthrough().optional(),
 }).passthrough().superRefine((config, context) => {
 	for (const harness of ['claude', 'codex'] as const) {
