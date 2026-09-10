@@ -99,9 +99,9 @@ function waitForTrelloCredentials(): Promise<void> {
 	return new Promise((resolve, reject) => {
 		const {unmount, waitUntilExit} = render(
 			<TrelloSetup onComplete={(credentials) => {
-				saveTrelloCredentials(credentials);
+				const profile = saveTrelloCredentials(credentials);
 				unmount();
-				console.log('Trello credentials saved to your shell profile.');
+				console.log(`Trello credentials saved to ${profile}.`);
 				resolve();
 			}} />,
 		);
