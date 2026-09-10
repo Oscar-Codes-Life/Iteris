@@ -55,7 +55,7 @@ Omit the argument to open a picker. Type `/` in the live UI to enter a command; 
 
 Each harness remembers its own model and effort. Model changes retain compatible effort settings; otherwise they use the selected model's advertised default. Codex models and effort identifiers come from the installed CLI's paginated `model/list` catalog, not a fixed OpenAI API list. Claude's model capability catalog follows [Anthropic's model configuration documentation](https://code.claude.com/docs/en/model-config).
 
-Changes are saved immediately and apply to the **next ticket**. An active ticket uses the same selection through planning, implementation, review, summary, and retries. A switch to a missing Codex installation is saved for setup at the next ticket boundary. External harness/model/effort commands also defer installation and updates while a queue is running in the same repository. Externally edited execution settings are read at each boundary; invalid settings pause the queue. Correct the JSON and retry, or cancel the queue and use the terminal commands to repair selections.
+Changes are saved immediately and apply to the **next ticket**. An active ticket uses the same selection through planning, implementation, review, PR description, summary, and retries. A switch to a missing Codex installation is saved for setup at the next ticket boundary. External harness/model/effort commands also defer installation and updates while a queue is running in the same repository. Externally edited execution settings are read at each boundary; invalid settings pause the queue. Correct the JSON and retry, or cancel the queue and use the terminal commands to repair selections.
 
 ## Configuration and migration
 
@@ -100,7 +100,7 @@ Legacy configurations migrate automatically on load:
 
 Invalid JSON, unsupported future versions, and conflicting custom flags produce errors without overwriting the configuration. Use the structured model/effort fields instead of flags that override Iteris's selection, transport, or phase permissions. To undo migration, restore the backup and use an older Iteris version.
 
-`planMode: true` now means **plan, then implement automatically**. Planning is a separate read-only/restricted-tools phase, saved as `plan.md`. Implementation receives that plan; review executes separately. Set `planMode: false` to implement directly. `timeout` defaults to 7200 seconds (two hours) and applies separately to planning, implementation, and review; summary has a one-minute limit. Existing configurations retain their explicit timeout; set `"timeout": 7200` to use two hours. Summaries use the selected harness with restricted permissions and are best-effort.
+`planMode: true` now means **plan, then implement automatically**. Planning is a separate read-only/restricted-tools phase, saved as `plan.md`. Implementation receives that plan; review executes separately. Set `planMode: false` to implement directly. `timeout` defaults to 7200 seconds (two hours) and applies separately to planning, implementation, review, and PR-description generation; summary has a one-minute limit. Existing configurations retain their explicit timeout; set `"timeout": 7200` to use two hours. PR descriptions and summaries use the selected harness with restricted permissions.
 
 ## Execution and state
 
@@ -108,10 +108,11 @@ For each selected ticket, Iteris:
 
 1. Optionally generates a plan.
 2. Asks the harness to create `iteris/<ticket-id>-<slug>`, implement, check, commit, and push.
-3. Runs a review agent using the same harness/model/effort to review and open the PR.
-4. Looks up the PR, applies completion actions, and generates a summary.
+3. Runs a review agent using the same harness/model/effort to review, fix, and push the final changes.
+4. Uses a fresh, read-only harness instance to write a useful PR description from the final diff, then opens the PR.
+5. Applies completion actions and generates a summary.
 
-Success requires a clean process exit and an assistant completion marker; tool output cannot signal completion. Planning, implementation, and review each use the configured `timeout` (seconds). Failed or timed-out tickets offer retry or skip, preserving the underlying error. Within the running queue, retries reuse completed planning, implementation, and review phases; restarting Iteris starts a new attempt. Iteris detects the remote default branch for configurations without `baseBranch` and checks that the configured base exists before starting the queue. Cancellation terminates the active process and records a stale run. A repository run lock prevents overlapping queues. If Iteris was forcibly killed and reports a stale lock, remove `.iteris/active.json` after confirming that the previous process has stopped.
+Implementation and review require a clean process exit and an assistant completion marker; tool output cannot signal completion. Planning and PR-description generation require a clean exit and non-empty assistant output. Failed or timed-out tickets offer retry or skip, preserving the underlying error. Within the running queue, retries reuse completed planning, implementation, and review phases, and check for an already-created branch PR before generating a description; restarting Iteris starts a new attempt. Iteris detects the remote default branch for configurations without `baseBranch` and checks that the configured base exists before starting the queue. Cancellation terminates the active process and records a stale run. A repository run lock prevents overlapping queues. If Iteris was forcibly killed and reports a stale lock, remove `.iteris/active.json` after confirming that the previous process has stopped.
 
 State lives in `.iteris/runs/<ticket-id>-<slug>/`:
 

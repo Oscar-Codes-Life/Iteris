@@ -32,29 +32,12 @@ export async function runCodeReview({
 }: ReviewOptions): Promise<ProcessResult> {
 	const template = loadPromptTemplate();
 
-	const ticketRef = config.provider === 'custom'
-		? `Implements custom task: ${ticket.title}${ticket.htmlUrl ? ` (${ticket.htmlUrl})` : ''}`
-		: config.provider === 'trello'
-		? `Implements Trello card: ${ticket.htmlUrl}`
-		: `Closes #${ticket.number}`;
-
-	const prDraftFlag = config.pr.draft ? ' --draft' : '';
-
 	const prompt = template
 		.replace(/\$TICKET_NUMBER/g, String(ticket.number))
 		.replace(/\$TICKET_TITLE/g, ticket.title)
-		.replace(/\$BASE_BRANCH/g, config.baseBranch)
-		.replace(/\$TICKET_REF/g, ticketRef);
+		.replace(/\$BASE_BRANCH/g, config.baseBranch);
 
-	// Append draft flag instruction if needed
-	const fullPrompt = prDraftFlag
-		? prompt.replace(
-			'Create a pull request targeting',
-			`Create a pull request${prDraftFlag} targeting`,
-		)
-		: prompt;
-
-	const result = await runHarness({config, phase: 'review', prompt: fullPrompt, cwd, timeoutMs: config.timeout * 1000, onProcess, signal,
+	const result = await runHarness({config, phase: 'review', prompt, cwd, timeoutMs: config.timeout * 1000, onProcess, signal,
 		onLine(line) {onLogLine(`[review] ${line}`);},
 	});
 	return result;

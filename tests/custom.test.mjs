@@ -126,9 +126,10 @@ test('custom full lifecycle creates a custom PR reference without issue actions'
  const cwd=await fixture(t);const imported=await importCustom(cfg(),cwd,importer([{id:'task'}]));
  await executable(cwd,'codex',fakeAgent);environment(t,{PATH:cwd,FAKE_MODE:undefined,CAPTURE:path.join(cwd,'calls.jsonl')});
  const c=cfg();c.planMode=false;c.pr.addLabelOnOpen='review';await atomicWriteConfig(c,cwd);
- await runAllTickets(imported.tickets,c,cwd,{onStatusChange(){},onLogLine(){},onComplete(){},onFailure:async(_,s)=>assert.fail(s.failureReason)},undefined,{findPr:async()=>({url:'https://example.com/pr',number:1}),addLabel:async()=>assert.fail('No issue labels'),moveCard:async()=>assert.fail('No Trello completion')});
+ let body='';
+ await runAllTickets(imported.tickets,c,cwd,{onStatusChange(){},onLogLine(){},onComplete(){},onFailure:async(_,s)=>assert.fail(s.failureReason)},undefined,{findPr:async()=>undefined,createPr:async(_config,input)=>{body=input.body;return {url:'https://example.com/pr',number:1};},addLabel:async()=>assert.fail('No issue labels'),moveCard:async()=>assert.fail('No Trello completion')});
  const calls=(await readFile(path.join(cwd,'calls.jsonl'),'utf8')).trim().split('\n').map(JSON.parse);
- assert.ok(calls.some(c=>c.prompt.includes('Implements custom task:')));assert.ok(calls.every(c=>!c.prompt.includes('Closes #')));
+ assert.match(body,/Implements custom task:/);assert.ok(!body.includes('Closes #'));assert.ok(calls.some(c=>c.prompt.startsWith('Write a high-value pull request description')));
  assert.equal((await customStatuses(cwd,imported.tickets)).get(imported.tickets[0].number),'done');
 });
 test('timestamp includes milliseconds and numeric timezone offset',()=>assert.match(timestamp(new Date()),/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}[+-]\d{4}$/));

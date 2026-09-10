@@ -22,7 +22,7 @@ ${qualityCheckLines}
 5. Push the branch to origin
 6. When fully done, print exactly: <task>done</task>
 
-Do NOT create a pull request — a separate review agent will handle that.
+Do NOT create a pull request — Iteris will review the final changes and open it in a later phase.
 
 ## Memory from Previous Runs
 ${progressContent || '(no previous runs)'}

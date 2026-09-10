@@ -11,7 +11,7 @@ import {TicketRow} from './TicketRow.js';
 import {LiveLog} from './LiveLog.js';
 
 type Dialog = {title: string; options: ChoiceOption[]; initial?: string; resolve: (value: string) => void; reject: (error: Error) => void};
-const activeStatuses = new Set(['planning', 'running', 'reviewing', 'summarizing']);
+const activeStatuses = new Set(['planning', 'running', 'reviewing', 'creating-pr', 'summarizing']);
 export function App({config, tickets, cwd}: {config: IterisConfig; tickets: Ticket[]; cwd: string}) {
 	const {exit} = useApp();
 	const [states, setStates] = useState<Map<number, TicketState>>(() => new Map(tickets.map(ticket => [ticket.number, {ticket, status: 'pending', branch: ticketBranch(ticket), logLines: [], elapsedMs: 0}])));

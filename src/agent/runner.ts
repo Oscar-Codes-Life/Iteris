@@ -7,11 +7,12 @@ import {acquireRun} from '../state/active.js';
 import {loadConfig} from '../config.js';
 import {createRunFolder, writeStatus, writePrompt, appendLog} from '../state/manager.js';
 import {readProgress, appendProgress} from '../state/progress.js';
-import {findPrForBranch, addLabelToIssue} from '../github/pr.js';
+import {findPrForBranch, createPullRequest, addLabelToIssue} from '../github/pr.js';
 import {moveCardOnComplete} from '../trello/completion.js';
 import {expandPrompt} from './prompt.js';
 import {generateSummary} from './summarizer.js';
 import {runCodeReview} from './reviewer.js';
+import {generatePrDescription} from './pr-description.js';
 import {runHarness} from '../harness/process.js';
 
 export type RunnerCallbacks = {
@@ -21,8 +22,8 @@ export type RunnerCallbacks = {
 	onFailure: (ticketNumber: number, state: TicketState) => Promise<'retry' | 'skip'>;
 	beforeTicket?: () => Promise<IterisConfig>;
 };
-export type RunnerServices = {findPr: typeof findPrForBranch; addLabel: typeof addLabelToIssue; moveCard: typeof moveCardOnComplete};
-const defaultServices: RunnerServices = {findPr: findPrForBranch, addLabel: addLabelToIssue, moveCard: moveCardOnComplete};
+export type RunnerServices = {findPr: typeof findPrForBranch; createPr: typeof createPullRequest; addLabel: typeof addLabelToIssue; moveCard: typeof moveCardOnComplete};
+const defaultServices: RunnerServices = {findPr: findPrForBranch, createPr: createPullRequest, addLabel: addLabelToIssue, moveCard: moveCardOnComplete};
 export async function runAllTickets(tickets: Ticket[], config: IterisConfig, cwd: string, callbacks: RunnerCallbacks, externalSignal?: AbortSignal, services: RunnerServices = defaultServices): Promise<void> {
 	validateBaseBranch(config.baseBranch, cwd);
 	const release = await acquireRun(cwd);
@@ -52,7 +53,7 @@ export async function runAllTickets(tickets: Ticket[], config: IterisConfig, cwd
 	}
 }
 
-type TicketCheckpoint = {plan?: string; implemented?: boolean; reviewed?: boolean};
+type TicketCheckpoint = {plan?: string; implemented?: boolean; reviewed?: boolean; review?: string};
 
 async function runSingleTicket(ticket: Ticket, config: IterisConfig, cwd: string, callbacks: RunnerCallbacks, signal: AbortSignal, services: RunnerServices, checkpoint: TicketCheckpoint): Promise<TicketState> {
 	const folder = await createRunFolder(cwd, ticket);
@@ -92,10 +93,21 @@ async function runSingleTicket(ticket: Ticket, config: IterisConfig, cwd: string
 				state.status = reviewed.timedOut ? 'stale' : 'failed';
 				throw new Error(`Code review: ${reviewed.error ?? 'Process exited without the completion signal'}`);
 			}
-			checkpoint.reviewed = true;
+			checkpoint.reviewed = true; checkpoint.review = reviewed.text;
 		}
-		const pr = await services.findPr(config, state.branch);
-		if (!pr) throw new Error('Review finished but no pull request was found for this branch');
+		let pr = await services.findPr(config, state.branch);
+		if (!pr) {
+			await phase('creating-pr');
+			const described = await generatePrDescription({ticket, config, cwd, review: checkpoint.review ?? '', signal,
+				onLine(line) {log(`[pr] ${line}`);},
+			});
+			if (!described.success || !described.text) {
+				state.status = described.timedOut ? 'stale' : 'failed';
+				throw new Error(`PR description: ${described.error ?? 'Harness produced no description'}`);
+			}
+			pr = await services.createPr(config, {branch: state.branch, title: ticket.title, body: described.text});
+			log(`[iteris] Created PR ${pr.url}`);
+		}
 		state.prUrl = pr.url; state.prNumber = pr.number;
 		if (config.pr.addLabelOnOpen && (config.provider === 'github' || config.provider === undefined)) await services.addLabel(config, ticket.number, config.pr.addLabelOnOpen);
 		if (config.provider === 'trello') await services.moveCard(config, ticket.number);

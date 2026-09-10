@@ -2,6 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {Octokit} from '@octokit/rest';
 import {fetchTodoTickets} from '../dist/github/tickets.js';
+import {createPullRequest} from '../dist/github/pr.js';
 import {config, temporary} from './helpers.mjs';
 import {atomicWriteConfig, loadConfig} from '../dist/config.js';
 function client(handler) {
@@ -11,6 +12,13 @@ function client(handler) {
  }}});
 }
 const issue=(number,extra={})=>({number,title:`Issue ${number}`,body:null,labels:[],html_url:`https://github.com/org/repo/issues/${number}`,state:'open',...extra});
+test('creates configured draft pull requests with the generated body',async()=>{
+ let request;
+ const api=client(async(url,options)=>{assert.equal(url.pathname,'/repos/org/repo/pulls');request=JSON.parse(options.body);return {body:{html_url:'https://github.com/org/repo/pull/7',number:7}};});
+ const cfg=config();cfg.pr.draft=true;
+ const result=await createPullRequest(cfg,{branch:'iteris/1-ticket',title:'Useful change',body:'Generated description'},api);
+ assert.deepEqual(result,{url:'https://github.com/org/repo/pull/7',number:7});assert.deepEqual(request,{head:'iteris/1-ticket',base:'main',title:'Useful change',body:'Generated description',draft:true});
+});
 for (const source of ['auto', 'projects']) test(`no Projects in ${source} mode: saves issues source before fetching, then skips discovery`,async t=>{
  const cwd=await temporary(t);const cfg={...config(),githubSource:source};await atomicWriteConfig(cfg,cwd);
  const requests=[];

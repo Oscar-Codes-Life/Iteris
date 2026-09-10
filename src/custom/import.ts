@@ -28,7 +28,7 @@ export async function customStatuses(cwd: string, tickets: Ticket[]): Promise<Ma
 	for (const ticket of tickets) {
 		if (!ticket.custom) continue;
 		try {
-			const state = z.object({identity: z.string(), fingerprint: z.string(), status: z.enum(['pending', 'planning', 'summarizing', 'running', 'reviewing', 'done', 'stale', 'failed'])}).parse(JSON.parse(await readFile(path.join(cwd, '.iteris/runs', `custom-${ticket.custom.identity}`, 'custom.json'), 'utf8')));
+			const state = z.object({identity: z.string(), fingerprint: z.string(), status: z.enum(['pending', 'planning', 'summarizing', 'running', 'reviewing', 'creating-pr', 'done', 'stale', 'failed'])}).parse(JSON.parse(await readFile(path.join(cwd, '.iteris/runs', `custom-${ticket.custom.identity}`, 'custom.json'), 'utf8')));
 			if (state.identity !== ticket.custom.identity) throw new Error('Identity mismatch');
 			statuses.set(ticket.number, state.status);
 			ticket.custom.changed = state.fingerprint !== ticket.custom.fingerprint;

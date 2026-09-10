@@ -34,7 +34,7 @@ if (args[0] === 'app-server') {
   if (process.env.CAPTURE) fs.appendFileSync(process.env.CAPTURE,JSON.stringify({harness,args,prompt})+'\\n');
   const mode=process.env.FAKE_MODE;
   if(mode==='hang') {setInterval(()=>{},1000); return;}
-  const text=prompt.startsWith('Inspect this task')?'Implementation plan':prompt.startsWith('You are summarizing')?'Session summary':'<task>done</task>';
+  const text=prompt.startsWith('Inspect this task')?'Implementation plan':prompt.startsWith('Write a high-value pull request description')?'## Summary\\n- Adds useful behavior.\\n\\n## Changes\\n- Updates the implementation.\\n\\n## Validation\\n- Tests passed.':prompt.startsWith('You are summarizing')?'Session summary':'<task>done</task>';
   let event=harness==='codex'?{type:'item.completed',item:{type:'agent_message',text}}:{type:'assistant',message:{content:[{type:'text',text}]}};
   if(mode==='tool') event=harness==='codex'?{type:'item.completed',item:{type:'command_execution',aggregated_output:'<task>done</task>'}}:{type:'user',message:{content:[{type:'tool_result',content:'<task>done</task>'}]}};
   const output=mode==='malformed'?'not json':JSON.stringify(event);

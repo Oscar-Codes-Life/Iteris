@@ -1,4 +1,4 @@
-export type TicketStatus = 'pending' | 'planning' | 'summarizing' | 'running' | 'reviewing' | 'done' | 'stale' | 'failed';
+export type TicketStatus = 'pending' | 'planning' | 'summarizing' | 'running' | 'reviewing' | 'creating-pr' | 'done' | 'stale' | 'failed';
 
 export type Ticket = {
 	custom?: {identity: string; fingerprint: string; taskFile: string; changed?: boolean};

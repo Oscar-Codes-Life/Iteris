@@ -3,11 +3,11 @@ import {spawn, type ChildProcess} from 'node:child_process';
 import {createInterface} from 'node:readline';
 import type {IterisConfig} from '../types.js';
 
-export type Phase = 'planning' | 'implementation' | 'review' | 'summary' | 'import';
+export type Phase = 'planning' | 'implementation' | 'review' | 'pr-description' | 'summary' | 'import';
 export type ProcessResult = {success: boolean; text: string; done: boolean; timedOut: boolean; error?: string};
 export function invocation(config: IterisConfig, phase: Phase, images: string[] = []): {command: string; args: string[]; env: NodeJS.ProcessEnv} {
 	const settings = config.harnesses[config.harness];
-	const readOnly = phase === 'planning' || phase === 'summary' || phase === 'import';
+	const readOnly = phase === 'planning' || phase === 'pr-description' || phase === 'summary' || phase === 'import';
 	const flags = readOnly ? [] : settings.flags;
 	const env = {...process.env};
 	if (config.custom) delete env[config.custom.apiKeyEnv];
@@ -25,7 +25,7 @@ export function invocation(config: IterisConfig, phase: Phase, images: string[] 
 	}
 	delete env['CLAUDE_CODE_EFFORT_LEVEL'];
 	const args = ['--print', '--verbose', '--output-format', 'stream-json', ...flags];
-	if (readOnly) args.push('--permission-mode', 'plan', '--tools', phase === 'summary' ? '' : phase === 'import' ? 'Read' : 'Read,Glob,Grep', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}');
+	if (readOnly) args.push('--permission-mode', 'plan', '--tools', phase === 'summary' || phase === 'pr-description' ? '' : phase === 'import' ? 'Read' : 'Read,Glob,Grep', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}');
 	if (settings.model) args.push('--model', settings.model);
 	if (settings.effort) {args.push('--effort', settings.effort); env['CLAUDE_CODE_EFFORT_LEVEL'] = settings.effort;}
 	return {command: 'claude', args, env};

@@ -22,10 +22,12 @@ test('Claude model change resets unsupported effort and removes effort on Haiku'
  assert.deepEqual(claudeModels.find(m=>m.id==='opus').efforts,['low','medium','high','xhigh','max']);
 });
 for(const harness of ['claude','codex']) {
- test(`${harness} arguments restrict planning and summary, preserve explicit model/effort`,()=>{
+ test(`${harness} arguments restrict planning, PR descriptions, and summaries while preserving explicit model/effort`,()=>{
   const cfg=config(harness);
-  const planned=invocation(cfg,'planning'),run=invocation(cfg,'implementation');
+  const planned=invocation(cfg,'planning'),described=invocation(cfg,'pr-description'),run=invocation(cfg,'implementation');
   assert.ok(!planned.args.includes('--dangerously-skip-permissions'));assert.ok(!planned.args.includes('--dangerously-bypass-approvals-and-sandbox'));
+  assert.ok(!described.args.includes('--dangerously-skip-permissions'));assert.ok(!described.args.includes('--dangerously-bypass-approvals-and-sandbox'));
+  if(harness==='claude')assert.equal(described.args[described.args.indexOf('--tools')+1],'');else assert.ok(described.args.includes('read-only'));
   assert.ok(run.args.includes(cfg.harnesses[harness].model));assert.ok(planned.args.includes(harness==='claude'?'plan':'read-only'));
  });
  for(const mode of ['normal','fail','tool','malformed','hang']) test(`${harness}: ${mode} process output`,async t=>{

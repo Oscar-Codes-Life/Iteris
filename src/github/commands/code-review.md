@@ -53,8 +53,5 @@ After completing the review above, take these actions:
 2. Run quality checks to verify fixes don't break anything.
 3. If you made changes, commit with message: `review: #$TICKET_NUMBER — code review fixes`
 4. Push the branch to origin.
-5. Create a pull request targeting `$BASE_BRANCH` with:
-   - First check for an existing pull request from the current branch and reuse it if present.
-   - Title: `$TICKET_TITLE`
-   - Body: `$TICKET_REF`
+5. Do not create a pull request. A separate harness instance will describe the final diff and open it after this review finishes.
 6. When fully done, print exactly: <task>done</task>

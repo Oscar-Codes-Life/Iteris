@@ -7,6 +7,7 @@ const statusIcons: Record<string, string> = {
   summarizing: "◌",
   running: "◉",
   reviewing: "⊙",
+  "creating-pr": "◉",
   done: "✓",
   stale: "⚠",
   failed: "✗",
@@ -18,6 +19,7 @@ const statusColors: Record<string, string> = {
   summarizing: "cyan",
   running: "yellow",
   reviewing: "cyan",
+  "creating-pr": "cyan",
   done: "green",
   stale: "yellow",
   failed: "red",
@@ -50,7 +52,7 @@ export function TicketRow({ state }: TicketRowProps) {
       </Text>
       <Text>{state.ticket.title}</Text>
       <Text color={color}>{state.status}</Text>
-      {(["planning", "running", "reviewing", "summarizing"].includes(state.status)) && (
+      {(["planning", "running", "reviewing", "creating-pr", "summarizing"].includes(state.status)) && (
         <Text dimColor>elapsed: {formatElapsed(state.elapsedMs)}</Text>
       )}
       {state.branch && state.status !== "pending" && (
