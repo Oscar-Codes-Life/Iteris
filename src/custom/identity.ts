@@ -14,6 +14,9 @@ export function canonical(value: unknown): string {
 	return JSON.stringify(value);
 }
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
+export function customSourceKey(config: CustomConfig): string {
+	return hash(canonical([config.endpoint, config.apiKeyEnv, config.itemsPath ?? '', config.idPath ?? '']));
+}
 function usableId(value: unknown): string | undefined {
 	if (typeof value === 'string' && value.trim()) return value;
 	if (typeof value === 'number' && Number.isSafeInteger(value)) return String(value);

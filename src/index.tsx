@@ -1,5 +1,7 @@
 import {setupCustom} from './custom/setup.js';
-import {importCustom, customStatuses} from './custom/import.js';
+import {customStatuses} from './custom/import.js';
+import {loadCustomTasks} from './custom/cache.js';
+import {choose} from './ui/Choice.js';
 import {hasActiveRun} from './state/active.js';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -117,13 +119,13 @@ function waitForTrelloCredentials(): Promise<void> {
 async function main() {
 	const [command, argument, ...extra] = process.argv.slice(2);
 	if (command === '--help' || command === '-h') {
-		console.log('iteris [setup | harness [claude|codex] | model [id] | effort [level]]');
+		console.log('iteris [setup | refresh | harness [claude|codex] | model [id] | effort [level]]');
 		return;
 	}
-	if (extra.length || (command === 'setup' && argument) || (command && !['setup', 'harness', 'model', 'effort'].includes(command))) throw new Error('Unknown command. Run iteris --help.');
+	if (extra.length || ((command === 'setup' || command === 'refresh') && argument) || (command && !['setup', 'refresh', 'harness', 'model', 'effort'].includes(command))) throw new Error('Unknown command. Run iteris --help.');
 	await printBranding();
 	let config = await loadConfig();
-	if (command && command !== 'setup') {
+	if (command && command !== 'setup' && command !== 'refresh') {
 		config = await configure(command, argument);
 		console.log(`Saved: ${selectionLabel(config)}`);
 		return;
@@ -143,13 +145,20 @@ async function main() {
 		console.log('Setup complete. Run iteris to select tickets.');
 		return;
 	}
-	await run(config);
+	await run(config, command === 'refresh');
 }
 
-async function fetchTicketsForProvider(config: IterisConfig): Promise<Ticket[]> {
+async function fetchTicketsForProvider(config: IterisConfig, refresh = false): Promise<Ticket[]> {
 	if (config.provider === 'custom') {
-		const imported = await importCustom(config, process.cwd(), {onProgress: message => console.log(message)});
-		if (imported.directory) console.log(`Tasks saved to ${imported.directory}`);
+		const imported = await loadCustomTasks(config, process.cwd(), {
+			refresh, onProgress: message => console.log(message),
+			useLegacy: async (directory, count) => await choose(`Found ${count} downloaded tasks in ${directory}. Use these with the current endpoint?`, [
+				{value: 'reuse', label: 'Use downloaded tasks'},
+				{value: 'refresh', label: 'Fetch fresh tasks from the endpoint'},
+			]) === 'reuse',
+		});
+		if (imported.cached) console.log(`Using ${imported.tickets.length} downloaded tasks. Run iteris refresh to fetch updates.`);
+		if (imported.directory) console.log(`${imported.cached ? 'Tasks loaded from' : 'Tasks saved to'} ${imported.directory}`);
 		if (imported.duplicates) console.log(`Collapsed ${imported.duplicates} duplicate records.`);
 		return imported.tickets;
 	}
@@ -214,10 +223,10 @@ async function fetchTrelloFlow(config: IterisConfig): Promise<Ticket[]> {
 	return result.tickets;
 }
 
-async function run(config: IterisConfig) {
+async function run(config: IterisConfig, refresh = false) {
 	let tickets: Ticket[];
 	try {
-		tickets = await fetchTicketsForProvider(config);
+		tickets = await fetchTicketsForProvider(config, refresh);
 	} catch (error) {
 		console.error('Failed to fetch tickets:', error instanceof Error ? error.message : error);
 		process.exit(1);

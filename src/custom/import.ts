@@ -6,7 +6,7 @@ import {runHarness} from '../harness/process.js';
 import {registerSecret, redact} from '../harness/redact.js';
 import {acquireRun} from '../state/active.js';
 import type {IterisConfig, Ticket, TicketStatus} from '../types.js';
-import {atPath, identifyItems} from './identity.js';
+import {atPath, identifyItems, customSourceKey} from './identity.js';
 import {download, MAX_BYTES} from './http.js';
 import {httpUrl, customConfigSchema, draftSchema, taskSchema, manifestSchema, type Attachment} from './schema.js';
 
@@ -138,7 +138,7 @@ export async function importCustom(config: IterisConfig, cwd: string, services: 
 			const markdown = [`# ${task.title}`, '', task.description, '', ...(task.sourceUrl ? [`Source: ${task.sourceUrl}`, ''] : []), `Labels: ${task.labels.join(', ') || '(none)'}`, '', '## Attachment analysis', '', task.analysis || '(none)', '', '## Attachments', '', ...attachments.map(a => `- ${a.name}${a.file ? ` ([local file](${a.file}))` : ''}${a.url ? ` — ${a.url}` : ''}${a.warning ? ` — Warning: ${a.warning}` : ''}`)].join('\n') + '\n';
 			await writeFile(path.join(staging, task.file), redact(markdown), {flag: 'wx', mode: 0o600});
 		}
-		const manifest = manifestSchema.parse({version: 1, tasks});
+		const manifest = manifestSchema.parse({version: 1, sourceKey: customSourceKey(custom), tasks});
 		await writeFile(path.join(staging, 'manifest.json'), redact(JSON.stringify(manifest, null, 2)) + '\n', {mode: 0o600});
 		signal.throwIfAborted();
 		const registryDir = path.join(cwd, '.iteris/custom');

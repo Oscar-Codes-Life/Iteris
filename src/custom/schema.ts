@@ -29,5 +29,5 @@ export const importedTaskSchema = taskSchema.extend({
 	identity: z.string(), fingerprint: z.string(), number: z.number().int().positive(),
 	file: z.string(), attachments: z.array(attachmentSchema),
 });
-export const manifestSchema = z.object({version: z.literal(1), tasks: z.array(importedTaskSchema)});
+export const manifestSchema = z.object({version: z.literal(1), sourceKey: z.string().optional(), tasks: z.array(importedTaskSchema)});
 export type Attachment = z.infer<typeof attachmentSchema>;
