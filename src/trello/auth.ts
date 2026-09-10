@@ -1,7 +1,5 @@
 import {execSync} from 'node:child_process';
-import {appendFileSync} from 'node:fs';
-import {homedir, userInfo} from 'node:os';
-import path from 'node:path';
+import {saveShellVariables, type ShellOptions} from '../shell.js';
 
 export type TrelloCredentials = {apiKey: string; token: string};
 
@@ -33,25 +31,6 @@ export function resolveTrelloCredentials(): TrelloCredentials | undefined {
 	return undefined;
 }
 
-export function saveTrelloCredentials(credentials: TrelloCredentials, options: {home?: string; shell?: string; zdotdir?: string} = {}): string {
-	const home = options.home ?? homedir();
-	const shell = path.basename(options.shell ?? (process.env['SHELL'] || userInfo().shell || ''));
-	if (shell !== 'bash' && shell !== 'zsh') {
-		throw new Error('Unsupported shell. Set SHELL to your Bash or Zsh executable before saving Trello credentials.');
-	}
-	const zdotdir = options.zdotdir ?? process.env['ZDOTDIR'];
-	const rcPath = path.join(shell === 'zsh' && zdotdir ? zdotdir : home, `.${shell}rc`);
-	// Preserve credentials literally when the shell sources its profile.
-	const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
-	const lines = [
-		'',
-		'# Trello credentials (added by Iteris)',
-		`export TRELLO_API_KEY=${quote(credentials.apiKey)}`,
-		`export TRELLO_TOKEN=${quote(credentials.token)}`,
-		'',
-	].join('\n');
-	appendFileSync(rcPath, lines, {mode: 0o600});
-	process.env['TRELLO_API_KEY'] = credentials.apiKey;
-	process.env['TRELLO_TOKEN'] = credentials.token;
-	return rcPath;
+export function saveTrelloCredentials(credentials: TrelloCredentials, options: ShellOptions = {}): string {
+	return saveShellVariables({TRELLO_API_KEY: credentials.apiKey, TRELLO_TOKEN: credentials.token}, options);
 }
