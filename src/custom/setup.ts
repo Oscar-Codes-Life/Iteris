@@ -6,6 +6,9 @@ import type {IterisConfig} from '../types.js';
 
 export async function setupCustom(config: IterisConfig, cwd = process.cwd()): Promise<IterisConfig> {
 	const input = createInterface({input: stdin, output: stdout});
+	// Ink unrefs stdin when the provider picker unmounts. Readline resumes
+	// reading but does not ref it again, so explicitly keep the prompt alive.
+	stdin.ref?.();
 	const ask = async (label: string, initial = '') => {
 		const value = (await input.question(`${label}${initial ? ` [${initial}]` : ''}: `)).trim();
 		return value === '-' ? '' : value || initial;
@@ -18,5 +21,8 @@ export async function setupCustom(config: IterisConfig, cwd = process.cwd()): Pr
 			idPath: await ask('ID path (blank to detect id/key; - clears saved path)', config.custom?.idPath) || undefined,
 		});
 		return await updateConfig(current => {current.custom = custom;}, cwd);
-	} finally {input.close();}
+	} finally {
+		input.close();
+		stdin.unref?.();
+	}
 }
