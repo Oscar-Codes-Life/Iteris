@@ -144,7 +144,7 @@ curl -fsSL https://raw.githubusercontent.com/Oscar-Codes-Life/Iteris/main/instal
 
 ## License
 
-NOT YET
+[MIT](LICENSE) © 2026 Oscar Gallo
 
 ### Custom REST endpoints
 

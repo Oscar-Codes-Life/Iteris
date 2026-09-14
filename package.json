@@ -2,6 +2,7 @@
   "name": "iteris",
   "version": "1.0.0",
   "description": "Autonomous ticket shipper powered by Claude Code and Codex",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "iteris": "./dist/index.js"
