@@ -11,6 +11,8 @@ const priorityConfig: Record<string, {color: string; label: string}> = {
 const statusBadge: Record<string, {color: string; label: string}> = {
 	done: {color: 'green', label: '✓ Complete'},
 	failed: {color: 'red', label: '✗ Failed'},
+	blocked: {color: 'red', label: '! Review blocked'},
+	incomplete: {color: 'yellow', label: '? Review incomplete'},
 	stale: {color: 'gray', label: '⊘ Stale'},
 };
 

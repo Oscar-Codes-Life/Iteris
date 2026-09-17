@@ -55,3 +55,18 @@ export async function addLabelToIssue(config: IterisConfig, issueNumber: number,
 		labels: [label],
 	});
 }
+
+export const REVIEW_START = '<!-- iteris:review:start -->';
+export const REVIEW_END = '<!-- iteris:review:end -->';
+export function reviewSection(report: string): string {return `${REVIEW_START}\n${report}\n${REVIEW_END}`;}
+export function replaceReviewSection(body: string, report: string): string {
+	const start = body.indexOf(REVIEW_START), end = body.indexOf(REVIEW_END, start);
+	if (start >= 0 && end >= start) return body.slice(0, start) + reviewSection(report) + body.slice(end + REVIEW_END.length);
+	return `${body.trim()}\n\n${reviewSection(report)}`;
+}
+export async function updatePrReview(config: IterisConfig, number: number, report: string, octokit: Octokit = createOctokit()): Promise<void> {
+	const [owner, repo] = config.repo.split('/') as [string, string];
+	const {data} = await octokit.pulls.get({owner, repo, pull_number: number});
+	const body = replaceReviewSection(data.body ?? '', report);
+	if (body !== data.body) await octokit.pulls.update({owner, repo, pull_number: number, body});
+}

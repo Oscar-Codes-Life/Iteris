@@ -3,19 +3,21 @@ import {spawn, type ChildProcess} from 'node:child_process';
 import {createInterface} from 'node:readline';
 import type {IterisConfig} from '../types.js';
 
-export type Phase = 'planning' | 'implementation' | 'review' | 'pr-description' | 'summary' | 'import';
-export type ProcessResult = {success: boolean; text: string; done: boolean; timedOut: boolean; error?: string};
+export type Phase = 'planning' | 'implementation' | 'review' | 'repair' | 'pr-description' | 'summary' | 'import';
+export type ProcessResult = {success: boolean; text: string; finalText?: string; done: boolean; timedOut: boolean; error?: string};
 export function invocation(config: IterisConfig, phase: Phase, images: string[] = []): {command: string; args: string[]; env: NodeJS.ProcessEnv} {
 	const settings = config.harnesses[config.harness];
-	const readOnly = phase === 'planning' || phase === 'pr-description' || phase === 'summary' || phase === 'import';
+	const readOnly = phase === 'planning' || phase === 'pr-description' || phase === 'summary' || phase === 'import' || phase === 'review';
 	const flags = readOnly ? [] : settings.flags;
 	const env = {...process.env};
 	if (config.custom) delete env[config.custom.apiKeyEnv];
+	if (phase === 'review') for (const key of ['GH_TOKEN', 'GITHUB_TOKEN', 'TRELLO_TOKEN', 'TRELLO_API_KEY', 'SSH_AUTH_SOCK']) delete env[key];
 	if (config.harness === 'codex') {
 		const args = ['exec', '--json', ...flags];
 		args.push(...(readOnly ? ['--sandbox', 'read-only', '-c', 'approval_policy="never"'] : ['--dangerously-bypass-approvals-and-sandbox']));
 		if (settings.model) args.push('--model', settings.model);
 		if (settings.effort) args.push('-c', `model_reasoning_effort=${JSON.stringify(settings.effort)}`);
+		if (phase === 'review') args.push('--skip-git-repo-check');
 		if (phase === 'import') {
 			args.push('--skip-git-repo-check');
 			for (const file of images) args.push('--image', file);
@@ -25,6 +27,7 @@ export function invocation(config: IterisConfig, phase: Phase, images: string[] 
 	}
 	delete env['CLAUDE_CODE_EFFORT_LEVEL'];
 	const args = ['--print', '--verbose', '--output-format', 'stream-json', ...flags];
+	if (phase === 'review') args.push('--settings', JSON.stringify({disableAllHooks: true}));
 	if (readOnly) args.push('--permission-mode', 'plan', '--tools', phase === 'summary' || phase === 'pr-description' ? '' : phase === 'import' ? 'Read' : 'Read,Glob,Grep', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}');
 	if (settings.model) args.push('--model', settings.model);
 	if (settings.effort) {args.push('--effort', settings.effort); env['CLAUDE_CODE_EFFORT_LEVEL'] = settings.effort;}
@@ -60,7 +63,7 @@ export async function runHarness(options: {
 		if (options.signal?.aborted) {resolve({success: false, done: false, text: '', timedOut: false, error: 'Cancelled'}); return;}
 		const proc = spawn(command, args, {cwd: options.cwd, env, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe']});
 		options.onProcess?.(proc);
-		let text = ''; let done = false; let error: string | undefined; let timedOut = false;
+		let text = ''; let finalText = ''; let done = false; let error: string | undefined; let timedOut = false;
 		let killTimer: NodeJS.Timeout | undefined;
 		const kill = (signal: NodeJS.Signals) => {
 			try {if (proc.pid && process.platform !== 'win32') process.kill(-proc.pid, signal); else proc.kill(signal);} catch { /* already exited */ }
@@ -77,6 +80,7 @@ export async function runHarness(options: {
 			if (event.log) options.onLine?.(event.log);
 			if (event.assistant) {
 				text += event.assistant + '\n';
+				finalText = event.assistant;
 				if (event.assistant.split(/\r?\n/).some(part => part.trim() === '<task>done</task>')) done = true;
 				options.onLine?.(event.assistant);
 			}
@@ -89,7 +93,7 @@ export async function runHarness(options: {
 			clearTimeout(timer); clearTimeout(killTimer);
 			options.signal?.removeEventListener('abort', abort);
 			const success = code === 0 && !signal && !error && !timedOut;
-			resolve({success, text: text.trim(), done, timedOut, error: error ?? (success ? undefined : `Process exited with ${signal ?? code}`)});
+			resolve({success, text: text.trim(), finalText, done, timedOut, error: error ?? (success ? undefined : `Process exited with ${signal ?? code}`)});
 		});
 		proc.stdin.end(options.prompt);
 	});

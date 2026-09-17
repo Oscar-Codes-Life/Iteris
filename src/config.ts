@@ -2,6 +2,7 @@ import {readFile, writeFile, rename, unlink, copyFile, constants} from 'node:fs/
 import {randomUUID} from 'node:crypto';
 import path from 'node:path';
 import {z} from 'zod';
+import {reviewConfigSchema} from './review/schema.js';
 import {customConfigSchema} from './custom/schema.js';
 import {detectRepoFromRemote, detectDefaultBranch} from './github/repo.js';
 import type {IterisConfig} from './types.js';
@@ -27,7 +28,8 @@ export const configSchema = z.object({
 	baseBranch: z.string().default('main'),
 	timeout: z.number().positive().default(7200),
 	planMode: z.boolean().default(true),
-	qualityChecks: z.array(z.string()).default([]),
+	qualityChecks: z.array(z.string().trim().min(1)).default([]),
+	review: reviewConfigSchema.default({}),
 	pr: z.object({draft: z.boolean().default(false), addLabelOnOpen: z.string().optional()}).passthrough().default({}),
 	custom: customConfigSchema.optional(),
 	trello: z.object({boardId: z.string().optional(), listId: z.string().optional(), moveOnComplete: z.string().optional()}).passthrough().optional(),

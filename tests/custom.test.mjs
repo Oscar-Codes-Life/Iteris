@@ -11,7 +11,7 @@ import {configSchema, atomicWriteConfig} from '../dist/config.js';
 import {createRunFolder, writeStatus} from '../dist/state/manager.js';
 import {ticketBranch} from '../dist/types.js';
 import {runAllTickets} from '../dist/agent/runner.js';
-import {temporary, environment, executable, config, fakeAgent} from './helpers.mjs';
+import {temporary, environment, executable, config, fakeAgent, reviewRepository} from './helpers.mjs';
 const custom = {endpoint:'https://api.example.com/tasks', apiKeyEnv:'CUSTOM_TEST_KEY', itemsPath:''};
 const cfg = (harness='codex') => ({...config(harness),provider:'custom',custom});
 const ok = value => ({success:true,text:JSON.stringify(value),done:false,timedOut:false});
@@ -124,7 +124,7 @@ for(const harness of ['claude','codex'])test(`${harness} import invocation restr
 });
 test('custom full lifecycle creates a custom PR reference without issue actions',async t=>{
  const cwd=await fixture(t);const imported=await importCustom(cfg(),cwd,importer([{id:'task'}]));
- await executable(cwd,'codex',fakeAgent);environment(t,{PATH:cwd,FAKE_MODE:undefined,CAPTURE:path.join(cwd,'calls.jsonl')});
+ await reviewRepository(t,cwd);await executable(cwd,'codex',fakeAgent);environment(t,{PATH:`${cwd}:${process.env.PATH}`,FAKE_IMPLEMENT:'1',FAKE_MODE:undefined,CAPTURE:path.join(cwd,'calls.jsonl')});
  const c=cfg();c.planMode=false;c.pr.addLabelOnOpen='review';await atomicWriteConfig(c,cwd);
  let body='';
  await runAllTickets(imported.tickets,c,cwd,{onStatusChange(){},onLogLine(){},onComplete(){},onFailure:async(_,s)=>assert.fail(s.failureReason)},undefined,{findPr:async()=>undefined,createPr:async(_config,input)=>{body=input.body;return {url:'https://example.com/pr',number:1};},addLabel:async()=>assert.fail('No issue labels'),moveCard:async()=>assert.fail('No Trello completion')});

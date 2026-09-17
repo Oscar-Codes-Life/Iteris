@@ -7,12 +7,14 @@ import {acquireRun} from '../state/active.js';
 import {loadConfig} from '../config.js';
 import {createRunFolder, writeStatus, writePrompt, appendLog} from '../state/manager.js';
 import {readProgress, appendProgress} from '../state/progress.js';
-import {findPrForBranch, createPullRequest, addLabelToIssue} from '../github/pr.js';
+import {findPrForBranch, createPullRequest, addLabelToIssue, updatePrReview} from '../github/pr.js';
 import {moveCardOnComplete} from '../trello/completion.js';
 import {expandPrompt} from './prompt.js';
 import {generateSummary} from './summarizer.js';
 import {runCodeReview} from './reviewer.js';
 import {generatePrDescription} from './pr-description.js';
+import {captureContext, publishReviewed, assertPublished, savedPlan} from '../review/context.js';
+import {loadPassedReview} from '../review/report.js';
 import {runHarness} from '../harness/process.js';
 
 export type RunnerCallbacks = {
@@ -22,8 +24,8 @@ export type RunnerCallbacks = {
 	onFailure: (ticketNumber: number, state: TicketState) => Promise<'retry' | 'skip'>;
 	beforeTicket?: () => Promise<IterisConfig>;
 };
-export type RunnerServices = {findPr: typeof findPrForBranch; createPr: typeof createPullRequest; addLabel: typeof addLabelToIssue; moveCard: typeof moveCardOnComplete};
-const defaultServices: RunnerServices = {findPr: findPrForBranch, createPr: createPullRequest, addLabel: addLabelToIssue, moveCard: moveCardOnComplete};
+export type RunnerServices = {findPr: typeof findPrForBranch; createPr: typeof createPullRequest; addLabel: typeof addLabelToIssue; moveCard: typeof moveCardOnComplete; updateReview?: typeof updatePrReview};
+const defaultServices: RunnerServices = {findPr: findPrForBranch, createPr: createPullRequest, addLabel: addLabelToIssue, moveCard: moveCardOnComplete, updateReview: updatePrReview};
 export async function runAllTickets(tickets: Ticket[], config: IterisConfig, cwd: string, callbacks: RunnerCallbacks, externalSignal?: AbortSignal, services: RunnerServices = defaultServices): Promise<void> {
 	validateBaseBranch(config.baseBranch, cwd);
 	const release = await acquireRun(cwd);
@@ -38,12 +40,12 @@ export async function runAllTickets(tickets: Ticket[], config: IterisConfig, cwd
 			const latest = callbacks.beforeTicket ? await callbacks.beforeTicket() : await loadConfig(cwd);
 			// Ticket source/repository belong to the fetched queue. Only execution
 			// preferences change at boundaries. Retries retain this snapshot.
-			const snapshot = structuredClone({...config, harness: latest.harness, harnesses: latest.harnesses, planMode: latest.planMode, timeout: latest.timeout});
+			const snapshot = structuredClone({...config, harness: latest.harness, harnesses: latest.harnesses, planMode: latest.planMode, timeout: latest.timeout, review: latest.review, qualityChecks: latest.qualityChecks});
 			const checkpoint: TicketCheckpoint = {};
 			let retry = true;
 			while (retry && !controller.signal.aborted) {
 				const result = await runSingleTicket(ticket, snapshot, cwd, callbacks, controller.signal, services, checkpoint);
-				retry = !controller.signal.aborted && (result.status === 'failed' || result.status === 'stale') && await callbacks.onFailure(ticket.number, result) === 'retry';
+				retry = !controller.signal.aborted && (['failed', 'stale', 'blocked', 'incomplete'].includes(result.status)) && await callbacks.onFailure(ticket.number, result) === 'retry';
 			}
 		}
 	} finally {
@@ -53,7 +55,7 @@ export async function runAllTickets(tickets: Ticket[], config: IterisConfig, cwd
 	}
 }
 
-type TicketCheckpoint = {plan?: string; implemented?: boolean; reviewed?: boolean; review?: string};
+type TicketCheckpoint = {plan?: string; implemented?: boolean};
 
 async function runSingleTicket(ticket: Ticket, config: IterisConfig, cwd: string, callbacks: RunnerCallbacks, signal: AbortSignal, services: RunnerServices, checkpoint: TicketCheckpoint): Promise<TicketState> {
 	const folder = await createRunFolder(cwd, ticket);
@@ -73,7 +75,14 @@ async function runSingleTicket(ticket: Ticket, config: IterisConfig, cwd: string
 		await writeFile(path.join(folder, 'execution.json'), JSON.stringify(state.selection, null, 2) + '\n');
 		const prompt = expandPrompt(ticket, config, await readProgress(cwd));
 		await writePrompt(folder, prompt);
-		let plan = checkpoint.plan ?? '';
+		let plan = checkpoint.plan ?? await savedPlan(folder);
+		if (!checkpoint.implemented) {
+			try {
+				const context = captureContext(ticket, config, cwd, plan);
+				const cached = await loadPassedReview(path.join(folder, 'review'), context);
+				if (cached) {checkpoint.implemented = true; checkpoint.plan = plan;}
+			} catch { /* no matching completed review to resume */ }
+		}
 		if (config.planMode && checkpoint.plan === undefined) {
 			await phase('planning');
 			const result = await runHarness({config, phase: 'planning', prompt: `Inspect this task and produce an implementation plan. Do not edit files, execute changes, or print a completion marker.\n\n${prompt}`, cwd, timeoutMs: config.timeout * 1000, onLine: log, signal});
@@ -86,28 +95,33 @@ async function runSingleTicket(ticket: Ticket, config: IterisConfig, cwd: string
 			if (!result.success || !result.done) {state.status = result.timedOut ? 'stale' : 'failed'; throw new Error(result.error ?? 'Process exited without the completion signal');}
 			checkpoint.implemented = true;
 		}
-		if (!checkpoint.reviewed) {
-			await phase('reviewing');
-			const reviewed = await runCodeReview({ticket, config, cwd, folder, onLogLine: log, onProcess() {}, signal});
-			if (!reviewed.success || !reviewed.done) {
-				state.status = reviewed.timedOut ? 'stale' : 'failed';
-				throw new Error(`Code review: ${reviewed.error ?? 'Process exited without the completion signal'}`);
-			}
-			checkpoint.reviewed = true; checkpoint.review = reviewed.text;
+		await phase('reviewing');
+		const reviewed = await runCodeReview({ticket, config, cwd, folder, plan, onLogLine: log, onProcess() {}, signal});
+		if (reviewed.report.outcome !== 'passed') {
+			state.status = reviewed.report.outcome;
+			throw new Error(`Code review ${reviewed.report.outcome}: ${reviewed.error}`);
 		}
+		const reviewedContext = captureContext(ticket, config, cwd, plan);
+		if (reviewedContext.stamp.key !== reviewed.report.stamp?.key) throw new Error('Code changed after review; rerun review before publication.');
+		await publishReviewed(reviewedContext, config, cwd, signal);
 		let pr = await services.findPr(config, state.branch);
 		if (!pr) {
 			await phase('creating-pr');
-			const described = await generatePrDescription({ticket, config, cwd, review: checkpoint.review ?? '', signal,
+			const described = await generatePrDescription({ticket, config, cwd, review: reviewed.text, baseCommit: reviewedContext.stamp.base, signal,
 				onLine(line) {log(`[pr] ${line}`);},
 			});
 			if (!described.success || !described.text) {
 				state.status = described.timedOut ? 'stale' : 'failed';
 				throw new Error(`PR description: ${described.error ?? 'Harness produced no description'}`);
 			}
+			await assertPublished(reviewedContext, config, cwd, signal);
 			pr = await services.createPr(config, {branch: state.branch, title: ticket.title, body: described.text});
 			log(`[iteris] Created PR ${pr.url}`);
+		} else {
+			await assertPublished(reviewedContext, config, cwd, signal);
+			await services.updateReview?.(config, pr.number, reviewed.text);
 		}
+		await assertPublished(reviewedContext, config, cwd, signal);
 		state.prUrl = pr.url; state.prNumber = pr.number;
 		if (config.pr.addLabelOnOpen && (config.provider === 'github' || config.provider === undefined)) await services.addLabel(config, ticket.number, config.pr.addLabelOnOpen);
 		if (config.provider === 'trello') await services.moveCard(config, ticket.number);
@@ -117,7 +131,7 @@ async function runSingleTicket(ticket: Ticket, config: IterisConfig, cwd: string
 		state.status = 'done';
 		await appendProgress(cwd, `#${ticket.number} (${ticket.title}) — completed successfully`);
 	} catch (error) {
-		state.status = signal.aborted || state.status === 'stale' ? 'stale' : 'failed';
+		state.status = signal.aborted || state.status === 'stale' ? 'stale' : state.status === 'blocked' || state.status === 'incomplete' ? state.status : 'failed';
 		state.failureReason = error instanceof Error ? error.message : String(error);
 		log(`[iteris] ${state.failureReason}`);
 	} finally {

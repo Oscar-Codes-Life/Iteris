@@ -11,6 +11,8 @@ const statusIcons: Record<string, string> = {
   done: "✓",
   stale: "⚠",
   failed: "✗",
+  blocked: "!",
+  incomplete: "?",
 };
 
 const statusColors: Record<string, string> = {
@@ -23,6 +25,8 @@ const statusColors: Record<string, string> = {
   done: "green",
   stale: "yellow",
   failed: "red",
+  blocked: "red",
+  incomplete: "yellow",
 };
 
 function formatElapsed(ms: number): string {
@@ -59,7 +63,7 @@ export function TicketRow({ state }: TicketRowProps) {
         <Text dimColor>branch: {state.branch}</Text>
       )}
       {state.prNumber && <Text color="cyan">PR #{state.prNumber}</Text>}
-      {state.failureReason && (state.status === "failed" || state.status === "stale") && (
+      {state.failureReason && (["failed", "stale", "blocked", "incomplete"].includes(state.status)) && (
         <Text dimColor>({state.failureReason})</Text>
       )}
     </Box>

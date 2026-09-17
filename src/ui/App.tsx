@@ -76,7 +76,7 @@ export function App({config, tickets, cwd}: {config: IterisConfig; tickets: Tick
 		else if (input === 'q' && finished) exit();
 	});
 	const active = [...states.values()].find(state => activeStatuses.has(state.status));
-	const hasFailures = [...states.values()].some(state => state.status === 'failed' || state.status === 'stale');
+	const hasFailures = [...states.values()].some(state => ['failed', 'stale', 'blocked', 'incomplete'].includes(state.status));
 	return <Box flexDirection="column" padding={1}>
 		<Text bold color="magenta">Iteris · {config.repo}</Text>
 		<Text dimColor>Saved settings for the next ticket: {selectionLabel(pending)}</Text>

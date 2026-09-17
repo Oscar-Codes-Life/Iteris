@@ -1,8 +1,9 @@
+import {execFileSync} from 'node:child_process';
 import {mkdtemp, writeFile, rm} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {configSchema} from '../dist/config.js';
-export const config = (harness = 'claude') => configSchema.parse({version: 2, repo: 'org/repo', harness, harnesses: {claude: {model: 'opus', effort: 'xhigh', flags: ['--dangerously-skip-permissions']}, codex: {model: 'test-model', effort: 'high', flags: []}}, setupComplete: true});
+export const config = (harness = 'claude') => configSchema.parse({version: 2, repo: 'org/repo', harness, harnesses: {claude: {model: 'opus', effort: 'xhigh', flags: ['--dangerously-skip-permissions']}, codex: {model: 'test-model', effort: 'high', flags: []}}, setupComplete: true, qualityChecks: ['true']});
 export async function temporary(t) {
  const folder = await mkdtemp(path.join(os.tmpdir(), 'iteris-test-'));
  t.after(() => rm(folder, {recursive:true, force:true})); return folder;
@@ -34,7 +35,31 @@ if (args[0] === 'app-server') {
   if (process.env.CAPTURE) fs.appendFileSync(process.env.CAPTURE,JSON.stringify({harness,args,prompt})+'\\n');
   const mode=process.env.FAKE_MODE;
   if(mode==='hang') {setInterval(()=>{},1000); return;}
-  const text=prompt.startsWith('Inspect this task')?'Implementation plan':prompt.startsWith('Write a high-value pull request description')?'## Summary\\n- Adds useful behavior.\\n\\n## Changes\\n- Updates the implementation.\\n\\n## Validation\\n- Tests passed.':prompt.startsWith('You are summarizing')?'Session summary':'<task>done</task>';
+  if (process.env.FAKE_IMPLEMENT === '1' && prompt.startsWith('You are an autonomous') && mode !== 'fail') {
+   const git=(...args)=>require('node:child_process').execFileSync('git',args,{stdio:'pipe'});
+   const branch=prompt.match(/otherwise create it: \`([^\`]+)\`/)[1];
+   try {git('checkout',branch);} catch {git('checkout','-b',branch,'main');}
+   fs.writeFileSync('feature.txt','implemented '+branch+'\\n');git('add','feature.txt');
+   git('commit','--allow-empty','-qm','implement');
+  }
+  let text=prompt.startsWith('Inspect this task')?'Implementation plan':prompt.startsWith('Write a high-value pull request description')?'## Summary\\n- Adds useful behavior.\\n\\n## Changes\\n- Updates the implementation.':prompt.startsWith('You are summarizing')?'Session summary':'<task>done</task>';
+  if (prompt.startsWith('ITERIS_REVIEW')) {
+   const input=JSON.parse(prompt.split('INPUT_JSON\\n')[1]);
+   const context=input.context, scenario=process.env.REVIEW_SCENARIO;
+   const requirement={requirement:'Implement feature',status:scenario==='missing'?'missing':scenario==='unverified'?'unverified':'covered',evidence:'feature.txt implements the requested behavior'};
+   const broken=context.diff.includes('+broken');
+   const finding={category:'correctness',priority:scenario==='advisory'?'medium':'high',file:'feature.txt',line:1,side:'new',title:scenario==='moving-blocker'?context.stamp.head:'Broken behavior',trigger:'Call feature',expected:'fixed',actual:'broken',impact:'Wrong result',evidence:'feature.txt returns broken',remedy:'Return fixed',materialRegression:false,policyRule:''};
+   if (prompt.startsWith('ITERIS_REVIEW verify')) {
+    text=JSON.stringify({head:context.stamp.head,complete:true,gaps:[],requirements:[requirement],decisions:scenario==='omit-decision'?[]:input.candidates.map(f=>({id:f.id,status:scenario==='false-positive'?'rejected':'confirmed',evidence:'Independent causal trace'})),resolved:scenario==='missing-resolution'?[]:input.previousBlockers.filter(f=>!input.candidates.some(c=>c.id===f.id)).map(f=>({id:f.id,evidence:'feature.txt now returns fixed'}))});
+   } else {
+    text=JSON.stringify({head:scenario==='wrong-head'?'wrong':context.stamp.head,complete:scenario!=='incomplete',inspectedFiles:scenario==='omit-file'?[]:context.changedFiles,gaps:[],requirements:prompt.startsWith('ITERIS_REVIEW correctness')?[requirement]:[],findings:['blocker','moving-blocker','false-positive','advisory','omit-decision'].includes(scenario)||broken?[finding]:[]});
+   }
+   if (scenario==='malformed') text='<task>done</task>';
+  }
+  if (prompt.startsWith('ITERIS_REPAIR') && process.env.REVIEW_SCENARIO!=='no-repair') {
+   const git=(...args)=>require('node:child_process').execFileSync('git',args,{stdio:'pipe'});
+   fs.writeFileSync('feature.txt','fixed\\n');git('add','feature.txt');git('commit','--allow-empty','-qm','repair');
+  }
   let event=harness==='codex'?{type:'item.completed',item:{type:'agent_message',text}}:{type:'assistant',message:{content:[{type:'text',text}]}};
   if(mode==='tool') event=harness==='codex'?{type:'item.completed',item:{type:'command_execution',aggregated_output:'<task>done</task>'}}:{type:'user',message:{content:[{type:'tool_result',content:'<task>done</task>'}]}};
   const output=mode==='malformed'?'not json':JSON.stringify(event);
@@ -43,3 +68,15 @@ if (args[0] === 'app-server') {
  });
 }
 `;
+
+export async function reviewRepository(t, existing) {
+ const cwd = existing ?? await temporary(t);
+ const remote = await temporary(t);
+ const git = (...args) => execFileSync('git', args, {cwd, stdio:'pipe', encoding:'utf8'}).trim();
+ git('init', '-q', '-b', 'main');
+ git('config','user.email','test@example.com'); git('config','user.name','Test');
+ await writeFile(path.join(cwd,'.git/info/exclude'), '\n.iteris/\n.tasks/\n.iteris.json\ncalls.jsonl\nclaude\ncodex\n');
+ await writeFile(path.join(cwd,'feature.txt'), 'base\n'); git('add','feature.txt'); git('commit','-qm','base');
+ execFileSync('git',['init','--bare','-q',remote]); git('remote','add','origin',remote); git('push','-q','origin','main');
+ return {cwd, remote, git};
+}

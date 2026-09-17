@@ -14,12 +14,12 @@ Description:
 ${ticket.body}
 
 ## Instructions
-1. ${ticket.custom ? 'Checkout the task branch if it already exists locally or on origin; otherwise create it' : 'Create and checkout a new branch'}: \`${ticketBranch(ticket)}\`
+1. Checkout the task branch if it already exists locally or on origin; otherwise create it: \`${ticketBranch(ticket)}\`
 2. Implement the changes described in the ticket
 3. Run quality checks:
 ${qualityCheckLines}
 4. If checks pass: commit all changes with message \`fix: #${ticket.number} — ${ticket.title}\`
-5. Push the branch to origin
+5. Leave the branch committed and the working tree clean. Do not push; Iteris publishes only after independent review.
 6. When fully done, print exactly: <task>done</task>
 
 Do NOT create a pull request — Iteris will review the final changes and open it in a later phase.

@@ -4,7 +4,7 @@
 
 Iteris pulls tickets from **GitHub Issues, GitHub Projects, or Trello**, implements them with **Claude Code or Codex**, reviews the changes, and opens pull requests. It runs locally with a live terminal UI.
 
-> **Experimental autonomous agent.** Implementation and review use full-access Codex execution by default; Claude retains its configured permission flags (the default skips permission prompts). These agents can run commands and change files beyond the repository. Use a controlled environment appropriate for autonomous execution.
+> **Experimental autonomous agent.** Implementation and repair use full-access Codex execution by default; Claude retains its configured permission flags (the default skips permission prompts). These writing agents can run commands and change files beyond the repository. Review investigators use restricted permissions on disposable committed snapshots. Configured quality-check commands execute locally with your user permissions. Use a controlled environment appropriate for autonomous execution.
 
 ## Installation
 
@@ -82,7 +82,8 @@ Iteris creates `.iteris.json` in the project root, inferring `repo` from a GitHu
   "baseBranch": "main",
   "timeout": 7200,
   "planMode": true,
-  "qualityChecks": ["npm test"],
+  "qualityChecks": ["npm run typecheck", "npm test"],
+  "review": {"mode": "standard", "maxRepairCycles": 2, "allowNoChecks": false},
   "pr": {"draft": false, "addLabelOnOpen": "in-review"}
 }
 ```
@@ -100,19 +101,20 @@ Legacy configurations migrate automatically on load:
 
 Invalid JSON, unsupported future versions, and conflicting custom flags produce errors without overwriting the configuration. Use the structured model/effort fields instead of flags that override Iteris's selection, transport, or phase permissions. To undo migration, restore the backup and use an older Iteris version.
 
-`planMode: true` now means **plan, then implement automatically**. Planning is a separate read-only/restricted-tools phase, saved as `plan.md`. Implementation receives that plan; review executes separately. Set `planMode: false` to implement directly. `timeout` defaults to 7200 seconds (two hours) and applies separately to planning, implementation, review, and PR-description generation; summary has a one-minute limit. Existing configurations retain their explicit timeout; set `"timeout": 7200` to use two hours. PR descriptions and summaries use the selected harness with restricted permissions.
+`planMode: true` now means **plan, then implement automatically**. Planning is a separate read-only/restricted-tools phase, saved as `plan.md`. Implementation receives that plan; review executes separately. Set `planMode: false` to implement directly. `timeout` defaults to 7200 seconds (two hours) and applies separately to planning, implementation, and PR-description generation; summary has a one-minute limit. Review has one shared deadline across checks, investigation, verification, and repairs: 900 seconds in standard mode or 1800 in deep mode, capped by `timeout`. Set `review.timeout` to override the review deadline. Existing configurations retain their explicit timeout; set `"timeout": 7200` to use two hours. PR descriptions and summaries use the selected harness with restricted permissions.
 
 ## Execution and state
 
 For each selected ticket, Iteris:
 
 1. Optionally generates a plan.
-2. Asks the harness to create `iteris/<ticket-id>-<slug>`, implement, check, commit, and push.
-3. Runs a review agent using the same harness/model/effort to review, fix, and push the final changes.
-4. Uses a fresh, read-only harness instance to write a useful PR description from the final diff, then opens the PR.
-5. Applies completion actions and generates a summary.
+2. Asks the harness to create or resume `iteris/<ticket-id>-<slug>`, implement, check, and commit locally.
+3. Runs host-owned quality checks, independent correctness and maintainability reviews, and a fresh finding verifier. Sensitive paths also receive a risk review.
+4. If needed, gives confirmed blockers to a separate repair session, then reviews and checks the new commit again (at most two repair cycles).
+5. After review passes, pushes the exact reviewed commit and verifies the remote branch and base. A fresh, read-only harness writes the PR narrative; Iteris appends the authoritative review report. Existing PRs retain their authored description and receive an updated review section.
+6. Applies completion actions and generates a summary.
 
-Implementation and review require a clean process exit and an assistant completion marker; tool output cannot signal completion. Planning and PR-description generation require a clean exit and non-empty assistant output. Failed or timed-out tickets offer retry or skip, preserving the underlying error. Within the running queue, retries reuse completed planning, implementation, and review phases, and check for an already-created branch PR before generating a description; restarting Iteris starts a new attempt. Iteris detects the remote default branch for configurations without `baseBranch` and checks that the configured base exists before starting the queue. Cancellation terminates the active process and records a stale run. A repository run lock prevents overlapping queues. If Iteris was forcibly killed and reports a stale lock, remove `.iteris/active.json` after confirming that the previous process has stopped.
+Implementation and repair require a clean process exit and an assistant completion marker; tool output cannot signal completion. Review instead requires validated JSON reports, complete file and acceptance coverage, verified findings, and successful configured checks tied to the final commit. Planning and PR-description generation require a clean exit and non-empty assistant output. Failed, blocked, incomplete, or timed-out tickets offer retry or skip, preserving the underlying error. Blocked and incomplete reviews never open ready PRs or apply completion actions. An explicit retry starts a new bounded review attempt; automatic repair rounds share its deadline. Within the running queue, retries reuse completed planning and implementation. Completed review evidence can also survive a restart: reuse requires the same clean branch, commit, base, ticket, selected reviewer, policy, and configured checks. Changed inputs require another review. Iteris checks for an already-created branch PR before generating a description. Iteris detects the remote default branch for configurations without `baseBranch` and checks that the configured base exists before starting the queue. Cancellation terminates the active process and records a stale run. A repository run lock prevents overlapping queues. If Iteris was forcibly killed and reports a stale lock, remove `.iteris/active.json` after confirming that the previous process has stopped.
 
 State lives in `.iteris/runs/<ticket-id>-<slug>/`:
 
@@ -124,6 +126,53 @@ State lives in `.iteris/runs/<ticket-id>-<slug>/`:
 | `plan.md` | Generated plan when planning is enabled |
 | `log.txt` | Normalized harness output |
 | `summary.md` | Best-effort session summary |
+| `review/review.md` | Human-readable readiness report |
+| `review/result.json` | Typed outcome and commit-bound evidence |
+| `review/context.json`, `findings.json`, `checks.json` | Latest review inputs, findings, and command results |
+| `review/attempts/<id>/round-*/` | Prior inputs, independent reports, verification, check output, and repair results |
+
+## Code review
+
+The review outcomes are **passed**, **blocked**, and **incomplete**. A completion marker alone cannot pass review. Missing context, malformed output, omitted files or requirements, timeouts, dirty working trees, and changed commits fail closed. Critical/high findings, missing explicit requirements, verified policy violations, material structural regressions, and failing required checks block shipping. Medium/low advice remains visible without forcing unrelated rewrites. Review is automated readiness evidence; it does not approve or merge PRs.
+
+Configure real repository commands in `qualityChecks`. An empty list produces an incomplete review and, for Node projects, suggestions from package scripts. For a change that explicitly requires no executable validation, set `review.allowNoChecks: true`; the report still says no checks ran. Existing configurations with no checks need this decision before they can ship. Commands come only from configuration, never model suggestions, and their exit codes and outputs are recorded. A check that edits tracked source invalidates the snapshot.
+
+Review configuration is optional and receives defaults:
+
+```json
+"review": {
+  "mode": "standard",
+  "maxRepairCycles": 2,
+  "timeout": 900,
+  "allowNoChecks": false
+}
+```
+
+`deep` always adds the risk specialist. Standard mode also adds it for paths suggesting auth, credentials, migrations, shared types, subprocesses, or concurrency; this routing is a heuristic and the main pass always checks security. At most two investigators run concurrently. Risk review uses the remaining attempt budget. Persistent blockers stop repairs early. Review and check settings edited during a queue apply at the next ticket; retries retain the active ticket settings.
+
+Add `REVIEW.md` to the base branch for domain invariants and path-specific review expectations. Review uses that base version, so a branch cannot weaken its own policy. A finding must cite the applicable rule. File length is an investigation signal, not an automatic blocker. Reviews see the full ticket and relevant plan, inspect committed files and callers, and must justify findings through concrete causal evidence. The verifier can reject false positives; it must explicitly verify that previous blockers were fixed.
+
+To review an existing branch without implementation, automatic repairs, pushing, or PR creation:
+
+```bash
+iteris review
+iteris review deep
+iteris review audit
+```
+
+These commands run configured checks and save results under `.iteris/reviews/`. Audit forces deep inspection and reports structural proposals. They exit with status 1 for blocked/incomplete review. They use your configured base branch and provider model, but require no GitHub authentication step. They have no linked ticket, so the report evaluates the branch's behavior and compatibility rather than claiming external ticket acceptance.
+
+Reviewers inspect disposable detached copies. Claude receives only read/search tools, no MCP servers, and a per-run hook-disable setting; administrator-managed hooks remain subject to the CLI's managed policy. Codex uses its read-only sandbox. These are harness restrictions, not an OS isolation guarantee for arbitrary project tooling. Reproduction evidence currently comes from configured commands and code tracing; there is no arbitrary model-generated verification-script executor. Keep autonomous implementation, repair, and quality commands in an appropriate environment.
+
+Unexpected edits are preserved and stop review. Commits with diffs above 240,000 characters require splitting instead of silent truncation. If the remote base advances before publication finishes, fetch it and retry so the review uses the new base. Review artifacts are local and are not committed; the useful summary is embedded in the PR body.
+
+## Review evaluation
+
+The deterministic tests cover the gate and process lifecycle; they do not measure model accuracy. A separate [30-case synthetic corpus](eval/review/README.md) contains seeded defects, clean controls, acceptance gaps, and structural regressions. Run it explicitly using your local provider and human-adjudicate findings before claiming precision or recall improvements:
+
+```bash
+npm run eval:review -- --case zero-default --harness codex
+```
 
 ## Development
 

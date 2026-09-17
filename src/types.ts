@@ -1,4 +1,4 @@
-export type TicketStatus = 'pending' | 'planning' | 'summarizing' | 'running' | 'reviewing' | 'creating-pr' | 'done' | 'stale' | 'failed';
+export type TicketStatus = 'pending' | 'planning' | 'summarizing' | 'running' | 'reviewing' | 'creating-pr' | 'done' | 'stale' | 'failed' | 'blocked' | 'incomplete';
 
 export type Ticket = {
 	custom?: {identity: string; fingerprint: string; taskFile: string; changed?: boolean};
@@ -47,6 +47,7 @@ export type IterisConfig = {
 	timeout: number;
 	planMode: boolean;
 	qualityChecks: string[];
+	review?: Partial<import('./review/schema.js').ReviewConfig>;
 	pr: {
 		draft: boolean;
 		addLabelOnOpen?: string;

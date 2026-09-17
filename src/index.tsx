@@ -1,3 +1,4 @@
+import {reviewBranch} from './review/cli.js';
 import {setupCustom} from './custom/setup.js';
 import {customStatuses} from './custom/import.js';
 import {loadCustomTasks} from './custom/cache.js';
@@ -119,13 +120,13 @@ function waitForTrelloCredentials(): Promise<void> {
 async function main() {
 	const [command, argument, ...extra] = process.argv.slice(2);
 	if (command === '--help' || command === '-h') {
-		console.log('iteris [setup | refresh | harness [claude|codex] | model [id] | effort [level]]');
+		console.log('iteris [setup | refresh | review [standard|deep|audit] | harness [claude|codex] | model [id] | effort [level]]');
 		return;
 	}
-	if (extra.length || ((command === 'setup' || command === 'refresh') && argument) || (command && !['setup', 'refresh', 'harness', 'model', 'effort'].includes(command))) throw new Error('Unknown command. Run iteris --help.');
+	if (extra.length || ((command === 'setup' || command === 'refresh') && argument) || (command && !['setup', 'refresh', 'review', 'harness', 'model', 'effort'].includes(command))) throw new Error('Unknown command. Run iteris --help.');
 	await printBranding();
 	let config = await loadConfig();
-	if (command && command !== 'setup' && command !== 'refresh') {
+	if (command && command !== 'setup' && command !== 'refresh' && command !== 'review') {
 		config = await configure(command, argument);
 		console.log(`Saved: ${selectionLabel(config)}`);
 		return;
@@ -133,6 +134,10 @@ async function main() {
 	if (await hasActiveRun()) throw new Error('An Iteris queue is already running here. Use iteris harness/model/effort to change pending settings.');
 	if (command === 'setup' || !config.setupComplete) config = await setupHarness();
 	else config = await prepareHarness(config);
+	if (command === 'review') {
+		process.exitCode = await reviewBranch(config, process.cwd(), argument) ? 0 : 1;
+		return;
+	}
 	await ensureGithubAuth();
 	if (!config.provider || command === 'setup') {
 		config.provider = await showProviderPicker();
