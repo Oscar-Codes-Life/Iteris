@@ -56,3 +56,8 @@ export function parseReport<T>(raw: string, schema: z.ZodType<T>): T {
 		throw new Error(`Invalid review report: ${error instanceof Error ? error.message : String(error)}`);
 	}
 }
+
+export const recoverySchema = z.object({
+	checks: z.array(z.string().trim().min(1).max(4000)).max(20),
+	blockedReason: z.string().max(12_000),
+}).strict();

@@ -7,9 +7,9 @@ import {redact, registerSecret} from '../harness/redact.js';
 import {runHarness} from '../harness/process.js';
 import {captureContext, assertSnapshot, createSnapshot, digest, validateLocation, suggestChecks, type ReviewContext} from '../review/context.js';
 import {runCommand} from '../review/command.js';
-import {reviewPrompt, verificationPrompt, repairPrompt} from '../review/prompts.js';
+import {reviewPrompt, verificationPrompt, repairPrompt, recoveryPrompt} from '../review/prompts.js';
 import {saveJson, finishReport, loadPassedReview, previousEvidence} from '../review/report.js';
-import {reviewSettings, passSchema, verificationSchema, parseReport, blocks, type ReviewPass, type Finding, type ReviewReport, type ReviewResult} from '../review/schema.js';
+import {reviewSettings, passSchema, verificationSchema, recoverySchema, parseReport, blocks, type ReviewPass, type Finding, type ReviewReport, type ReviewResult} from '../review/schema.js';
 
 type ReviewOptions = {
 	ticket: Ticket; config: IterisConfig; cwd: string; folder: string; plan?: string; branch?: string;
@@ -35,6 +35,7 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 	try {
 		let previousBlockers: Finding[] = [];
 		let lastFailure = '';
+		const additionalChecks = new Set<string>();
 		const requiredRequirements = new Set<string>();
 		for (let round = 0; round <= settings.maxRepairCycles; round++) {
 			remaining();
@@ -61,7 +62,7 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 				throw new Error(`No qualityChecks configured. ${suggested.length ? `Suggested qualityChecks: ${JSON.stringify(suggested)}. ` : ''}Configure repository checks, or explicitly set review.allowNoChecks for a change that needs none.`);
 			}
 			log(`Round ${round + 1}: checking ${context.stamp.head.slice(0, 12)}`);
-			for (const command of context.checks) {
+			for (const command of [...context.checks, ...[...additionalChecks].filter(command => !context.checks.includes(command))]) {
 				remaining();
 				const result = await runCommand(command, [], {cwd, deadline, signal, shell: true});
 				report.checks.push({command, head: context.stamp.head, ...result});
@@ -73,7 +74,7 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 			await saveJson(path.join(directory, 'checks.json'), report.checks);
 			const snapshot = await createSnapshot(cwd, context.stamp.head, deadline, signal);
 			let passes: ReviewPass[];
-			let candidates: Finding[];
+			let candidates: Finding[] = [];
 			try {
 				const runPass = async (lens: 'correctness' | 'maintainability' | 'risk') => {
 					log(`Investigating ${lens}`);
@@ -81,7 +82,7 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 					await saveJson(path.join(roundFolder, `${lens}-process.json`), result);
 					if (!result.success) throw new Error(result.error ?? `${lens} reviewer failed`);
 					const pass = parseReport(result.finalText ?? result.text, passSchema);
-					validatePass(pass, context, lens);
+					if (pass.head !== context.stamp.head) throw new Error(`${lens} review returned the wrong commit.`);
 					await saveJson(path.join(roundFolder, `${lens}.json`), pass);
 					return pass;
 				};
@@ -89,6 +90,10 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 				const investigated = await Promise.allSettled([runPass('correctness'), runPass('maintainability')]);
 				passes = investigated.map(result => {if (result.status === 'rejected') throw result.reason; return result.value;});
 				if (settings.mode === 'deep' || context.risk.length) {report.mode = 'deep'; passes.push(await runPass('risk'));}
+				for (const pass of passes) for (const requirement of pass.requirements) requiredRequirements.add(requirement.requirement);
+				report.requirements = passes.flatMap(pass => pass.requirements);
+				const gaps = passes.flatMap((pass, index) => passGaps(pass, context, ['correctness', 'maintainability', 'risk'][index]!));
+				if (gaps.length) throw new ReviewGap(gaps.join('; '));
 				const unique = new Map<string, Finding>();
 				for (const candidate of passes.flatMap(pass => pass.findings)) {
 					validateLocation(candidate, context, cwd);
@@ -99,17 +104,17 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 					unique.set(id, {...candidate, priority, materialRegression: candidate.materialRegression || Boolean(previous?.materialRegression), id, head: context.stamp.head, status: 'candidate'});
 				}
 				candidates = [...unique.values()];
-				for (const requirement of passes[0]!.requirements) requiredRequirements.add(requirement.requirement);
 				const verified = await runHarness({config, phase: 'review', prompt: redact(verificationPrompt(context, report.checks, passes, candidates, previousBlockers, [...requiredRequirements])), cwd: snapshot.cwd, timeoutMs: remaining(), signal, onProcess, onLine: line => log(`[verify] ${line}`)});
 				await saveJson(path.join(roundFolder, 'verification-process.json'), verified);
 				if (!verified.success) throw new Error(verified.error ?? 'Verifier failed');
 				const verification = parseReport(verified.finalText ?? verified.text, verificationSchema);
 				await saveJson(path.join(roundFolder, 'verification.json'), verification);
-				if (verification.head !== context.stamp.head || !verification.complete || verification.gaps.length) throw new Error(`Verification incomplete: ${verification.gaps.join('; ') || 'missing coverage or wrong commit'}`);
+				if (verification.head !== context.stamp.head) throw new Error('Verifier returned the wrong commit.');
+				for (const requirement of verification.requirements) requiredRequirements.add(requirement.requirement);
+				report.requirements = verification.requirements;
+				if (!verification.complete || verification.gaps.length) throw new ReviewGap(`Verification incomplete: ${verification.gaps.join('; ') || 'missing coverage'}`);
 				if (verification.decisions.length !== candidates.length || new Set(verification.decisions.map(d => d.id)).size !== candidates.length || verification.decisions.some(d => !candidates.some(f => f.id === d.id))) throw new Error('Verifier must decide every candidate exactly once.');
 				if ([...requiredRequirements].some(req => !verification.requirements.some(v => v.requirement === req))) throw new Error('Verifier omitted an acceptance requirement.');
-				report.requirements = verification.requirements;
-				for (const requirement of verification.requirements) requiredRequirements.add(requirement.requirement);
 				for (const decision of verification.decisions) {
 					const finding = candidates.find(f => f.id === decision.id)!;
 					if (decision.duplicateOf && (decision.status !== 'confirmed' || decision.duplicateOf === decision.id || !verification.decisions.some(d => d.id === decision.duplicateOf && d.status === 'confirmed' && !d.duplicateOf))) throw new Error('Invalid duplicate finding reference.');
@@ -126,11 +131,32 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 					else if (!candidates.some(c => c.id === previous.id && c.status === 'confirmed')) throw new Error(`Previous blocker ${previous.id} lacks resolution evidence.`);
 				}
 				report.findings = [...report.findings.filter(f => f.status === 'fixed' || !candidates.some(c => c.id === f.id)), ...candidates];
+			} catch (error) {
+				if (!(error instanceof ReviewGap)) throw error;
+				report.gaps.push(error.message);
 			} finally {await snapshot.dispose();}
 			assertSnapshot(context, config, cwd); remaining();
 			await saveJson(path.join(roundFolder, 'findings.json'), report.findings);
 			await saveJson(path.join(directory, 'findings.json'), report.findings);
-			if (report.requirements.some(r => r.status === 'unverified')) throw new Error('An acceptance requirement remains unverified.');
+			for (const requirement of report.requirements.filter(r => r.status === 'unverified')) report.gaps.push(`${requirement.requirement}: ${requirement.evidence}`);
+			previousBlockers = report.findings.filter(blocks);
+			if (report.gaps.length) {
+				report.outcome = 'incomplete'; report.reason = report.gaps.join('; ');
+				const failureKey = digest({gaps: [...report.gaps].sort()});
+				if (audit || round === settings.maxRepairCycles || failureKey === lastFailure) {log(report.reason); return finish();}
+				lastFailure = failureKey; report.repairs++;
+				log(`Recovery ${report.repairs}/${settings.maxRepairCycles}: ${report.reason}`);
+				const recovered = await runHarness({config, phase: 'repair', prompt: redact(recoveryPrompt(context, report.gaps, report.requirements, report.checks, previousBlockers)), cwd, timeoutMs: remaining(), signal, onProcess, onLine: line => log(`[recovery] ${line}`)});
+				await saveJson(path.join(roundFolder, 'recovery-process.json'), recovered);
+				if (!recovered.success) throw new Error(recovered.error ?? 'Recovery failed');
+				const recovery = parseReport(recovered.finalText ?? recovered.text, recoverySchema);
+				await saveJson(path.join(roundFolder, 'recovery.json'), recovery);
+				const next = captureContext(ticket, config, cwd, options.plan, options.branch);
+				if (next.stamp.base !== context.stamp.base) throw new Error('Base changed during recovery; restart review.');
+				if (recovery.blockedReason) throw new Error(`Review recovery blocked: ${recovery.blockedReason}`);
+				for (const command of recovery.checks) additionalChecks.add(command);
+				continue;
+			}
 			previousBlockers = candidates.filter(blocks);
 			const failedChecks = report.checks.filter(check => check.exitCode !== 0);
 			const missing = report.requirements.filter(r => r.status === 'missing');
@@ -155,7 +181,13 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 	return finish();
 }
 
-function validatePass(pass: ReviewPass, context: ReviewContext, lens: string): void {
-	if (pass.head !== context.stamp.head || !pass.complete || pass.gaps.length || context.changedFiles.some(file => !pass.inspectedFiles.includes(file))) throw new Error(`${lens} review incomplete: ${pass.gaps.join('; ') || 'missing file coverage or wrong commit'}`);
-	if (lens === 'correctness' && !pass.requirements.length) throw new Error('Correctness review omitted ticket acceptance criteria.');
+class ReviewGap extends Error {}
+
+function passGaps(pass: ReviewPass, context: ReviewContext, lens: string): string[] {
+	const gaps = [...pass.gaps];
+	if (!pass.complete && !gaps.length) gaps.push('reviewer reported incomplete coverage');
+	const missing = context.changedFiles.filter(file => !pass.inspectedFiles.includes(file));
+	if (missing.length) gaps.push(`missing file coverage: ${missing.join(', ')}`);
+	if (lens === 'correctness' && !pass.requirements.length) gaps.push('Correctness review omitted ticket acceptance criteria.');
+	return gaps.map(gap => `${lens} review incomplete: ${gap}`);
 }

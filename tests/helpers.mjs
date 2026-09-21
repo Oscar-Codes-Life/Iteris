@@ -48,13 +48,22 @@ if (args[0] === 'app-server') {
    const context=input.context, scenario=process.env.REVIEW_SCENARIO;
    const requirement={requirement:'Implement feature',status:scenario==='missing'?'missing':scenario==='unverified'?'unverified':'covered',evidence:'feature.txt implements the requested behavior'};
    const broken=context.diff.includes('+broken');
+   const needsEvidence=['recover-evidence','recover-verifier','recover-unverified','recover-with-blocker','recover-failed-check','external-gap'].includes(scenario) && !input.checks.some(c=>c.command==='printf recovery-evidence' && c.exitCode===0);
+   if(['recover-unverified','recover-with-blocker'].includes(scenario) && needsEvidence) requirement.status='unverified';
    const finding={category:'correctness',priority:scenario==='advisory'?'medium':'high',file:'feature.txt',line:1,side:'new',title:scenario==='moving-blocker'?context.stamp.head:'Broken behavior',trigger:'Call feature',expected:'fixed',actual:'broken',impact:'Wrong result',evidence:'feature.txt returns broken',remedy:'Return fixed',materialRegression:false,policyRule:''};
    if (prompt.startsWith('ITERIS_REVIEW verify')) {
-    text=JSON.stringify({head:context.stamp.head,complete:true,gaps:[],requirements:[requirement],decisions:scenario==='omit-decision'?[]:input.candidates.map(f=>({id:f.id,status:scenario==='false-positive'?'rejected':'confirmed',evidence:'Independent causal trace'})),resolved:scenario==='missing-resolution'?[]:input.previousBlockers.filter(f=>!input.candidates.some(c=>c.id===f.id)).map(f=>({id:f.id,evidence:'feature.txt now returns fixed'}))});
+    text=JSON.stringify({head:context.stamp.head,complete:!(scenario==='recover-verifier' && needsEvidence),gaps:scenario==='recover-verifier' && needsEvidence?['Recovery tests were not run']:[],requirements:[requirement],decisions:scenario==='omit-decision'?[]:input.candidates.map(f=>({id:f.id,status:scenario==='false-positive'?'rejected':'confirmed',evidence:'Independent causal trace'})),resolved:scenario==='missing-resolution'?[]:input.previousBlockers.filter(f=>!input.candidates.some(c=>c.id===f.id)).map(f=>({id:f.id,evidence:'feature.txt now returns fixed'}))});
    } else {
-    text=JSON.stringify({head:scenario==='wrong-head'?'wrong':context.stamp.head,complete:scenario!=='incomplete',inspectedFiles:scenario==='omit-file'?[]:context.changedFiles,gaps:[],requirements:prompt.startsWith('ITERIS_REVIEW correctness')?[requirement]:[],findings:['blocker','moving-blocker','false-positive','advisory','omit-decision'].includes(scenario)||broken?[finding]:[]});
+    text=JSON.stringify({head:scenario==='wrong-head'?'wrong':context.stamp.head,complete:scenario!=='incomplete' && !(needsEvidence && !['recover-verifier','recover-unverified','recover-with-blocker'].includes(scenario)),inspectedFiles:scenario==='omit-file'?[]:context.changedFiles,gaps:needsEvidence && !['recover-verifier','recover-unverified','recover-with-blocker'].includes(scenario)?['Recovery tests were not run']:[],requirements:prompt.startsWith('ITERIS_REVIEW correctness')?[requirement]:[],findings:['blocker','moving-blocker','false-positive','advisory','omit-decision'].includes(scenario)||broken?[finding]:[]});
    }
    if (scenario==='malformed') text='<task>done</task>';
+  }
+  if (prompt.startsWith('ITERIS_RECOVER')) {
+   if (process.env.REVIEW_SCENARIO==='recover-with-blocker') {
+    const git=(...args)=>require('node:child_process').execFileSync('git',args,{stdio:'pipe'});
+    fs.writeFileSync('feature.txt','fixed\\n');git('add','feature.txt');git('commit','-qm','recover');
+   }
+   text=JSON.stringify({checks:[process.env.REVIEW_SCENARIO==='recover-failed-check'?'exit 9':'printf recovery-evidence'],blockedReason:process.env.REVIEW_SCENARIO==='external-gap'?'Hosted credentials unavailable':''});
   }
   if (prompt.startsWith('ITERIS_REPAIR') && process.env.REVIEW_SCENARIO!=='no-repair') {
    const git=(...args)=>require('node:child_process').execFileSync('git',args,{stdio:'pipe'});

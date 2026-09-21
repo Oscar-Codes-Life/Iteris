@@ -41,7 +41,8 @@ export async function loadPassedReview(directory: string, context: ReviewContext
 	try {
 		const report = storedReportSchema.parse(JSON.parse(await readFile(path.join(directory, 'result.json'), 'utf8')));
 		if (report.version !== 1 || report.outcome !== 'passed' || report.stamp?.key !== context.stamp.key || report.stamp.head !== context.stamp.head) return;
-		if (report.checks.length !== context.checks.length || report.checks.some((check, index) => check.command !== context.checks[index])) return;
+		// Recovery may append checks; configured checks must still be present in order.
+		if (report.checks.length < context.checks.length || context.checks.some((command, index) => report.checks[index]?.command !== command)) return;
 		if (report.gaps.length || report.findings.some(blocks) || !report.requirements.length || report.requirements.some(r => r.status !== 'covered') || report.checks.some(c => c.head !== context.stamp.head || c.exitCode !== 0 || c.error)) return;
 		return {report, text: renderReport(report), success: true, done: true, timedOut: false};
 	} catch {return;}

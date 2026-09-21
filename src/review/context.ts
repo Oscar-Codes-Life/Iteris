@@ -7,7 +7,7 @@ import {ticketBranch, type IterisConfig, type Ticket} from '../types.js';
 import {reviewSettings, type ReviewStamp, type Candidate} from './schema.js';
 import {runCommand} from './command.js';
 
-export const REVIEW_VERSION = 1;
+export const REVIEW_VERSION = 2;
 export const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 export function git(cwd: string, args: string[]): string {
 	return execFileSync('git', ['-c', 'core.hooksPath=/dev/null', ...args], {cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 15_000, maxBuffer: 8 * 1024 * 1024});

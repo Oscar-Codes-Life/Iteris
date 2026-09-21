@@ -162,3 +162,63 @@ test('unresolved findings survive a new review attempt and cannot vanish at the 
  delete process.env.REVIEW_SCENARIO;const result=await runCodeReview(f.options);
  assert.equal(result.report.outcome,'incomplete');assert.match(result.error,/without a new commit/);
 });
+
+for (const scenario of ['recover-evidence', 'recover-verifier', 'recover-unverified']) test(`${scenario}: host executes missing checks and re-reviews unchanged HEAD`, async t => {
+ const f = await fixture(t, {scenario}); f.cfg.review.maxRepairCycles = 2;
+ const head = f.git('rev-parse', 'HEAD');
+ const result = await runCodeReview(f.options);
+ assert.equal(result.report.outcome, 'passed', result.error);
+ assert.equal(result.report.repairs, 1); assert.equal(result.report.rounds, 2);
+ assert.equal(result.report.stamp.head, head);
+ assert.ok(result.report.checks.some(c => c.command === 'printf recovery-evidence' && c.output === 'recovery-evidence' && c.head === head));
+ const calls = await f.calls();
+ assert.equal(calls.filter(c => c.prompt.startsWith('ITERIS_RECOVER')).length, 1);
+ assert.ok(calls.some(c => c.prompt.startsWith('ITERIS_REVIEW verify') && c.prompt.includes('recovery-evidence')));
+ assert.equal((await runCodeReview(f.options)).report.outcome, 'passed');
+ assert.equal((await f.calls()).length, calls.length, 'completed recovery evidence should be reusable');
+});
+test('unavailable external evidence stops with an actionable reason', async t => {
+ const f = await fixture(t, {scenario:'external-gap'}); f.cfg.review.maxRepairCycles = 2;
+ const result = await runCodeReview(f.options);
+ assert.equal(result.report.outcome, 'incomplete'); assert.match(result.error, /Hosted credentials unavailable/);
+ assert.equal(result.report.repairs, 1); assert.equal(result.report.rounds, 1);
+});
+test('failed supplemental checks cannot pass and repeated gaps stop recovery', async t => {
+ const f = await fixture(t, {scenario:'recover-failed-check'}); f.cfg.review.maxRepairCycles = 2;
+ const result = await runCodeReview(f.options);
+ assert.equal(result.report.outcome, 'incomplete'); assert.equal(result.report.repairs, 1);
+ assert.ok(result.report.checks.some(c => c.command === 'exit 9' && c.exitCode === 9));
+});
+for (const scenario of ['recover-evidence', 'malformed', 'wrong-head']) test(`${scenario}: audit never recovers`, async t => {
+ const f = await fixture(t, {scenario}); f.cfg.review.maxRepairCycles = 2;
+ const result = await runCodeReview({...f.options, audit:true});
+ assert.equal(result.report.outcome, 'incomplete'); assert.equal(result.report.repairs, 0);
+ assert.ok(!(await f.calls()).some(c => c.prompt.startsWith('ITERIS_RECOVER')));
+});
+test('review prompt identifies inline policy and permits an absent policy', async t => {
+ const f = await fixture(t); await runCodeReview(f.options);
+ for (const call of await f.calls()) {
+  assert.match(call.prompt, /context\.policy/);
+  assert.match(call.prompt, /empty.*no repository-specific policy/i);
+ }
+});
+
+for (const scenario of ['malformed', 'wrong-head']) test(`${scenario}: normal review fails without recovery`, async t => {
+ const f = await fixture(t, {scenario}); f.cfg.review.maxRepairCycles = 2;
+ const result = await runCodeReview(f.options);
+ assert.equal(result.report.outcome, 'incomplete'); assert.equal(result.report.repairs, 0);
+ assert.ok(!(await f.calls()).some(c => c.prompt.startsWith('ITERIS_RECOVER')));
+});
+
+test('recovery repairs code and preserves confirmed blockers until independent resolution', async t => {
+ const f = await fixture(t, {scenario:'recover-with-blocker', content:'broken\n'}); f.cfg.review.maxRepairCycles = 2;
+ const head = f.git('rev-parse', 'HEAD');
+ const result = await runCodeReview(f.options);
+ assert.equal(result.report.outcome, 'passed', result.error);
+ assert.notEqual(result.report.stamp.head, head); assert.equal(result.report.repairs, 1);
+ assert.equal(result.report.findings[0].status, 'fixed');
+ assert.equal(result.report.findings[0].fixedAt, result.report.stamp.head);
+ assert.ok(result.report.checks.every(c => c.head === result.report.stamp.head));
+ const recovery = (await f.calls()).find(c => c.prompt.startsWith('ITERIS_RECOVER'));
+ assert.ok(JSON.parse(recovery.prompt.split('INPUT_JSON\n')[1]).findings.length > 0);
+});
