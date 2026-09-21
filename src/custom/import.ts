@@ -8,7 +8,7 @@ import {acquireRun} from '../state/active.js';
 import type {IterisConfig, Ticket, TicketStatus} from '../types.js';
 import {atPath, identifyItems, customSourceKey} from './identity.js';
 import {download, MAX_BYTES} from './http.js';
-import {httpUrl, customConfigSchema, draftSchema, taskSchema, manifestSchema, type Attachment} from './schema.js';
+import {httpUrl, customConfigSchema, draftSchema, taskSchema, manifestSchema, sourceIdentifierSchema, type Attachment} from './schema.js';
 
 const registrySchema = z.object({next: z.number().int().positive(), entries: z.record(z.object({number: z.number().int().positive(), fingerprint: z.string()}))});
 type Services = {fetcher?: typeof fetch; harness?: typeof runHarness; now?: () => Date; onProgress?: (message: string) => void};
@@ -133,7 +133,8 @@ export async function importCustom(config: IterisConfig, cwd: string, services: 
 			const previous = registry.entries[source.identity];
 			const number = previous?.number ?? registry.next++;
 			registry.entries[source.identity] = {number, fingerprint: source.fingerprint};
-			const task = {...normalized, identity: source.identity, fingerprint: source.fingerprint, number, file: `task${index + 1}.md`, attachments};
+			const identifier = sourceIdentifierSchema.safeParse(atPath(source.item, ['identifier']));
+			const task = {...normalized, identifier: identifier.success ? identifier.data : undefined, identity: source.identity, fingerprint: source.fingerprint, number, file: `task${index + 1}.md`, attachments};
 			tasks.push(task);
 			const markdown = [`# ${task.title}`, '', task.description, '', ...(task.sourceUrl ? [`Source: ${task.sourceUrl}`, ''] : []), `Labels: ${task.labels.join(', ') || '(none)'}`, '', '## Attachment analysis', '', task.analysis || '(none)', '', '## Attachments', '', ...attachments.map(a => `- ${a.name}${a.file ? ` ([local file](${a.file}))` : ''}${a.url ? ` — ${a.url}` : ''}${a.warning ? ` — Warning: ${a.warning}` : ''}`)].join('\n') + '\n';
 			await writeFile(path.join(staging, task.file), redact(markdown), {flag: 'wx', mode: 0o600});
@@ -154,7 +155,7 @@ export async function importCustom(config: IterisConfig, cwd: string, services: 
 		}
 		try {await rename(staging, directory);} catch (error) {await rm(directory, {recursive: true, force: true}); throw error;}
 		staging = undefined;
-		const tickets = await Promise.all(tasks.map(async task => ({number: task.number, title: task.title, body: await readFile(path.join(directory, task.file), 'utf8') + `\nTask file: ${path.join(directory, task.file)}\nResolve attachment paths relative to this task file.`, slug: `custom-${task.identity}`, labels: task.labels, htmlUrl: task.sourceUrl ?? '', custom: {identity: task.identity, fingerprint: task.fingerprint, taskFile: path.join(directory, task.file)}})));
+		const tickets = await Promise.all(tasks.map(async task => ({number: task.number, title: task.title, body: await readFile(path.join(directory, task.file), 'utf8') + `\nTask file: ${path.join(directory, task.file)}\nResolve attachment paths relative to this task file.`, slug: `custom-${task.identity}`, labels: task.labels, htmlUrl: task.sourceUrl ?? '', custom: {identifier: task.identifier, identity: task.identity, fingerprint: task.fingerprint, taskFile: path.join(directory, task.file)}})));
 		return {tickets, directory, duplicates: identified.duplicates};
 	} finally {
 		try {if (staging) await rm(staging, {recursive: true, force: true});}

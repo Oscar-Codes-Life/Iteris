@@ -9,7 +9,7 @@ import {importCustom, customStatuses, timestamp} from '../dist/custom/import.js'
 import {invocation, runHarness} from '../dist/harness/process.js';
 import {configSchema, atomicWriteConfig} from '../dist/config.js';
 import {createRunFolder, writeStatus} from '../dist/state/manager.js';
-import {ticketBranch} from '../dist/types.js';
+import {ticketBranch, ticketPrTitle} from '../dist/types.js';
 import {runAllTickets} from '../dist/agent/runner.js';
 import {temporary, environment, executable, config, fakeAgent, reviewRepository} from './helpers.mjs';
 const custom = {endpoint:'https://api.example.com/tasks', apiKeyEnv:'CUSTOM_TEST_KEY', itemsPath:''};
@@ -123,13 +123,13 @@ for(const harness of ['claude','codex'])test(`${harness} import invocation restr
  environment(t,{PATH:cwd});const result=await runHarness({config:c,phase:'import',prompt:'Convert',cwd,timeoutMs:5000,images:['/tmp/example.png']});assert.equal(JSON.parse(result.text).title,'safe');
 });
 test('custom full lifecycle creates a custom PR reference without issue actions',async t=>{
- const cwd=await fixture(t);const imported=await importCustom(cfg(),cwd,importer([{id:'task'}]));
+ const cwd=await fixture(t);const imported=await importCustom(cfg(),cwd,importer([{id:'task',identifier:'NAV-123'}]));
  await reviewRepository(t,cwd);await executable(cwd,'codex',fakeAgent);environment(t,{PATH:`${cwd}:${process.env.PATH}`,FAKE_IMPLEMENT:'1',FAKE_MODE:undefined,CAPTURE:path.join(cwd,'calls.jsonl')});
  const c=cfg();c.planMode=false;c.pr.addLabelOnOpen='review';await atomicWriteConfig(c,cwd);
- let body='';
- await runAllTickets(imported.tickets,c,cwd,{onStatusChange(){},onLogLine(){},onComplete(){},onFailure:async(_,s)=>assert.fail(s.failureReason)},undefined,{findPr:async()=>undefined,createPr:async(_config,input)=>{body=input.body;return {url:'https://example.com/pr',number:1};},addLabel:async()=>assert.fail('No issue labels'),moveCard:async()=>assert.fail('No Trello completion')});
+ let body='';let title='';
+ await runAllTickets(imported.tickets,c,cwd,{onStatusChange(){},onLogLine(){},onComplete(){},onFailure:async(_,s)=>assert.fail(s.failureReason)},undefined,{findPr:async()=>undefined,createPr:async(_config,input)=>{body=input.body;title=input.title;return {url:'https://example.com/pr',number:1};},addLabel:async()=>assert.fail('No issue labels'),moveCard:async()=>assert.fail('No Trello completion')});
  const calls=(await readFile(path.join(cwd,'calls.jsonl'),'utf8')).trim().split('\n').map(JSON.parse);
- assert.match(body,/Implements custom task:/);assert.ok(!body.includes('Closes #'));assert.ok(calls.some(c=>c.prompt.startsWith('Write a high-value pull request description')));
+ assert.equal(title,'NAV-123: Fix navigation');assert.match(body,/Implements custom task:/);assert.ok(!body.includes('Closes #'));assert.ok(calls.some(c=>c.prompt.startsWith('Write a high-value pull request description')));
  assert.equal((await customStatuses(cwd,imported.tickets)).get(imported.tickets[0].number),'done');
 });
 test('timestamp includes milliseconds and numeric timezone offset',()=>assert.match(timestamp(new Date()),/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}[+-]\d{4}$/));
@@ -160,4 +160,13 @@ test('streamed bytes count against the import budget even on oversized failures'
  let bytes=0;
  await assert.rejects(download(custom.endpoint,{endpoint:custom.endpoint,token:'x',maxBytes:1,onBytes:n=>{bytes+=n;},fetcher:async()=>new Response('123')}),/size limit/);
  assert.equal(bytes,3);
+});
+
+test('REST identifiers come from source data and handle missing or invalid values', async t => {
+ const cwd=await fixture(t);
+ const identifiers=[' NAV-123 ',0,42,undefined,'',{},false];
+ const result=await importCustom(cfg(),cwd,{...importer(identifiers.map((identifier,id)=>({id,identifier}))),harness:async()=>ok({...draft,identifier:'INVENTED-1'})});
+ assert.deepEqual(result.tickets.map(ticket=>ticket.custom.identifier),['NAV-123','0','42',undefined,undefined,undefined,undefined]);
+ assert.deepEqual(result.tickets.map(ticketPrTitle),['NAV-123: Fix navigation','0: Fix navigation','42: Fix navigation',...Array(4).fill('Fix navigation')]);
+ assert.equal(ticketPrTitle({title:'Existing GitHub or Trello title'}),'Existing GitHub or Trello title');
 });

@@ -1,4 +1,4 @@
-import {ticketBranch} from '../types.js';
+import {ticketBranch, ticketPrTitle} from '../types.js';
 import {writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import type {IterisConfig, Ticket, TicketState} from '../types.js';
@@ -115,7 +115,7 @@ async function runSingleTicket(ticket: Ticket, config: IterisConfig, cwd: string
 				throw new Error(`PR description: ${described.error ?? 'Harness produced no description'}`);
 			}
 			await assertPublished(reviewedContext, config, cwd, signal);
-			pr = await services.createPr(config, {branch: state.branch, title: ticket.title, body: described.text});
+			pr = await services.createPr(config, {branch: state.branch, title: ticketPrTitle(ticket), body: described.text});
 			log(`[iteris] Created PR ${pr.url}`);
 		} else {
 			await assertPublished(reviewedContext, config, cwd, signal);

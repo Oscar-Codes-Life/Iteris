@@ -1,7 +1,7 @@
 export type TicketStatus = 'pending' | 'planning' | 'summarizing' | 'running' | 'reviewing' | 'creating-pr' | 'done' | 'stale' | 'failed' | 'blocked' | 'incomplete';
 
 export type Ticket = {
-	custom?: {identity: string; fingerprint: string; taskFile: string; changed?: boolean};
+	custom?: {identifier?: string; identity: string; fingerprint: string; taskFile: string; changed?: boolean};
 	number: number;
 	title: string;
 	body: string;
@@ -58,4 +58,8 @@ export type IterisConfig = {
 
 export function ticketBranch(ticket: Ticket): string {
 	return ticket.custom ? `iteris/custom-${ticket.custom.identity}` : `iteris/${ticket.number}-${ticket.slug}`;
+}
+
+export function ticketPrTitle(ticket: Ticket): string {
+	return ticket.custom?.identifier ? `${ticket.custom.identifier}: ${ticket.title}` : ticket.title;
 }

@@ -25,7 +25,9 @@ export const attachmentSchema = z.object({
 	url: httpUrl.optional(), name: z.string(), file: z.string().optional(),
 	kind: z.enum(['text', 'image']).optional(), warning: z.string().optional(),
 });
+export const sourceIdentifierSchema = z.union([z.string().trim().min(1), z.number().int().safe().transform(String)]);
 export const importedTaskSchema = taskSchema.extend({
+	identifier: sourceIdentifierSchema.optional(),
 	identity: z.string(), fingerprint: z.string(), number: z.number().int().positive(),
 	file: z.string(), attachments: z.array(attachmentSchema),
 });

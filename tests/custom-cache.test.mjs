@@ -15,7 +15,7 @@ async function fixture(t) {
  environment(t, {CACHE_TEST_KEY: 'fake-cache-key'});
  let fetches = 0, conversions = 0;
  const services = {
-  fetcher: async () => {fetches++; return Response.json([{id: 1, title: 'Original'}]);},
+  fetcher: async () => {fetches++; return Response.json([{id: 1, identifier: 'NAV-123', title: 'Original'}]);},
   harness: async () => {conversions++; return {success: true, done: false, timedOut: false, text: JSON.stringify({title: 'Converted', description: 'Task body', attachments: []})};},
  };
  return {cwd, services, counts: () => [fetches, conversions]};
@@ -29,6 +29,7 @@ test('restart reuses valid downloaded tasks without a key, HTTP, or harness call
  assert.equal(second.cached, true);
  assert.equal(second.directory, first.directory);
  assert.deepEqual(second.tickets, first.tickets);
+ assert.equal(second.tickets[0].custom.identifier, 'NAV-123');
  assert.deepEqual(f.counts(), [1, 1]);
  const task = second.tickets[0];
  const folder = await createRunFolder(f.cwd, task);
@@ -65,12 +66,14 @@ test('legacy downloads require one confirmation, then reuse automatically', asyn
  const file = path.join(first.directory, 'manifest.json');
  const manifest = JSON.parse(await readFile(file, 'utf8'));
  delete manifest.sourceKey;
+ delete manifest.tasks[0].identifier;
  await writeFile(file, JSON.stringify(manifest));
  let confirmed = 0;
  const loaded = await loadCustomTasks(cfg(), f.cwd, {...offline, useLegacy: async (dir, count) => {
   confirmed++; assert.equal(dir, first.directory); assert.equal(count, 1); return true;
  }});
  assert.equal(loaded.cached, true);
+ assert.equal(loaded.tickets[0].custom.identifier, undefined);
  await loadCustomTasks(cfg(), f.cwd, {...offline, useLegacy: async () => assert.fail('already confirmed')});
  assert.equal(confirmed, 1);
 });
