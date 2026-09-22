@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {readFile, writeFile} from 'node:fs/promises';
+import {mkdir, readFile, writeFile, readdir, rm} from 'node:fs/promises';
 import path from 'node:path';
 import {runCodeReview} from '../dist/agent/reviewer.js';
 import {captureContext, assertPublished} from '../dist/review/context.js';
@@ -134,6 +134,7 @@ test('existing PR receives updated review evidence without regenerating its desc
 });
 test('a restarted queue reuses verified evidence and skips implementation',async t=>{
  const f=await fixture(t);await atomicWriteConfig(f.cfg,f.cwd);
+ await mkdir(f.options.folder, {recursive:true}); await writeFile(path.join(f.options.folder,'plan.md'),f.options.plan);
  assert.equal((await runCodeReview(f.options)).report.outcome,'passed');
  await runAllTickets([ticket],f.cfg,f.cwd,{onStatusChange(){},onLogLine(){},onComplete(){},onFailure:async(_,s)=>assert.fail(s.failureReason)},undefined,{findPr:async()=>({url:'https://example.com/pr',number:9}),createPr:async()=>assert.fail('must reuse PR'),addLabel:async()=>{},moveCard:async()=>{}});
  const calls=await f.calls();assert.equal(calls.filter(c=>c.prompt.startsWith('ITERIS_REVIEW')).length,3);assert.equal(calls.some(c=>c.prompt.startsWith('You are an autonomous')),false);
@@ -221,4 +222,118 @@ test('recovery repairs code and preserves confirmed blockers until independent r
  assert.ok(result.report.checks.every(c => c.head === result.report.stamp.head));
  const recovery = (await f.calls()).find(c => c.prompt.startsWith('ITERIS_RECOVER'));
  assert.ok(JSON.parse(recovery.prompt.split('INPUT_JSON\n')[1]).findings.length > 0);
+});
+
+test('risk investigation starts with the other reviewers instead of waiting behind them', async t => {
+ const f = await fixture(t); f.cfg.review.mode = 'deep'; f.cfg.review.timeout = 2;
+ environment(t, {REVIEW_WAIT_FOR_RISK:'1'});
+ const result = await runCodeReview(f.options);
+ assert.equal(result.report.outcome, 'passed', result.error);
+ assert.equal((await f.calls()).filter(c=>c.prompt.startsWith('ITERIS_REVIEW risk')).length, 1);
+});
+
+test('investigation cannot consume the verification or repair time allowance', async t => {
+ const f = await fixture(t, {content:'broken\n'}); f.cfg.review.timeout = 1.5; f.cfg.review.maxRepairCycles = 1;
+ environment(t, {REVIEW_DELAYS:JSON.stringify({correctness:850,maintainability:850,verify:850,ITERIS_REPAIR:850})});
+ const result = await runCodeReview(f.options);
+ assert.equal(result.report.outcome, 'passed', result.error);
+ assert.equal(result.report.repairs, 1);
+ assert.equal(result.report.findings[0].status, 'fixed');
+});
+
+test('retry resumes completed investigators after a risk timeout on the same inputs', async t => {
+ const f = await fixture(t); f.cfg.review.mode = 'deep'; f.cfg.review.timeout = 1.5;
+ environment(t, {REVIEW_HANG_PHASE:'risk'});
+ const first = await runCodeReview(f.options);
+ assert.equal(first.report.outcome, 'incomplete'); assert.equal(first.timedOut, true);
+ delete process.env.REVIEW_HANG_PHASE;
+ const retry = await runCodeReview(f.options);
+ assert.equal(retry.report.outcome, 'passed', retry.error);
+ const calls = await f.calls();
+ for (const lens of ['correctness','maintainability']) assert.equal(calls.filter(c=>c.prompt.startsWith('ITERIS_REVIEW '+lens)).length, 1, lens+' was repeated');
+ assert.equal(calls.filter(c=>c.prompt.startsWith('ITERIS_REVIEW risk')).length, 2);
+});
+
+for (const change of ['commit','base','ticket','plan','model','checks']) test(`partial review checkpoints invalidate after changed ${change}`, async t => {
+ const f = await fixture(t);
+ environment(t, {REVIEW_FAIL_PHASE:'verify'});
+ assert.equal((await runCodeReview(f.options)).report.outcome, 'incomplete');
+ delete process.env.REVIEW_FAIL_PHASE;
+ if (change === 'commit') f.git('commit','--allow-empty','-qm','new commit');
+ if (change === 'base') {
+  f.git('checkout','main'); f.git('commit','--allow-empty','-qm','new base'); f.git('push','-q','origin','main'); f.git('checkout','iteris/1-feature');
+ }
+ if (change === 'ticket') f.options.ticket = {...ticket,body:ticket.body+' Another acceptance criterion.'};
+ if (change === 'plan') f.options.plan += ' Revised validation plan.';
+ if (change === 'model') f.cfg.harnesses.codex.model = 'another-model';
+ if (change === 'checks') f.cfg.qualityChecks = ['printf new-evidence'];
+ const retry = await runCodeReview(f.options);
+ assert.equal(retry.report.outcome, 'passed', retry.error);
+ assert.equal((await f.calls()).filter(c=>c.prompt.startsWith('ITERIS_REVIEW correctness')).length, 2);
+});
+
+test('retry reuses successful host checks but audit always runs fresh checks and reviewers', async t => {
+ const f = await fixture(t); f.cfg.qualityChecks = ['printf x >> .iteris/check-count'];
+ environment(t, {REVIEW_FAIL_PHASE:'verify'});
+ assert.equal((await runCodeReview(f.options)).report.outcome, 'incomplete');
+ assert.equal((await runCodeReview(f.options)).report.outcome, 'incomplete');
+ assert.equal(await readFile(path.join(f.cwd,'.iteris/check-count'),'utf8'), 'x');
+ assert.equal((await f.calls()).filter(c=>c.prompt.startsWith('ITERIS_REVIEW correctness')).length, 1);
+ delete process.env.REVIEW_FAIL_PHASE;
+ assert.equal((await runCodeReview({...f.options,audit:true})).report.outcome, 'passed');
+ assert.equal(await readFile(path.join(f.cwd,'.iteris/check-count'),'utf8'), 'xx');
+ assert.equal((await f.calls()).filter(c=>c.prompt.startsWith('ITERIS_REVIEW correctness')).length, 2);
+});
+
+test('corrupt investigation checkpoints are regenerated instead of trusted', async t => {
+ const f = await fixture(t); environment(t, {REVIEW_FAIL_PHASE:'verify'});
+ assert.equal((await runCodeReview(f.options)).report.outcome, 'incomplete');
+ const checkpoints = path.join(f.options.folder,'review/checkpoints');
+ for (const file of await readdir(checkpoints)) {
+  const full = path.join(checkpoints,file), stored = JSON.parse(await readFile(full,'utf8'));
+  if (stored.value.inspectedFiles) {stored.value.head = 'wrong-commit'; await writeFile(full,JSON.stringify(stored));}
+ }
+ delete process.env.REVIEW_FAIL_PHASE;
+ assert.equal((await runCodeReview(f.options)).report.outcome, 'passed');
+ assert.equal((await f.calls()).filter(c=>c.prompt.startsWith('ITERIS_REVIEW correctness')).length, 2);
+});
+
+test('supplemental recovery checks survive an interrupted review and a new attempt', async t => {
+ const f = await fixture(t, {scenario:'recover-evidence'}); f.cfg.review.maxRepairCycles = 2;
+ environment(t, {REVIEW_FAIL_PHASE:'verify'});
+ assert.equal((await runCodeReview(f.options)).report.outcome, 'incomplete');
+ delete process.env.REVIEW_FAIL_PHASE;
+ const retry = await runCodeReview(f.options);
+ assert.equal(retry.report.outcome, 'passed', retry.error);
+ assert.equal(retry.report.repairs, 0);
+ assert.ok(retry.report.checks.some(c=>c.command === 'printf recovery-evidence' && c.exitCode === 0));
+ assert.equal((await f.calls()).filter(c=>c.prompt.startsWith('ITERIS_RECOVER')).length, 1);
+});
+
+test('failed host checks are executed again after interruption and invalidate old investigation evidence', async t => {
+ const f = await fixture(t); f.cfg.qualityChecks = ['test -f .iteris/ready'];
+ environment(t, {REVIEW_FAIL_PHASE:'verify'});
+ assert.equal((await runCodeReview(f.options)).report.checks[0].exitCode, 1);
+ await writeFile(path.join(f.cwd,'.iteris/ready'), 'ready'); delete process.env.REVIEW_FAIL_PHASE;
+ const retry = await runCodeReview(f.options);
+ assert.equal(retry.report.outcome, 'passed', retry.error);
+ assert.equal(retry.report.checks[0].exitCode, 0);
+ assert.equal((await f.calls()).filter(c=>c.prompt.startsWith('ITERIS_REVIEW correctness')).length, 2);
+});
+
+test('investigation checkpoints survive a crash without a final report', async t => {
+ const f = await fixture(t); environment(t, {REVIEW_FAIL_PHASE:'verify'});
+ assert.equal((await runCodeReview(f.options)).report.outcome, 'incomplete');
+ await rm(path.join(f.options.folder,'review/result.json')); delete process.env.REVIEW_FAIL_PHASE;
+ assert.equal((await runCodeReview(f.options)).report.outcome, 'passed');
+ assert.equal((await f.calls()).filter(c=>c.prompt.startsWith('ITERIS_REVIEW correctness')).length, 1);
+});
+
+test('invalid finding locations are not checkpointed and cannot trap later retries', async t => {
+ const f = await fixture(t, {scenario:'invalid-location',content:'broken\n'});
+ const first = await runCodeReview(f.options);
+ assert.equal(first.report.outcome, 'incomplete'); assert.match(first.error, /Invalid finding line/);
+ delete process.env.REVIEW_SCENARIO;
+ assert.equal((await runCodeReview(f.options)).report.outcome, 'blocked');
+ assert.equal((await f.calls()).filter(c=>c.prompt.startsWith('ITERIS_REVIEW correctness')).length, 2);
 });

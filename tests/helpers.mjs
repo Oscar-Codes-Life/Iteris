@@ -31,8 +31,15 @@ if (args[0] === 'app-server') {
  });
 } else {
  let prompt=''; process.stdin.on('data', chunk => prompt+=chunk);
- process.stdin.on('end', () => {
+ process.stdin.on('end', async () => {
   if (process.env.CAPTURE) fs.appendFileSync(process.env.CAPTURE,JSON.stringify({harness,args,prompt})+'\\n');
+  const reviewPhase = prompt.startsWith('ITERIS_REVIEW') ? prompt.split('\\n')[0].split(' ')[1] : prompt.split('\\n')[0];
+  if (process.env.REVIEW_HANG_PHASE === reviewPhase) {setInterval(()=>{},1000); return;}
+  if (process.env.REVIEW_WAIT_FOR_RISK === '1' && ['correctness','maintainability'].includes(reviewPhase)) {
+   while (!fs.readFileSync(process.env.CAPTURE,'utf8').includes('ITERIS_REVIEW risk')) await new Promise(resolve=>setTimeout(resolve,10));
+  }
+  const delay = JSON.parse(process.env.REVIEW_DELAYS || '{}')[reviewPhase];
+  if (delay) await new Promise(resolve=>setTimeout(resolve,delay));
   const mode=process.env.FAKE_MODE;
   if(mode==='hang') {setInterval(()=>{},1000); return;}
   if (process.env.FAKE_IMPLEMENT === '1' && prompt.startsWith('You are an autonomous') && mode !== 'fail') {
@@ -51,6 +58,7 @@ if (args[0] === 'app-server') {
    const needsEvidence=['recover-evidence','recover-verifier','recover-unverified','recover-with-blocker','recover-failed-check','external-gap'].includes(scenario) && !input.checks.some(c=>c.command==='printf recovery-evidence' && c.exitCode===0);
    if(['recover-unverified','recover-with-blocker'].includes(scenario) && needsEvidence) requirement.status='unverified';
    const finding={category:'correctness',priority:scenario==='advisory'?'medium':'high',file:'feature.txt',line:1,side:'new',title:scenario==='moving-blocker'?context.stamp.head:'Broken behavior',trigger:'Call feature',expected:'fixed',actual:'broken',impact:'Wrong result',evidence:'feature.txt returns broken',remedy:'Return fixed',materialRegression:false,policyRule:''};
+   if (scenario==='invalid-location') finding.line = 99999;
    if (prompt.startsWith('ITERIS_REVIEW verify')) {
     text=JSON.stringify({head:context.stamp.head,complete:!(scenario==='recover-verifier' && needsEvidence),gaps:scenario==='recover-verifier' && needsEvidence?['Recovery tests were not run']:[],requirements:[requirement],decisions:scenario==='omit-decision'?[]:input.candidates.map(f=>({id:f.id,status:scenario==='false-positive'?'rejected':'confirmed',evidence:'Independent causal trace'})),resolved:scenario==='missing-resolution'?[]:input.previousBlockers.filter(f=>!input.candidates.some(c=>c.id===f.id)).map(f=>({id:f.id,evidence:'feature.txt now returns fixed'}))});
    } else {
@@ -73,7 +81,7 @@ if (args[0] === 'app-server') {
   if(mode==='tool') event=harness==='codex'?{type:'item.completed',item:{type:'command_execution',aggregated_output:'<task>done</task>'}}:{type:'user',message:{content:[{type:'tool_result',content:'<task>done</task>'}]}};
   const output=mode==='malformed'?'not json':JSON.stringify(event);
   process.stdout.write(output.slice(0,7));
-  setTimeout(()=>{process.stdout.write(output.slice(7)); if(mode==='fail')process.exitCode=2;},5);
+  setTimeout(()=>{process.stdout.write(output.slice(7)); if(mode==='fail' || process.env.REVIEW_FAIL_PHASE === reviewPhase)process.exitCode=2;},5);
  });
 }
 `;

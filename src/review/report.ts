@@ -12,6 +12,20 @@ export async function saveJson(file: string, value: unknown): Promise<void> {
 	await writeFile(temporary, redact(JSON.stringify(value, null, 2)) + '\n', {mode: 0o600});
 	await rename(temporary, file);
 }
+
+/** Checkpoints are host-owned evidence, always validated against an exact input key. */
+export async function loadCheckpoint<T>(directory: string, key: string, schema: z.ZodType<T>): Promise<T | undefined> {
+	try {
+		const stored = JSON.parse(await readFile(path.join(directory, 'checkpoints', `${key}.json`), 'utf8')) as {key?: string; value?: unknown};
+		if (stored.key === key) return schema.parse(stored.value);
+	} catch { /* Missing, interrupted, or incompatible evidence must be regenerated. */ }
+	return;
+}
+export async function saveCheckpoint(directory: string, key: string, value: unknown): Promise<void> {
+	await saveJson(path.join(directory, 'checkpoints', `${key}.json`), {key, value});
+}
+
+export const checksSchema = z.array(z.object({command: z.string(), head: z.string(), exitCode: z.number().nullable(), output: z.string(), durationMs: z.number(), error: z.string().optional(), truncated: z.boolean()}));
 const inline = (value: string) => value.replace(/[\r\n]+/g, ' ').replaceAll('`', "'").replace(/[<>]/g, '');
 export function renderReport(report: ReviewReport): string {
 	return [
@@ -62,6 +76,6 @@ const storedReportSchema = z.object({
 	startedAt: z.string().datetime(), finishedAt: z.string().datetime(), rounds: z.number().int().positive(), repairs: z.number().int().nonnegative(),
 	findings: z.array(candidateSchema.extend({id: z.string(), head: z.string(), status: z.enum(['candidate', 'confirmed', 'rejected', 'fixed']), verification: z.string().optional(), fixedAt: z.string().optional(), duplicateOf: z.string().optional()})),
 	requirements: verificationSchema.shape.requirements,
-	checks: z.array(z.object({command: z.string(), head: z.string(), exitCode: z.number().nullable(), output: z.string(), durationMs: z.number(), error: z.string().optional(), truncated: z.boolean()})),
+	checks: checksSchema,
 	gaps: z.array(z.string()), mode: z.enum(['standard', 'deep']), selection: z.object({harness: z.string(), model: z.string().optional(), effort: z.string().optional()}), usage: z.literal('unavailable'),
 });

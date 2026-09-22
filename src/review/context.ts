@@ -7,7 +7,7 @@ import {ticketBranch, type IterisConfig, type Ticket} from '../types.js';
 import {reviewSettings, type ReviewStamp, type Candidate} from './schema.js';
 import {runCommand} from './command.js';
 
-export const REVIEW_VERSION = 2;
+export const REVIEW_VERSION = 3;
 export const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 export function git(cwd: string, args: string[]): string {
 	return execFileSync('git', ['-c', 'core.hooksPath=/dev/null', ...args], {cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 15_000, maxBuffer: 8 * 1024 * 1024});
@@ -42,7 +42,7 @@ export function captureContext(ticket: Ticket, config: IterisConfig, cwd: string
 	}
 	if (policy.length > 40_000) throw new Error('REVIEW.md is too large (40,000 characters maximum).');
 	const risk = changedFiles.filter(file => /auth|credential|secret|token|migrat|schema|harness|process|permission|concurr|(^|\/)types\./i.test(file));
-	const scope = digest({version: REVIEW_VERSION, base, branch, ticket, policy, checks: config.qualityChecks, review: reviewSettings(config.review), harness: config.harness, settings: config.harnesses[config.harness], repo: config.repo, provider: config.provider});
+	const scope = digest({version: REVIEW_VERSION, base, branch, ticket, plan, policy, checks: config.qualityChecks, review: reviewSettings(config.review), harness: config.harness, settings: config.harnesses[config.harness], repo: config.repo, provider: config.provider});
 	const key = digest({scope, head, mergeBase});
 	return {stamp: {head, base, mergeBase, branch, scope, key}, ticket, plan, policy, checks: config.qualityChecks, changedFiles, diff, risk};
 }
