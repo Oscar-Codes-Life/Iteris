@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import {atomicWriteConfig, loadConfig} from '../dist/config.js';
 import {runHarness, invocation, decodeEvent} from '../dist/harness/process.js';
-import {listModels, claudeModels} from '../dist/harness/models.js';
+import {listModels, validateSelection, claudeModels} from '../dist/harness/models.js';
 import {setHarness,setModel,setEffort} from '../dist/harness/settings.js';
 import {temporary,environment,executable,config,fakeAgent} from './helpers.mjs';
 
@@ -14,6 +14,30 @@ test('discovers paginated models and restores per-harness settings',async t=>{
  assert.equal((await loadConfig(cwd)).harnesses.claude.effort,'xhigh');
  const restored=await setHarness('codex',cwd);assert.equal(restored.harnesses.codex.model,'second-model');assert.equal(restored.harnesses.codex.effort,'low');
  await assert.rejects(setEffort('ultra',cwd)); await assert.rejects(setModel('unknown',cwd));
+});
+test('new Codex models can be selected with their advertised effort and passed to every phase',async t=>{
+ const cwd=await temporary(t);
+ await executable(cwd,'codex',`
+const readline=require('node:readline');
+readline.createInterface({input:process.stdin}).on('line',line=>{
+ const request=JSON.parse(line);
+ if(!request.id)return;
+ if(request.method==='initialize')return console.log(JSON.stringify({id:request.id,result:{}}));
+ console.log(JSON.stringify({id:request.id,result:{data:[{model:'gpt-6-sol',displayName:'GPT-6 Sol',supportedReasoningEfforts:[{reasoningEffort:'low'},{reasoningEffort:'medium'},{reasoningEffort:'high'},{reasoningEffort:'xhigh'},{reasoningEffort:'max'},{reasoningEffort:'ultra'}],defaultReasoningEffort:'medium',isDefault:true}],nextCursor:null}}));
+});`);
+ environment(t,{PATH:cwd});
+ const initial=config('codex');initial.harnesses.codex.effort='none';
+ await atomicWriteConfig(initial,cwd);
+ const selected=await setModel('gpt-6-sol',cwd);
+ assert.equal(selected.harnesses.codex.effort,'medium');
+ await validateSelection(selected);
+ for(const phase of ['planning','implementation','review','repair','pr-description','summary','import']) {
+  const {args}=invocation(selected,phase);
+  assert.equal(args[args.indexOf('--model')+1],'gpt-6-sol');
+  assert.ok(args.includes('model_reasoning_effort="medium"'));
+ }
+ const deeper=await setEffort('ultra',cwd);
+ assert.equal(deeper.harnesses.codex.effort,'ultra');
 });
 test('Claude model change resets unsupported effort and removes effort on Haiku',async t=>{
  const cwd=await temporary(t);await atomicWriteConfig(config(),cwd);

@@ -55,6 +55,8 @@ Omit the argument to open a picker. Type `/` in the live UI to enter a command; 
 
 Each harness remembers its own model and effort. Model changes retain compatible effort settings; otherwise they use the selected model's advertised default. Codex models and effort identifiers come from the installed CLI's paginated `model/list` catalog, not a fixed OpenAI API list. Claude's model capability catalog follows [Anthropic's model configuration documentation](https://code.claude.com/docs/en/model-config).
 
+To use [GPT-6 Sol](https://developers.openai.com/api/docs/models/gpt-6-sol) with Codex, run `iteris harness codex` and then `iteris model gpt-6-sol`. Iteris selects the model's advertised default effort unless your current effort is also supported; use `iteris effort medium` to set medium explicitly. New Codex models appear as they become available in the installed CLI's catalog for your account.
+
 Changes are saved immediately and apply to the **next ticket**. An active ticket uses the same selection through planning, implementation, review, PR description, summary, and retries. A switch to a missing Codex installation is saved for setup at the next ticket boundary. External harness/model/effort commands also defer installation and updates while a queue is running in the same repository. Externally edited execution settings are read at each boundary; invalid settings pause the queue. Correct the JSON and retry, or cancel the queue and use the terminal commands to repair selections.
 
 ## Configuration and migration
