@@ -34,11 +34,11 @@ export function verificationPrompt(context: ReviewContext, checks: CheckResult[]
 	return `ITERIS_REVIEW verify\n${rules}
 Attempt to disprove every candidate. Inspect guards/callers and supplied check evidence independently. Confirm only a concrete regression or explicit requirement/policy violation.
 Also independently check ticket acceptance, including requirements omitted by investigators. Include all requiredRequirements and requirement strings from the correctness pass verbatim, plus any omissions you discover. These persist across repair rounds.
-Return one decision for every candidate ID, and no other IDs. A duplicate must reference a confirmed canonical candidate in this report; evidence must explain the shared defect. Never reject a valid finding just because only one reviewer saw it.
+Return one decision for every candidate ID, and no other IDs. Status must be confirmed, rejected, or duplicate. A duplicate must set duplicateOf to the ID of a confirmed canonical candidate in this report; evidence must explain the shared defect. Never reject a valid finding just because only one reviewer saw it.
 For previous blockers, list resolved IDs only when the final code demonstrably fixes them, with evidence. An unresolved previous blocker must appear as a confirmed candidate with its existing ID. Absence from a new review is not evidence of resolution.
 All findings and decisions apply to the supplied current HEAD. Do not accept risk or waive required checks. Return complete=false if evidence is insufficient.
 JSON shape:
-${JSON.stringify({head: context.stamp.head, complete: true, gaps: [], requirements: [{requirement: 'Requested outcome', status: 'covered', evidence: 'Independent evidence'}], decisions: [{id: 'candidate ID', status: 'confirmed', evidence: 'Verification trace'}], resolved: [{id: 'previous blocker ID', evidence: 'How this commit fixes it'}]})}
+${JSON.stringify({head: context.stamp.head, complete: true, gaps: [], requirements: [{requirement: 'Requested outcome', status: 'covered', evidence: 'Independent evidence'}], decisions: [{id: 'canonical candidate ID', status: 'confirmed', evidence: 'Verification trace'}, {id: 'duplicate candidate ID', status: 'duplicate', duplicateOf: 'canonical candidate ID', evidence: 'Same defect and causal path'}], resolved: [{id: 'previous blocker ID', evidence: 'How this commit fixes it'}]})}
 INPUT_JSON\n${JSON.stringify({context, checks, passes, candidates, previousBlockers, requiredRequirements})}`;
 }
 

@@ -153,8 +153,15 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 				if ([...requiredRequirements].some(req => !verification.requirements.some(v => v.requirement === req))) throw new Error('Verifier omitted an acceptance requirement.');
 				for (const decision of verification.decisions) {
 					const finding = candidates.find(f => f.id === decision.id)!;
-					if (decision.duplicateOf && (decision.status !== 'confirmed' || decision.duplicateOf === decision.id || !verification.decisions.some(d => d.id === decision.duplicateOf && d.status === 'confirmed' && !d.duplicateOf))) throw new Error('Invalid duplicate finding reference.');
-					Object.assign(finding, {status: decision.status, verification: decision.evidence, duplicateOf: decision.duplicateOf});
+					let duplicateOf = decision.duplicateOf;
+					if (decision.status === 'duplicate' && !duplicateOf) {
+						const referenced = verification.decisions.filter(other => other.id !== decision.id && other.status === 'confirmed' && decision.evidence.includes(other.id));
+						if (referenced.length === 1) duplicateOf = referenced[0]!.id;
+					}
+					if (decision.status === 'duplicate' && !duplicateOf) throw new Error(`Duplicate finding ${decision.id} must identify one confirmed canonical candidate in duplicateOf or evidence.`);
+					if (decision.status === 'rejected' && duplicateOf) throw new Error('Rejected decisions cannot reference a canonical finding.');
+					if (duplicateOf && (duplicateOf === decision.id || !verification.decisions.some(d => d.id === duplicateOf && d.status === 'confirmed' && !d.duplicateOf))) throw new Error('Invalid duplicate finding reference.');
+					Object.assign(finding, {status: decision.status === 'duplicate' ? 'confirmed' : decision.status, verification: decision.evidence, duplicateOf});
 				}
 				for (const finding of candidates) {
 					if (finding.duplicateOf && blocks({...finding, duplicateOf: undefined}) && !blocks(candidates.find(f => f.id === finding.duplicateOf)!)) throw new Error('Deduplication cannot downgrade a blocking finding.');

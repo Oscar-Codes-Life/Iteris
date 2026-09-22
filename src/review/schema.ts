@@ -27,7 +27,7 @@ export const passSchema = z.object({
 export type ReviewPass = z.infer<typeof passSchema>;
 export const verificationSchema = z.object({
 	head: text, complete: z.boolean(), gaps: z.array(text), requirements: z.array(requirement).min(1),
-	decisions: z.array(z.object({id: text, status: z.enum(['confirmed', 'rejected']), evidence: text, duplicateOf: z.string().optional()}).strict()),
+	decisions: z.array(z.object({id: text, status: z.enum(['confirmed', 'rejected', 'duplicate']), evidence: text, duplicateOf: z.string().optional()}).strict()),
 	resolved: z.array(z.object({id: text, evidence: text}).strict()),
 }).strict();
 export type Verification = z.infer<typeof verificationSchema>;

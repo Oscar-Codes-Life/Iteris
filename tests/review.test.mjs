@@ -337,3 +337,21 @@ test('invalid finding locations are not checkpointed and cannot trap later retri
  assert.equal((await runCodeReview(f.options)).report.outcome, 'blocked');
  assert.equal((await f.calls()).filter(c=>c.prompt.startsWith('ITERIS_REVIEW correctness')).length, 2);
 });
+
+test('verifier duplicate status maps to a non-blocking canonical reference', async t => {
+ const f = await fixture(t, {scenario:'duplicate-status'});
+ const result = await runCodeReview(f.options);
+ assert.equal(result.report.outcome, 'blocked', result.error);
+ const confirmed = result.report.findings.filter(item=>item.status === 'confirmed');
+ assert.equal(confirmed.length, 2);
+ assert.equal(confirmed.filter(item=>!item.duplicateOf).length, 1);
+ assert.equal(confirmed.find(item=>item.duplicateOf)?.duplicateOf, confirmed.find(item=>!item.duplicateOf)?.id);
+ assert.equal(result.error, '1 blocking findings, 0 missing requirements, 0 failed checks.');
+});
+
+test('ambiguous duplicate status fails closed', async t => {
+ const f = await fixture(t, {scenario:'duplicate-status-ambiguous'});
+ const result = await runCodeReview(f.options);
+ assert.equal(result.report.outcome, 'incomplete');
+ assert.match(result.error, /must identify one confirmed canonical candidate/);
+});
