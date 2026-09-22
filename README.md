@@ -21,9 +21,9 @@ Choose either harness:
 
 GitHub credentials are resolved from `GH_TOKEN`, then `GITHUB_TOKEN`, then `gh auth token`. If missing, setup launches GitHub CLI browser login. Credentials stay out of `.iteris.json`; GitHub CLI manages their storage and may fall back to a plaintext user file if its credential store is unavailable. See [GitHub CLI authentication](https://cli.github.com/manual/gh_auth_login).
 
-GitHub Projects access and repository permissions must allow reading project items/issues, writing repository content, and opening pull requests. Trello additionally requires `TRELLO_API_KEY` and `TRELLO_TOKEN`; its existing credential wizard remains available. GitHub authentication is required with either source because Iteris ships PRs to GitHub.
+GitHub Projects access and repository permissions must allow reading project items/issues, writing repository content, and opening pull requests. Trello additionally requires `TRELLO_API_KEY` and `TRELLO_TOKEN`; its existing credential wizard remains available. GitHub authentication is required for every ticket source because Iteris ships PRs to GitHub.
 
-## Setup and usage
+## Quick start
 
 ```bash
 cd your-repository
@@ -36,28 +36,56 @@ First run follows this order:
 2. Choose a model.
 3. Choose a supported effort level. Models without configurable effort show **Not supported**.
 4. Authenticate with GitHub, if needed.
-5. Choose GitHub or Trello, then the project or board/list as needed. If no GitHub Projects are visible, Iteris shows open repository issues instead.
+5. Choose GitHub, Trello, or a Custom REST endpoint, then the project, board/list, or endpoint settings as needed. If no GitHub Projects are visible, Iteris shows open repository issues instead.
 6. Select tickets and watch the active ticket, phase, harness, model, effort, and logs.
 
-Subsequent launches reuse project settings and proceed to ticket selection after prerequisite checks. `iteris setup` repeats harness/model/effort, authentication, and source setup, then exits without running tickets. Project/board and ticket selection happen when you next run `iteris`.
+Subsequent launches reuse project settings and proceed to ticket selection after prerequisite checks. To revisit your harness, model, effort, or ticket source, run `iteris setup`; it repeats setup, checks authentication, and exits without running tickets. Project/board and ticket selection happen when you next run `iteris`.
 
 If a Codex update fails, the UI offers retry or another harness. Explicit continuation is available only when the installed CLI supports the required execution capabilities; model discovery and authentication must still succeed. No updates run during an active ticket.
 
-## Change harness, model, or effort
+## Command reference
 
-| Terminal command | Command inside the live UI |
+Run these from the root of the target Git repository. Iteris reads `.iteris.json` from the current directory and creates it on first run.
+
+| Command | What it does |
 | --- | --- |
-| `iteris harness [claude\|codex]` | `/harness [claude\|codex]` |
-| `iteris model [model-id]` | `/model [model-id]` |
-| `iteris effort [level]` | `/effort [level]` |
+| `iteris` | Load the configured ticket source, choose tickets, and run the branch → review → PR workflow. |
+| `iteris setup` | Reconfigure the harness, model, effort, authentication, and ticket source without running tickets. |
+| `iteris harness [claude\|codex]` | Switch harness; omit the argument for a picker. |
+| `iteris model [model-id]` | Switch model; omit the argument for a picker. |
+| `iteris effort [level]` | Switch reasoning effort; omit the argument for a picker. |
+| `iteris refresh` | Fetch and reconvert tasks from a **Custom REST endpoint**, then open the ticket picker. Other ticket sources fetch normally. |
+| `iteris review [standard\|deep\|audit]` | Review the current branch and run configured checks without implementation, pushing, or opening a PR. Omit the mode to use the configured review mode. |
+| `iteris --help` | Print the command synopsis. `-h` also works. |
 
-Omit the argument to open a picker. Type `/` in the live UI to enter a command; press Enter to submit or Escape to cancel. Terminal commands save settings and exit without running tickets.
+For standalone review, `standard` uses the normal review pass, `deep` always includes a risk specialist, and `audit` adds structural proposals. Blocked or incomplete reviews exit with status 1; see [Code review](#code-review).
+
+The `harness`, `model`, and `effort` commands save settings and exit without running tickets. In the live UI, use `/harness`, `/model`, or `/effort` with the same optional argument. Type `/` to enter a command, Enter to submit, or Escape to cancel. Changes made during a queue apply to the **next ticket**.
+
+Common examples:
+
+```bash
+iteris setup                 # Reconfigure everything
+iteris harness codex         # Use Codex for upcoming tickets
+iteris model gpt-6-sol       # Select GPT-6 Sol when available to your account
+iteris effort medium         # Set its reasoning effort
+iteris review deep           # Inspect the current branch without shipping it
+```
 
 Each harness remembers its own model and effort. Model changes retain compatible effort settings; otherwise they use the selected model's advertised default. Codex models and effort identifiers come from the installed CLI's paginated `model/list` catalog, not a fixed OpenAI API list. Claude's model capability catalog follows [Anthropic's model configuration documentation](https://code.claude.com/docs/en/model-config).
 
-To use [GPT-6 Sol](https://developers.openai.com/api/docs/models/gpt-6-sol) with Codex, run `iteris harness codex` and then `iteris model gpt-6-sol`. Iteris selects the model's advertised default effort unless your current effort is also supported; use `iteris effort medium` to set medium explicitly. New Codex models appear as they become available in the installed CLI's catalog for your account.
+For [GPT-6 Sol](https://developers.openai.com/api/docs/models/gpt-6-sol), use the `gpt-6-sol` model ID shown above. Iteris selects the model's advertised default effort unless your current effort is also supported. New Codex models appear as they become available in the installed CLI's catalog for your account.
 
 Changes are saved immediately and apply to the **next ticket**. An active ticket uses the same selection through planning, implementation, review, PR description, summary, and retries. A switch to a missing Codex installation is saved for setup at the next ticket boundary. External harness/model/effort commands also defer installation and updates while a queue is running in the same repository. Externally edited execution settings are read at each boundary; invalid settings pause the queue. Correct the JSON and retry, or cancel the queue and use the terminal commands to repair selections.
+
+### Terminal controls
+
+| Screen | Keys |
+| --- | --- |
+| Ticket picker | ↑/↓ or `j`/`k` to move, Space to toggle one ticket, `a` to select or clear all, Enter to start the selected tickets. |
+| Ticket source, Project, board, and list pickers | ↑/↓ or `j`/`k` to move, Enter to select. |
+| Harness, model, effort, and retry dialogs | ↑/↓ to move, Enter to confirm, Escape or `q` to cancel. |
+| Running queue | `/` to enter a harness/model/effort command; `q` exits after the queue finishes. Failed tickets offer **Retry with same settings** or **Skip ticket**. |
 
 ## Configuration and migration
 
@@ -90,9 +118,28 @@ Iteris creates `.iteris.json` in the project root, inferring `repo` from a GitHu
 }
 ```
 
-For ordinary repository issues, add `"githubSource": "issues"` to skip Project discovery and its `read:project` permission requirement. The default, `"auto"`, uses a configured/discovered Project when available and automatically saves `"githubSource": "issues"` before fetching open repository issues when no Projects are visible. Later runs skip Project discovery. `"projects"` starts with Project discovery and also saves the issues fallback if no Projects are found. In issues mode, `projectNumber` and `todoStatus` do not filter the list: all open issues are shown, pull requests are excluded, and you choose which tickets to run. Issues are ordered by `p0`, `p1`, `p2`, then oldest first. Explicit project lookup failures and authentication errors are reported instead of silently changing sources.
+The most useful settings to edit directly are:
 
-Choose Codex's model and effort through its picker to use the current account catalog. Trello options remain `trello.boardId`, `trello.listId`, and `trello.moveOnComplete`.
+| `.iteris.json` key | Use |
+| --- | --- |
+| `repo`, `baseBranch` | GitHub `owner/repo` and the branch used as the review/PR base. Iteris tries to detect both from Git. |
+| `provider` | `github`, `trello`, or `custom`. Run `iteris setup` to change sources through the wizard. |
+| `githubSource` | `auto` (discover Projects, fall back to issues), `issues`, or `projects`. |
+| `projectNumber`, `todoStatus` | Select a GitHub Project and the status of items to show. Ignored for plain issues. |
+| `trello.boardId`, `trello.listId`, `trello.moveOnComplete` | Select a board/list and optionally move completed cards to a named list. |
+| `planMode` | `true` plans before implementation; `false` starts implementation directly. |
+| `qualityChecks` | Shell commands that must pass on the reviewed commit, such as `npm run typecheck` and `npm test`. |
+| `review.mode`, `review.maxRepairCycles`, `review.timeout`, `review.allowNoChecks` | Set review depth, bounded repair attempts, per-stage timeout, and the explicit no-checks exception. |
+| `pr.draft`, `pr.addLabelOnOpen` | Open a draft PR and, for GitHub tickets, optionally add a label after opening it. |
+| `timeout` | Seconds allowed per planning, implementation, and PR-description phase; defaults to 7200. |
+
+### Choose or change a ticket source
+
+- **GitHub Issues:** set `"provider": "github"` and `"githubSource": "issues"` to show all open repository issues without Project discovery or the `read:project` scope. Pull requests are excluded; issues appear by `p0`, `p1`, `p2`, then oldest first. `projectNumber` and `todoStatus` do not filter this view.
+- **GitHub Projects:** set `"provider": "github"` and `"githubSource": "projects"`. Set `projectNumber` to use a specific Project, or remove it to discover Projects on the next run. With multiple visible Projects, Iteris opens a picker; with one, it selects it automatically. `todoStatus` filters Project items.
+- **Automatic GitHub source:** `"githubSource": "auto"` uses a configured or discovered Project, then falls back to issues if none are visible. Both `auto` and `projects` save `"githubSource": "issues"` on this fallback, so later runs skip Project discovery. Project lookup and authentication errors are reported rather than treated as an empty Project list.
+- **Trello:** choose it with `iteris setup`. To pick a different board later, remove both `trello.boardId` and `trello.listId` from `.iteris.json`; to change lists on the same board, remove only `trello.listId`. The next run asks when multiple choices are available. Set `trello.moveOnComplete` to the name of a destination list if you want completed cards moved.
+- **Custom REST:** choose it with `iteris setup`; see [Custom REST endpoints](#custom-rest-endpoints). Use `iteris refresh` to fetch updated items.
 
 Legacy configurations migrate automatically on load:
 
@@ -104,6 +151,55 @@ Legacy configurations migrate automatically on load:
 Invalid JSON, unsupported future versions, and conflicting custom flags produce errors without overwriting the configuration. Use the structured model/effort fields instead of flags that override Iteris's selection, transport, or phase permissions. To undo migration, restore the backup and use an older Iteris version.
 
 `planMode: true` now means **plan, then implement automatically**. Planning is a separate read-only/restricted-tools phase, saved as `plan.md`. Implementation receives that plan; review executes separately. Set `planMode: false` to implement directly. `timeout` defaults to 7200 seconds (two hours) and applies separately to planning, implementation, and PR-description generation; summary has a one-minute limit. Review uses separate time allowances for the checks stage, concurrent investigation stage, verification stage, and each repair/recovery stage: 900 seconds per stage in standard mode or 1800 in deep mode, capped by `timeout`. Set `review.timeout` to override that per-stage allowance. Expensive investigation cannot consume the time needed to verify or repair findings. Each repair round receives fresh stage allowances; at most `maxRepairCycles` repairs/recoveries run (two by default). The total review can therefore exceed `review.timeout`, but is bounded by at most `3 + 4 * maxRepairCycles` stage allowances, plus process termination and local bookkeeping. Existing configurations retain their explicit timeout; set `"timeout": 7200` to use two hours. PR descriptions and summaries use the selected harness with restricted permissions.
+
+## Custom REST endpoints
+
+Run `iteris setup`, choose **Custom REST endpoint**, and enter the endpoint URL and the **name** of your API-key environment variable. Export the value in your shell before running Iteris:
+
+```sh
+export CUSTOM_API_KEY='your-api-key'
+iteris
+```
+
+The provider settings in `.iteris.json` look like this (alongside your existing repository and harness settings):
+
+```json
+{
+  "provider": "custom",
+  "custom": {
+    "endpoint": "https://api.example.com/tasks",
+    "apiKeyEnv": "CUSTOM_API_KEY",
+    "itemsPath": "data.tasks",
+    "idPath": "ticket.id"
+  }
+}
+```
+
+`itemsPath` is a dot-separated path to the response array; omit it or use `""` when the response itself is an array. `idPath` is optional: without it, Iteris checks each item's top-level `id`, then `key`. During setup, enter `-` to clear a previously saved path.
+
+On the first run, Iteris makes one GET request with `Authorization: Bearer <environment value>`. Later runs validate and reuse the downloaded tasks and attachments, without requesting the endpoint or running conversion again. Run `iteris refresh` to fetch and convert the latest tasks. A changed endpoint or mapping starts a new import. Downloads created by older Iteris versions require a one-time confirmation before reuse because their manifests do not identify the source endpoint.
+
+The endpoint must return all items in one JSON response; pagination and endpoint redirects are not supported. The request timeout is 30 seconds and the response limit is 10 MiB. Credentials are not stored in configuration or passed to the conversion harness. Reusing downloaded tasks does not require the REST API key.
+
+Each item is converted using your selected Claude Code or Codex model and effort, independently of the execution `planMode` setting. Both conversion stages use Zod validation and retry invalid output once. Conversion uses the configured phase timeout. Text, Markdown, JSON, CSV, PNG, JPEG, and WebP attachments are downloaded and analyzed. Other formats and failed downloads are listed with warnings. Downloads are limited to 10 MiB and 30 seconds per attachment, and 100 MiB per import. The Bearer token is sent only to the endpoint's origin; other attachment origins must accept public or signed URLs.
+
+Successful imports produce a directory such as:
+
+```text
+.tasks/2026-09-09T14-30-45.123+0300/
+  task1.md
+  task2.md
+  manifest.json
+  attachments/
+```
+
+Iteris prints that location, then opens the normal task picker. Nothing is published until every task validates. Generated files are locally excluded from Git through its `info/exclude` file. When a REST item includes an `identifier` (for example, `ABC-123`), its PR title uses `ABC-123: Task title`. The identifier is preserved in downloaded tasks; run `iteris refresh` to pick it up for older downloads. Items without an identifier keep the task title as their PR title.
+
+GitHub authentication is still required: selected custom tasks use the normal branch, review, and PR workflow, without closing or labeling GitHub issues or updating the custom API.
+
+Tasks with IDs retain their local number, branch, and execution history when edited. Numeric `123` and string `"123"` are the same ID. Tasks without IDs use a fingerprint of their source JSON; object-key order does not matter, but content edits create a new task. Mixed responses with and without IDs are supported. Identical duplicates are collapsed; conflicting records with the same ID reject the import. An item that later gains an ID becomes a new identity.
+
+Unchanged completed tasks are unchecked by default. After a refresh, edited tasks with stable IDs show **Changed** and are checked for another run. Identity allocation and the download cache reference live in `.iteris/custom/`; execution records live in `.iteris/runs/custom-{identity}/`, with earlier attempts retained in `history/`. Keep `.iteris/` and `.tasks/` to preserve downloaded tasks, identity allocation, and completion history. If saved files are missing or invalid, Iteris asks you to run `iteris refresh` rather than silently downloading and converting everything again.
 
 ## Execution and state
 
@@ -179,11 +275,24 @@ The deterministic tests cover the gate and process lifecycle; they do not measur
 npm run eval:review -- --case zero-default --harness codex
 ```
 
+## Troubleshooting
+
+| If you see… | Try… |
+| --- | --- |
+| A new Codex model is missing from the picker | Run `iteris setup` to check for a Codex CLI update, then try `iteris model` again. Model availability still depends on your account's catalog. |
+| `No qualityChecks configured` | Add real commands to `qualityChecks`, or set `review.allowNoChecks` to `true` only when the change needs no executable validation. |
+| Custom tasks look stale or downloaded files are invalid | Run `iteris refresh` to fetch and convert them again. |
+| A queue reports an active or stale lock | Confirm the previous Iteris process has stopped, then remove `.iteris/active.json` if the lock is stale. |
+| A ticket fails, blocks, or has an incomplete review | Read `.iteris/runs/<ticket-id>-<slug>/status.md`, `log.txt`, and `review/review.md`; use the UI's **Retry** or **Skip** choice. |
+
+Rerun the [installer](#installation) to update Iteris itself. `iteris setup` checks for Codex updates but does not update Iteris.
+
 ## Development
 
 TypeScript, Node.js 22+, React/Ink, Octokit, and Zod. Package manager: pnpm (npm also works).
 
 ```bash
+npm run build
 npm run typecheck
 npm test
 ```
@@ -199,52 +308,3 @@ curl -fsSL https://raw.githubusercontent.com/Oscar-Codes-Life/Iteris/main/instal
 ## License
 
 [MIT](LICENSE) © 2026 Oscar Gallo
-
-### Custom REST endpoints
-
-Run `iteris setup`, choose **Custom REST endpoint**, and enter the endpoint URL and the **name** of your API-key environment variable. Export the value in your shell before running Iteris:
-
-```sh
-export CUSTOM_API_KEY='your-api-key'
-iteris
-```
-
-The provider settings in `.iteris.json` look like this (alongside your existing repository and harness settings):
-
-```json
-{
-  "provider": "custom",
-  "custom": {
-    "endpoint": "https://api.example.com/tasks",
-    "apiKeyEnv": "CUSTOM_API_KEY",
-    "itemsPath": "data.tasks",
-    "idPath": "ticket.id"
-  }
-}
-```
-
-`itemsPath` is a dot-separated path to the response array; omit it or use `""` when the response itself is an array. `idPath` is optional: without it, Iteris checks each item's top-level `id`, then `key`. During setup, enter `-` to clear a previously saved path.
-
-On the first run, Iteris makes one GET request with `Authorization: Bearer <environment value>`. Later runs validate and reuse the downloaded tasks and attachments, without requesting the endpoint or running conversion again. Run `iteris refresh` to fetch and convert the latest tasks. A changed endpoint or mapping starts a new import. Downloads created by older Iteris versions require a one-time confirmation before reuse because their manifests do not identify the source endpoint.
-
-The endpoint must return all items in one JSON response; pagination and endpoint redirects are not supported. The request timeout is 30 seconds and the response limit is 10 MiB. Credentials are not stored in configuration or passed to the conversion harness. Reusing downloaded tasks does not require the REST API key.
-
-Each item is converted using your selected Claude Code or Codex model and effort, independently of the execution `planMode` setting. Both conversion stages use Zod validation and retry invalid output once. Conversion uses the configured phase timeout. Text, Markdown, JSON, CSV, PNG, JPEG, and WebP attachments are downloaded and analyzed. Other formats and failed downloads are listed with warnings. Downloads are limited to 10 MiB and 30 seconds per attachment, and 100 MiB per import. The Bearer token is sent only to the endpoint's origin; other attachment origins must accept public or signed URLs.
-
-Successful imports produce a directory such as:
-
-```text
-.tasks/2026-09-09T14-30-45.123+0300/
-  task1.md
-  task2.md
-  manifest.json
-  attachments/
-```
-
-Iteris prints that location, then opens the normal task picker. Nothing is published until every task validates. Generated files are locally excluded from Git through its `info/exclude` file. When a REST item includes an `identifier` (for example, `ABC-123`), its PR title uses `ABC-123: Task title`. The identifier is preserved in downloaded tasks; run `iteris refresh` to pick it up for older downloads. Items without an identifier keep the task title as their PR title.
-
-GitHub authentication is still required: selected custom tasks use the normal branch, review, and PR workflow, without closing or labeling GitHub issues or updating the custom API.
-
-Tasks with IDs retain their local number, branch, and execution history when edited. Numeric `123` and string `"123"` are the same ID. Tasks without IDs use a fingerprint of their source JSON; object-key order does not matter, but content edits create a new task. Mixed responses with and without IDs are supported. Identical duplicates are collapsed; conflicting records with the same ID reject the import. An item that later gains an ID becomes a new identity.
-
-Unchanged completed tasks are unchecked by default. After a refresh, edited tasks with stable IDs show **Changed** and are checked for another run. Identity allocation and the download cache reference live in `.iteris/custom/`; execution records live in `.iteris/runs/custom-{identity}/`, with earlier attempts retained in `history/`. Keep `.iteris/` and `.tasks/` to preserve downloaded tasks, identity allocation, and completion history. If saved files are missing or invalid, Iteris asks you to run `iteris refresh` rather than silently downloading and converting everything again.
