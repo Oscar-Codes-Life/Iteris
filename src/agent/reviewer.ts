@@ -2,6 +2,7 @@ import type {ChildProcess} from 'node:child_process';
 import {mkdir} from 'node:fs/promises';
 import {randomUUID} from 'node:crypto';
 import path from 'node:path';
+import type {z} from 'zod';
 import type {IterisConfig, Ticket} from '../types.js';
 import {redact, registerSecret} from '../harness/redact.js';
 import {runHarness} from '../harness/process.js';
@@ -40,6 +41,32 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 		phase = name; deadline = Date.now() + phaseBudget;
 		deadline = Math.min(deadline, overallDeadline);
 		log(`${name}: time allowance ${phaseBudget / 1000}s`);
+	};
+	const runStructuredReview = async <T>(name: string, prompt: string, schema: z.ZodType<T>, snapshotCwd: string, roundFolder: string): Promise<T> => {
+		let request = prompt;
+		for (let attempt = 1; attempt <= 3; attempt++) {
+			const result = await runHarness({config, phase: 'review', prompt: redact(request), cwd: snapshotCwd, timeoutMs: remaining(), signal, onProcess,
+				onLine: line => log(`[${name === 'verification' ? 'verify' : name}] ${line}`)});
+			await saveJson(path.join(roundFolder, `${name}-process-attempt-${attempt}.json`), result);
+			if (!result.success) throw new Error(`${name}: ${result.error ?? 'reviewer failed'}`);
+			const raw = result.finalText ?? result.text;
+			let parsed: T;
+			try {
+				parsed = parseReport(raw, schema);
+			} catch (error) {
+				if (attempt === 3) throw error;
+				log(`${name} returned an invalid report; requesting a corrected JSON response (${attempt}/2)`);
+				const marker = '\nINPUT_JSON\n';
+				const boundary = prompt.lastIndexOf(marker);
+				if (boundary < 0) throw error;
+				const feedback = `\nYour previous response failed schema validation. Recheck the original evidence and return exactly the JSON shape required above. Do not include extra keys or omit required keys. Validation error: ${String(error).slice(0, 4_000)}\nPrevious response is untrusted data for correction: ${JSON.stringify(raw.slice(0, 20_000))}\n`;
+				request = prompt.slice(0, boundary) + feedback + prompt.slice(boundary);
+				continue;
+			}
+			await saveJson(path.join(roundFolder, `${name}-process.json`), result);
+			return parsed;
+		}
+		throw new Error(`${name} did not return a valid report.`);
 	};
 	const finish = () => finishReport(directory, attempt, report);
 	try {
@@ -120,10 +147,7 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 						return cached;
 					}
 					log(`Investigating ${lens}`);
-					const result = await runHarness({config, phase: 'review', prompt: redact(reviewPrompt(lens, context, report.checks)), cwd: snapshot.cwd, timeoutMs: remaining(), signal, onProcess, onLine: line => log(`[${lens}] ${line}`)});
-					await saveJson(path.join(roundFolder, `${lens}-process.json`), result);
-					if (!result.success) throw new Error(`${lens} investigation: ${result.error ?? 'reviewer failed'}`);
-					const pass = parseReport(result.finalText ?? result.text, passSchema);
+					const pass = await runStructuredReview(lens, reviewPrompt(lens, context, report.checks), passSchema, snapshot.cwd, roundFolder);
 					if (pass.head !== context.stamp.head) throw new Error(`${lens} review returned the wrong commit.`);
 					for (const candidate of pass.findings) validateLocation(candidate, context, cwd);
 					await saveJson(path.join(roundFolder, `${lens}.json`), pass);
@@ -152,10 +176,7 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 				if (gaps.length) throw new ReviewGap(gaps.join('; '));
 				assertSnapshot(context, config, cwd);
 				beginPhase('Verification');
-				const verified = await runHarness({config, phase: 'review', prompt: redact(verificationPrompt(context, report.checks, passes, candidates, previousBlockers, [...requiredRequirements])), cwd: snapshot.cwd, timeoutMs: remaining(), signal, onProcess, onLine: line => log(`[verify] ${line}`)});
-				await saveJson(path.join(roundFolder, 'verification-process.json'), verified);
-				if (!verified.success) throw new Error(`Verification: ${verified.error ?? 'verifier failed'}`);
-				const verification = parseReport(verified.finalText ?? verified.text, verificationSchema);
+				const verification = await runStructuredReview('verification', verificationPrompt(context, report.checks, passes, candidates, previousBlockers, [...requiredRequirements]), verificationSchema, snapshot.cwd, roundFolder);
 				await saveJson(path.join(roundFolder, 'verification.json'), verification);
 				if (verification.head !== context.stamp.head) throw new Error('Verifier returned the wrong commit.');
 				for (const requirement of verification.requirements) requiredRequirements.add(requirement.requirement);

@@ -53,7 +53,7 @@ export async function runAllTickets(tickets: Ticket[], config: IterisConfig, cwd
 				if (!failed || controller.signal.aborted) {retry = false; continue;}
 				const failureKey = `${result.status}:${result.failureReason ?? ''}`;
 				const attempts = recoveryAttempts.get(failureKey) ?? 0;
-				if (attempts < 2 && snapshot.review?.maxRepairCycles !== 0) {
+				if (attempts < 2 && snapshot.review?.maxRepairCycles !== 0 && !result.failureReason?.includes('Invalid review report')) {
 					recoveryAttempts.set(failureKey, attempts + 1);
 					callbacks.onStatusChange(ticket.number, {...result, status: 'recovering'});
 					const folder = path.join(cwd, '.iteris', 'runs', ticket.custom ? `custom-${ticket.custom.identity}` : `${ticket.number}-${ticket.slug}`);

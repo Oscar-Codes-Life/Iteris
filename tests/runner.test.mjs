@@ -44,6 +44,25 @@ test('successive missing test evidence self-heals and reaches PR creation',async
  assert.equal(report.outcome,'passed');assert.equal(report.repairs,3);
  assert.deepEqual(report.checks.map(check=>check.command),['true','printf recovery-one','printf recovery-two','printf recovery-three']);
 });
+test('a malformed verifier response is corrected and ticket reaches PR creation',async t=>{
+ const {cwd}=await reviewRepository(t);await executable(cwd,'codex',fakeAgent);
+ environment(t,{PATH:`${cwd}:${process.env.PATH}`,FAKE_IMPLEMENT:'1',REVIEW_SCENARIO:'verifier-extra-findings',CAPTURE:path.join(cwd,'calls.jsonl')});
+ const cfg=config('codex');await atomicWriteConfig(cfg,cwd);const api=services();
+ await runAllTickets([ticket(1)],cfg,cwd,{onStatusChange(){},onLogLine(){},onComplete(){},onFailure:async(_,state)=>assert.fail(state.failureReason)},undefined,api);
+ assert.equal(api.created.length,1);
+ const calls=(await readFile(path.join(cwd,'calls.jsonl'),'utf8')).trim().split('\n').map(JSON.parse);
+ assert.equal(calls.filter(call=>call.prompt.startsWith('ITERIS_REVIEW verify')).length,2);
+});
+test('persistent malformed reviewer output never launches a project write agent',async t=>{
+ const {cwd}=await reviewRepository(t);await executable(cwd,'codex',fakeAgent);
+ environment(t,{PATH:`${cwd}:${process.env.PATH}`,FAKE_IMPLEMENT:'1',REVIEW_SCENARIO:'malformed',CAPTURE:path.join(cwd,'calls.jsonl')});
+ const cfg=config('codex');cfg.planMode=false;await atomicWriteConfig(cfg,cwd);const api=services();let failure='';
+ await runAllTickets([ticket(1)],cfg,cwd,{onStatusChange(){},onLogLine(){},onComplete(){},onFailure:async(_,state)=>{failure=state.failureReason;return 'skip';}},undefined,api);
+ assert.match(failure,/Invalid review report/);assert.equal(api.created.length,0);
+ const calls=(await readFile(path.join(cwd,'calls.jsonl'),'utf8')).trim().split('\n').map(JSON.parse);
+ assert.equal(calls.filter(call=>call.prompt.startsWith('ITERIS_REVIEW correctness')).length,3);
+ assert.equal(calls.some(call=>call.prompt.startsWith('ITERIS_FAILURE_RECOVER')),false);
+});
 test('a failed implementation launches a repair agent and continues to a PR',async t=>{
  const {cwd}=await reviewRepository(t);await executable(cwd,'codex',fakeAgent);
  environment(t,{PATH:`${cwd}:${process.env.PATH}`,FAKE_IMPLEMENT:'1',FAKE_MODE:'fail',REVIEW_SCENARIO:'recover-ticket-failure',CAPTURE:path.join(cwd,'calls.jsonl')});

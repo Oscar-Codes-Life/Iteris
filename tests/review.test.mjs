@@ -33,6 +33,17 @@ for(const [scenario,outcome] of [['malformed','incomplete'],['incomplete','incom
  assert.equal(result.report.outcome,outcome,result.error);assert.equal(result.done,outcome==='passed');
  if(scenario==='false-positive')assert.ok(result.report.findings.every(f=>f.status==='rejected'));
 });
+test('an extra findings key in verifier output is corrected by a read-only review retry',async t=>{
+ const f=await fixture(t,{scenario:'verifier-extra-findings'});
+ const head=f.git('rev-parse','HEAD');
+ const result=await runCodeReview(f.options);
+ assert.equal(result.report.outcome,'passed',result.error);
+ assert.equal(f.git('rev-parse','HEAD'),head);
+ const calls=await f.calls();
+ assert.equal(calls.filter(call=>call.prompt.startsWith('ITERIS_REVIEW verify')).length,2);
+ assert.equal(calls.some(call=>call.prompt.startsWith('ITERIS_REPAIR')||call.prompt.startsWith('ITERIS_FAILURE_RECOVER')),false);
+ assert.ok(calls.every(call=>!call.args.includes('--dangerously-bypass-approvals-and-sandbox')));
+});
 test('separate repair must be committed, independently re-reviewed and verified resolved',async t=>{
  const f=await fixture(t,{content:'broken\n'});f.cfg.review.maxRepairCycles=2;
  const old=f.git('rev-parse','HEAD');const result=await runCodeReview(f.options);
@@ -108,7 +119,7 @@ test('completed evidence resumes only for the same commit, ticket, settings, and
  const reportFile=path.join(f.options.folder,'review/result.json');const stored=JSON.parse(await readFile(reportFile,'utf8'));stored.checks=[];await writeFile(reportFile,JSON.stringify(stored));
  assert.equal((await runCodeReview(f.options)).report.outcome,'passed');assert.equal((await f.calls()).length,6);
  f.git('commit','--allow-empty','-qm','new head');process.env.REVIEW_SCENARIO='malformed';
- assert.equal((await runCodeReview(f.options)).report.outcome,'incomplete');assert.equal((await f.calls()).length,8);
+ assert.equal((await runCodeReview(f.options)).report.outcome,'incomplete');assert.equal((await f.calls()).length,12);
 });
 test('policy comes from base, and sensitive paths trigger a risk specialist',async t=>{
  const f=await fixture(t);f.git('checkout','main');await writeFile(path.join(f.cwd,'REVIEW.md'),'Never leak credentials.');f.git('add','REVIEW.md');f.git('commit','-qm','policy');f.git('push','-q','origin','main');
@@ -178,7 +189,7 @@ test('standalone audit uses its own state folder and never invokes repair or shi
 test('a changed ticket invalidates completed review even on the same commit',async t=>{
  const f=await fixture(t);assert.equal((await runCodeReview(f.options)).report.outcome,'passed');
  process.env.REVIEW_SCENARIO='malformed';const result=await runCodeReview({...f.options,ticket:{...ticket,body:ticket.body+' Also support deletion.'}});
- assert.equal(result.report.outcome,'incomplete');assert.equal((await f.calls()).length,5);
+ assert.equal(result.report.outcome,'incomplete');assert.equal((await f.calls()).length,9);
 });
 
 test('new blockers after two repairs launch another repair and reach a clean review',async t=>{
