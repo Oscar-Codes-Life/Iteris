@@ -1,9 +1,10 @@
 import {ticketBranch, ticketPrTitle} from '../types.js';
-import {writeFile} from 'node:fs/promises';
+import {readFile, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import type {IterisConfig, Ticket, TicketState} from '../types.js';
 import {validateBaseBranch} from '../github/repo.js';
 import {acquireRun} from '../state/active.js';
+import {savePendingQueue} from '../state/queue.js';
 import {loadConfig} from '../config.js';
 import {createRunFolder, writeStatus, writePrompt, appendLog} from '../state/manager.js';
 import {readProgress, appendProgress} from '../state/progress.js';
@@ -12,9 +13,10 @@ import {moveCardOnComplete} from '../trello/completion.js';
 import {expandPrompt} from './prompt.js';
 import {generateSummary} from './summarizer.js';
 import {runCodeReview} from './reviewer.js';
+import {recoverFailedTicket} from './failure-recovery.js';
 import {generatePrDescription} from './pr-description.js';
 import {captureContext, publishReviewed, assertPublished, savedPlan} from '../review/context.js';
-import {loadPassedReview} from '../review/report.js';
+import {loadPassedReview, previousEvidence, saveJson} from '../review/report.js';
 import {runHarness} from '../harness/process.js';
 
 export type RunnerCallbacks = {
@@ -35,18 +37,34 @@ export async function runAllTickets(tickets: Ticket[], config: IterisConfig, cwd
 	externalSignal?.addEventListener('abort', abort, {once: true});
 	if (externalSignal?.aborted) abort();
 	try {
-		for (const ticket of tickets) {
+		await savePendingQueue(cwd, config, tickets);
+		for (const [index, ticket] of tickets.entries()) {
 			if (controller.signal.aborted) break;
 			const latest = callbacks.beforeTicket ? await callbacks.beforeTicket() : await loadConfig(cwd);
 			// Ticket source/repository belong to the fetched queue. Only execution
 			// preferences change at boundaries. Retries retain this snapshot.
 			const snapshot = structuredClone({...config, harness: latest.harness, harnesses: latest.harnesses, planMode: latest.planMode, timeout: latest.timeout, review: latest.review, qualityChecks: latest.qualityChecks});
 			const checkpoint: TicketCheckpoint = {};
+			const recoveryAttempts = new Map<string, number>();
 			let retry = true;
 			while (retry && !controller.signal.aborted) {
 				const result = await runSingleTicket(ticket, snapshot, cwd, callbacks, controller.signal, services, checkpoint);
-				retry = !controller.signal.aborted && (['failed', 'stale', 'blocked', 'incomplete'].includes(result.status)) && await callbacks.onFailure(ticket.number, result) === 'retry';
+				const failed = ['failed', 'stale', 'blocked', 'incomplete'].includes(result.status);
+				if (!failed || controller.signal.aborted) {retry = false; continue;}
+				const failureKey = `${result.status}:${result.failureReason ?? ''}`;
+				const attempts = recoveryAttempts.get(failureKey) ?? 0;
+				if (attempts < 2 && snapshot.review?.maxRepairCycles !== 0) {
+					recoveryAttempts.set(failureKey, attempts + 1);
+					callbacks.onStatusChange(ticket.number, {...result, status: 'recovering'});
+					const folder = path.join(cwd, '.iteris', 'runs', ticket.custom ? `custom-${ticket.custom.identity}` : `${ticket.number}-${ticket.slug}`);
+					const recovered = await recoverFailedTicket({ticket, config: snapshot, cwd, state: result, plan: checkpoint.plan ?? await savedPlan(folder), signal: controller.signal,
+						onLogLine: line => callbacks.onLogLine(ticket.number, line)});
+					if (recovered) {checkpoint.implemented = true; retry = true; continue;}
+				}
+				retry = !controller.signal.aborted && await callbacks.onFailure(ticket.number, result) === 'retry';
 			}
+			if (controller.signal.aborted) break;
+			await savePendingQueue(cwd, config, tickets.slice(index + 1));
 		}
 	} finally {
 		process.off('SIGINT', abort); process.off('SIGTERM', abort);
@@ -79,8 +97,11 @@ async function runSingleTicket(ticket: Ticket, config: IterisConfig, cwd: string
 		if (!checkpoint.implemented) {
 			try {
 				const context = captureContext(ticket, config, cwd, plan);
-				const cached = await loadPassedReview(path.join(folder, 'review'), context);
-				if (cached) {checkpoint.implemented = true; checkpoint.plan = plan;}
+				const reviewFolder = path.join(folder, 'review');
+				const cached = await loadPassedReview(reviewFolder, context);
+				let implementation: {scope?: string; head?: string} = {};
+				try {implementation = JSON.parse(await readFile(path.join(folder, 'implementation.json'), 'utf8')) as typeof implementation;} catch { /* no completed implementation checkpoint */ }
+				if ((implementation.scope === context.stamp.scope && implementation.head === context.stamp.head) || cached || await previousEvidence(reviewFolder, context)) {checkpoint.implemented = true; checkpoint.plan = plan;}
 			} catch { /* no matching completed review to resume */ }
 		}
 		if (config.planMode && checkpoint.plan === undefined) {
@@ -93,6 +114,8 @@ async function runSingleTicket(ticket: Ticket, config: IterisConfig, cwd: string
 			await phase('running');
 			const result = await runHarness({config, phase: 'implementation', prompt: `${prompt}${plan ? `\n\nImplement this plan:\n${plan}` : ''}`, cwd, timeoutMs: config.timeout * 1000, onLine: log, signal});
 			if (!result.success || !result.done) {state.status = result.timedOut ? 'stale' : 'failed'; throw new Error(result.error ?? 'Process exited without the completion signal');}
+			const implemented = captureContext(ticket, config, cwd, plan);
+			await saveJson(path.join(folder, 'implementation.json'), {scope: implemented.stamp.scope, head: implemented.stamp.head});
 			checkpoint.implemented = true;
 		}
 		await phase('reviewing');

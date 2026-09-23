@@ -1,4 +1,5 @@
-import {mkdir, readFile, writeFile, unlink} from 'node:fs/promises';
+import {mkdir, readFile, writeFile, unlink, rmdir} from 'node:fs/promises';
+import {setTimeout as delay} from 'node:timers/promises';
 import path from 'node:path';
 const filename = (cwd: string) => path.join(cwd, '.iteris', 'active.json');
 export async function hasActiveRun(cwd = process.cwd()): Promise<boolean> {
@@ -14,10 +15,24 @@ export async function hasActiveRun(cwd = process.cwd()): Promise<boolean> {
 }
 export async function acquireRun(cwd: string): Promise<() => Promise<void>> {
 	await mkdir(path.dirname(filename(cwd)), {recursive: true});
-	if (await hasActiveRun(cwd)) throw new Error('An Iteris queue is already running in this repository. Use harness/model/effort commands to change its next ticket.');
-	try {await writeFile(filename(cwd), JSON.stringify({pid: process.pid}), {flag: 'wx', mode: 0o600});} catch (error) {
-		if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-		throw new Error(`Run lock exists at ${filename(cwd)}. If the previous Iteris process was forcibly killed, remove that stale file before restarting.`);
+	const reclaim = `${filename(cwd)}.reclaim`;
+	let claimed = false;
+	for (let attempt = 0; attempt < 100; attempt++) {
+		try {await writeFile(filename(cwd), JSON.stringify({pid: process.pid}), {flag: 'wx', mode: 0o600}); claimed = true; break;} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+			if (await hasActiveRun(cwd)) throw new Error('An Iteris queue is already running in this repository. Use harness/model/effort commands to change its next ticket.');
+			try {await mkdir(reclaim);} catch (failure) {
+				if ((failure as NodeJS.ErrnoException).code !== 'EEXIST') throw failure;
+				await delay(50);
+				continue;
+			}
+			try {
+				// Recheck under the recovery guard so two new queues cannot both remove a stale lock.
+				if (await hasActiveRun(cwd)) throw new Error('An Iteris queue is already running in this repository. Use harness/model/effort commands to change its next ticket.');
+				try {await unlink(filename(cwd));} catch (failure) {if ((failure as NodeJS.ErrnoException).code !== 'ENOENT') throw failure;}
+			} finally {await rmdir(reclaim);}
+		}
 	}
+	if (!claimed) throw new Error(`Could not reclaim stale run lock at ${filename(cwd)}.`);
 	return async () => {await unlink(filename(cwd)).catch(error => {if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;});};
 }

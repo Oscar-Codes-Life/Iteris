@@ -11,6 +11,12 @@ export async function createRunFolder(cwd: string, ticket: Ticket): Promise<stri
 	const folder = runFolder(cwd, ticket);
 	await mkdir(folder, {recursive: true});
 	if (ticket.custom) {
+		let resume = false;
+		try {
+			const previous = JSON.parse(await readFile(path.join(folder, 'custom.json'), 'utf8')) as {identity?: string; fingerprint?: string; status?: string};
+			resume = previous.identity === ticket.custom.identity && previous.fingerprint === ticket.custom.fingerprint && previous.status !== 'done';
+		} catch { /* New or incompatible run; preserve old files in history. */ }
+		if (resume) return folder;
 		const files = (await readdir(folder, {withFileTypes: true})).filter(entry => entry.isFile());
 		if (files.length) {
 			const archive = path.join(folder, 'history', randomUUID());

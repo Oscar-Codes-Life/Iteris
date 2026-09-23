@@ -133,5 +133,9 @@ export async function assertPublished(context: ReviewContext, config: IterisConf
 }
 
 export async function savedPlan(folder: string): Promise<string> {
-	try {return await readFile(path.join(folder, 'plan.md'), 'utf8');} catch {return '';}
+	try {
+		const content = await readFile(path.join(folder, 'plan.md'), 'utf8');
+		// The runner appends one newline when saving the generated plan.
+		return content.endsWith('\n') ? content.slice(0, -1) : content;
+	} catch {return '';}
 }

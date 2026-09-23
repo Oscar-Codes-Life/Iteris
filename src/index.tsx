@@ -4,6 +4,7 @@ import {customStatuses} from './custom/import.js';
 import {loadCustomTasks} from './custom/cache.js';
 import {choose} from './ui/Choice.js';
 import {hasActiveRun} from './state/active.js';
+import {loadPendingQueue} from './state/queue.js';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {render} from 'ink';
@@ -229,6 +230,13 @@ async function fetchTrelloFlow(config: IterisConfig): Promise<Ticket[]> {
 }
 
 async function run(config: IterisConfig, refresh = false) {
+	const pending = refresh ? undefined : await loadPendingQueue(process.cwd(), config);
+	if (pending?.length) {
+		console.log(`Resuming ${pending.length} ticket${pending.length === 1 ? '' : 's'} from the interrupted queue.`);
+		const {waitUntilExit} = render(<App config={config} tickets={pending} cwd={process.cwd()} />);
+		await waitUntilExit();
+		return;
+	}
 	let tickets: Ticket[];
 	try {
 		tickets = await fetchTicketsForProvider(config, refresh);

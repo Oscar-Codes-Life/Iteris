@@ -6,7 +6,9 @@ import path from 'node:path';
 import {atomicWriteConfig,updateConfig,loadConfig} from '../dist/config.js';
 import {generatePrDescription} from '../dist/agent/pr-description.js';
 import {runCodeReview} from '../dist/agent/reviewer.js';
+import {captureContext} from '../dist/review/context.js';
 import {runAllTickets} from '../dist/agent/runner.js';
+import {loadPendingQueue} from '../dist/state/queue.js';
 import {temporary,environment,executable,config,fakeAgent,reviewRepository} from './helpers.mjs';
 const ticket=number=>({number,title:`Ticket ${number}`,body:'Implement feature',slug:`ticket-${number}`,labels:[],htmlUrl:'https://example.com/ticket'});
 function services() {
@@ -31,6 +33,60 @@ for(const harness of ['claude','codex']) test(`${harness} full ticket lifecycle 
  assert.equal(api.created.length,1);assert.equal(api.created[0].title,'Ticket 1');assert.match(api.created[0].body,/## Summary/);assert.match(api.created[0].body,/Closes #1$/);
  const descriptionCall=calls.find(call=>call.prompt.startsWith('Write a high-value pull request description'));assert.ok(descriptionCall);assert.ok(!descriptionCall.args.includes('--dangerously-bypass-approvals-and-sandbox'));
 });
+test('successive missing test evidence self-heals and reaches PR creation',async t=>{
+ const {cwd}=await reviewRepository(t);await executable(cwd,'codex',fakeAgent);
+ environment(t,{PATH:`${cwd}:${process.env.PATH}`,FAKE_IMPLEMENT:'1',REVIEW_SCENARIO:'progressive-evidence',CAPTURE:path.join(cwd,'calls.jsonl')});
+ const cfg=config('codex');cfg.review.maxRepairCycles=2;await atomicWriteConfig(cfg,cwd);
+ const api=services();
+ await runAllTickets([ticket(1)],cfg,cwd,{onStatusChange(){},onLogLine(){},onComplete(){},onFailure:async(_,state)=>assert.fail(state.failureReason)},undefined,api);
+ assert.equal(api.created.length,1);
+ const report=JSON.parse(await readFile(path.join(cwd,'.iteris/runs/1-ticket-1/review/result.json'),'utf8'));
+ assert.equal(report.outcome,'passed');assert.equal(report.repairs,3);
+ assert.deepEqual(report.checks.map(check=>check.command),['true','printf recovery-one','printf recovery-two','printf recovery-three']);
+});
+test('a failed implementation launches a repair agent and continues to a PR',async t=>{
+ const {cwd}=await reviewRepository(t);await executable(cwd,'codex',fakeAgent);
+ environment(t,{PATH:`${cwd}:${process.env.PATH}`,FAKE_IMPLEMENT:'1',FAKE_MODE:'fail',REVIEW_SCENARIO:'recover-ticket-failure',CAPTURE:path.join(cwd,'calls.jsonl')});
+ const cfg=config('codex');cfg.planMode=false;await atomicWriteConfig(cfg,cwd);
+ const api=services();
+ await runAllTickets([ticket(1)],cfg,cwd,{onStatusChange(_,state){if(state.status==='recovering')delete process.env.FAKE_MODE;},onLogLine(){},onComplete(){},onFailure:async(_,state)=>assert.fail(state.failureReason)},undefined,api);
+ assert.equal(api.created.length,1);
+ const calls=(await readFile(path.join(cwd,'calls.jsonl'),'utf8')).trim().split('\n').map(JSON.parse);
+ assert.equal(calls.filter(call=>call.prompt.startsWith('ITERIS_FAILURE_RECOVER')).length,1);
+ assert.equal(calls.filter(call=>call.prompt.startsWith('You are an autonomous')).length,1);
+});
+test('an interrupted queue resumes review without repeating implementation',async t=>{
+ const {cwd}=await reviewRepository(t);await executable(cwd,'codex',fakeAgent);
+ environment(t,{PATH:`${cwd}:${process.env.PATH}`,FAKE_IMPLEMENT:'1',CAPTURE:path.join(cwd,'calls.jsonl')});
+ const cfg=config('codex');cfg.planMode=false;await atomicWriteConfig(cfg,cwd);
+ const controller=new AbortController();let aborted=false;
+ await runAllTickets([ticket(1)],cfg,cwd,{onStatusChange(){},onLogLine(_,line){if(!aborted&&line.includes('[review] Round 1')){aborted=true;controller.abort();}},onComplete(){},onFailure:async()=>assert.fail('cancelled queue should stop')},controller.signal,services());
+ assert.equal(aborted,true);
+ const pending=await loadPendingQueue(cwd,cfg);assert.equal(pending.length,1);
+ const saved=JSON.parse(await readFile(path.join(cwd,'.iteris/runs/1-ticket-1/review/result.json'),'utf8'));
+ assert.equal(saved.stamp.scope,captureContext(pending[0],cfg,cwd,'').stamp.scope);
+ const api=services();
+ await runAllTickets(pending,cfg,cwd,{onStatusChange(){},onLogLine(){},onComplete(){},onFailure:async(_,state)=>assert.fail(state.failureReason)},undefined,api);
+ assert.equal(api.created.length,1);
+ assert.equal(await loadPendingQueue(cwd,cfg),undefined);
+ const calls=(await readFile(path.join(cwd,'calls.jsonl'),'utf8')).trim().split('\n').map(JSON.parse);
+ assert.equal(calls.filter(call=>call.prompt.startsWith('You are an autonomous')).length,1);
+});
+test('a crash before review context resumes the committed implementation and saved plan',async t=>{
+ const {cwd}=await reviewRepository(t);await executable(cwd,'codex',fakeAgent);
+ environment(t,{PATH:`${cwd}:${process.env.PATH}`,FAKE_IMPLEMENT:'1',CAPTURE:path.join(cwd,'calls.jsonl')});
+ const cfg=config('codex');await atomicWriteConfig(cfg,cwd);
+ const controller=new AbortController();let aborted=false;
+ await runAllTickets([ticket(1)],cfg,cwd,{onStatusChange(_,state){if(!aborted&&state.status==='reviewing'){aborted=true;controller.abort();}},onLogLine(){},onComplete(){},onFailure:async()=>assert.fail('cancelled queue should stop')},controller.signal,services());
+ assert.equal(aborted,true);
+ const pending=await loadPendingQueue(cwd,cfg);assert.equal(pending.length,1);
+ const api=services();
+ await runAllTickets(pending,cfg,cwd,{onStatusChange(){},onLogLine(){},onComplete(){},onFailure:async(_,state)=>assert.fail(state.failureReason)},undefined,api);
+ assert.equal(api.created.length,1);
+ const calls=(await readFile(path.join(cwd,'calls.jsonl'),'utf8')).trim().split('\n').map(JSON.parse);
+ assert.equal(calls.filter(call=>call.prompt.startsWith('Inspect this task')).length,1);
+ assert.equal(calls.filter(call=>call.prompt.startsWith('You are an autonomous')).length,1);
+});
 test('an existing branch PR is reused without generating a replacement description',async t=>{
  const {cwd}=await reviewRepository(t);await executable(cwd,'codex',fakeAgent);environment(t,{PATH:`${cwd}:${process.env.PATH}`,FAKE_IMPLEMENT:'1',CAPTURE:path.join(cwd,'calls.jsonl')});const cfg=config('codex');cfg.planMode=false;await atomicWriteConfig(cfg,cwd);
  await runAllTickets([ticket(1)],cfg,cwd,{onStatusChange(){},onLogLine(){},onComplete(){},onFailure:async()=>assert.fail('unexpected failure')},undefined,{findPr:async()=>({url:'https://example.com/existing',number:3}),createPr:async()=>assert.fail('must not create a duplicate PR'),addLabel:async()=>{},moveCard:async()=>{}});
@@ -44,7 +100,8 @@ test('changes apply at next ticket; retry retains original harness',async t=>{
   assert.equal(changed,false);changed=true;process.env.FAKE_MODE='normal';await updateConfig(c=>{c.harness='codex';},cwd);return 'retry';
  }},undefined,services());
  const calls=(await readFile(path.join(cwd,'calls.jsonl'),'utf8')).trim().split('\n').map(JSON.parse);
- assert.deepEqual(calls.map(call=>call.harness),[...Array(7).fill('claude'),...Array(6).fill('codex')]);
+ assert.deepEqual(calls.map(call=>call.harness),[...Array(8).fill('claude'),...Array(6).fill('codex')]);
+ assert.equal(calls.filter(call=>call.prompt.startsWith('ITERIS_FAILURE_RECOVER')).length,1);
 });
 test('Trello completion uses same pipeline without GitHub issue labeling',async t=>{
  const {cwd}=await reviewRepository(t);await executable(cwd,'codex',fakeAgent);environment(t,{PATH:`${cwd}:${process.env.PATH}`,FAKE_IMPLEMENT:'1',FAKE_MODE:undefined});
@@ -61,7 +118,8 @@ test('review failure preserves cause and retries review without repeating implem
   failures++;assert.match(s.failureReason,/review.*Process exited with 2/i);return 'retry';
  }},undefined,services());
  const calls=(await readFile(path.join(cwd,'calls.jsonl'),'utf8')).trim().split('\n').map(JSON.parse);
- assert.equal(failures,1);assert.equal(calls.length,9);
+ assert.equal(failures,1);assert.equal(calls.length,10);
+ assert.equal(calls.filter(c=>c.prompt.startsWith('ITERIS_FAILURE_RECOVER')).length,1);
  assert.equal(calls.filter(c=>c.prompt.startsWith('Inspect this task')).length,1);
  assert.equal(calls.filter(c=>c.prompt.startsWith('You are an autonomous')).length,1);
 });

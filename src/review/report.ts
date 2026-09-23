@@ -75,7 +75,8 @@ const storedReportSchema = z.object({
 	stamp: z.object({head: z.string(), base: z.string(), mergeBase: z.string(), branch: z.string(), scope: z.string(), key: z.string()}),
 	startedAt: z.string().datetime(), finishedAt: z.string().datetime(), rounds: z.number().int().positive(), repairs: z.number().int().nonnegative(),
 	findings: z.array(candidateSchema.extend({id: z.string(), head: z.string(), status: z.enum(['candidate', 'confirmed', 'rejected', 'fixed']), verification: z.string().optional(), fixedAt: z.string().optional(), duplicateOf: z.string().optional()})),
-	requirements: verificationSchema.shape.requirements,
+	// Interrupted investigations can have a valid stamp before requirements exist.
+	requirements: z.array(verificationSchema.shape.requirements.element),
 	checks: checksSchema,
 	gaps: z.array(z.string()), mode: z.enum(['standard', 'deep']), selection: z.object({harness: z.string(), model: z.string().optional(), effort: z.string().optional()}), usage: z.literal('unavailable'),
 });

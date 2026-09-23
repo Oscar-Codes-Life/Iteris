@@ -126,6 +126,7 @@ test('blocked Trello tickets never publish, create PRs, label, move cards, or co
  const forbidden=async()=>assert.fail('A blocked ticket reached a completion action');
  await runAllTickets([ticket],f.cfg,f.cwd,{onStatusChange(){},onLogLine(){},onComplete:forbidden,onFailure:async(_,s)=>{status=s.status;return 'skip';}},undefined,{findPr:forbidden,createPr:forbidden,addLabel:forbidden,moveCard:forbidden});
  assert.equal(status,'blocked');assert.equal(f.git('ls-remote','origin','refs/heads/iteris/1-feature'),'');
+ assert.equal((await f.calls()).some(call=>call.prompt.startsWith('ITERIS_FAILURE_RECOVER')),false);
 });
 test('read-only review invocation differs from write-capable repair for both harnesses',()=>{
  for(const harness of ['claude','codex']) {
@@ -183,6 +184,16 @@ test('a changed ticket invalidates completed review even on the same commit',asy
 test('new blockers after two repairs launch another repair and reach a clean review',async t=>{
  const f=await fixture(t,{scenario:'progressive-blocker',content:'stage0\n'});f.cfg.review.maxRepairCycles=2;
  const result=await runCodeReview(f.options);assert.equal(result.report.outcome,'passed',result.error);assert.equal(result.report.repairs,3);assert.equal(result.report.rounds,4);
+});
+test('three distinct missing test commands recover on the same commit without a manual retry',async t=>{
+ const f=await fixture(t,{scenario:'progressive-evidence'});f.cfg.review.maxRepairCycles=2;
+ const head=f.git('rev-parse','HEAD');
+ const result=await runCodeReview(f.options);
+ assert.equal(result.report.outcome,'passed',result.error);assert.equal(result.report.repairs,3);assert.equal(result.report.rounds,4);
+ assert.equal(result.report.stamp.head,head);
+ assert.deepEqual(result.report.checks.map(check=>check.command),['true','printf recovery-one','printf recovery-two','printf recovery-three']);
+ assert.ok(result.report.checks.every(check=>check.exitCode===0 && check.head===head));
+ assert.equal((await f.calls()).filter(call=>call.prompt.startsWith('ITERIS_RECOVER')).length,3);
 });
 test('reviewer candidates survive evidence gaps and reach the recovery agent',async t=>{
  const f=await fixture(t,{scenario:'gap-candidate',content:'broken\n'});f.cfg.review.maxRepairCycles=2;

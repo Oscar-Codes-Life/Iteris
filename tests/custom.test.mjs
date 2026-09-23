@@ -114,6 +114,15 @@ test('completion identity is isolated and changed ID-based tasks retain history'
  await createRunFolder(cwd,changed.tickets[0]);assert.equal((await readdir(path.join(folder,'history'))).length,1);
  const unrelated={...ticket,custom:{...ticket.custom,identity:'unrelated'}};assert.equal((await customStatuses(cwd,[unrelated])).size,0);
 });
+test('an unfinished custom ticket keeps its saved plan when the queue resumes',async t=>{
+ const cwd=await fixture(t);const imported=await importCustom(cfg(),cwd,importer([{id:1,title:'resume'}]));const ticket=imported.tickets[0];
+ const folder=await createRunFolder(cwd,ticket);
+ await writeFile(path.join(folder,'plan.md'),'Saved plan\n');
+ await writeStatus(folder,{ticket,status:'incomplete',branch:ticketBranch(ticket),logLines:[],elapsedMs:0});
+ await createRunFolder(cwd,ticket);
+ assert.equal(await readFile(path.join(folder,'plan.md'),'utf8'),'Saved plan\n');
+ assert.equal((await readdir(folder)).includes('history'),false);
+});
 for(const harness of ['claude','codex'])test(`${harness} import invocation restricts writes, strips custom secret, and carries image context`,async t=>{
  environment(t,{CUSTOM_TEST_KEY:'hidden'});const c=cfg(harness);const call=invocation(c,'import',['/tmp/example.png']);
  assert.equal(call.env.CUSTOM_TEST_KEY,undefined);assert.ok(!call.args.includes('--dangerously-bypass-approvals-and-sandbox'));assert.ok(!call.args.includes('--dangerously-skip-permissions'));
