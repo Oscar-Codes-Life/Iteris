@@ -26,7 +26,8 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 	await mkdir(attempt, {recursive: true});
 	const started = Date.now();
 	const phaseBudget = Math.min(config.timeout, settings.timeout ?? (settings.mode === 'deep' ? 1800 : 900)) * 1000;
-	let deadline = started + phaseBudget;
+	const overallDeadline = started + config.timeout * 1000;
+	let deadline = Math.min(started + phaseBudget, overallDeadline);
 	let phase = 'setup';
 	const report: ReviewReport = {version: 1, outcome: 'incomplete', reason: 'Review not completed', startedAt: new Date(started).toISOString(), finishedAt: '', rounds: 0, repairs: 0,
 		findings: [], requirements: [], checks: [], gaps: [], mode: settings.mode,
@@ -35,17 +36,27 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 	const remaining = () => {if (signal?.aborted) throw new Error('Cancelled'); if (Date.now() >= deadline) throw new Error(`${phase} deadline exceeded`); return deadline - Date.now();};
 	const beginPhase = (name: string) => {
 		if (signal?.aborted) throw new Error('Cancelled');
+		if (Date.now() >= overallDeadline) throw new Error('Review total deadline exceeded');
 		phase = name; deadline = Date.now() + phaseBudget;
+		deadline = Math.min(deadline, overallDeadline);
 		log(`${name}: time allowance ${phaseBudget / 1000}s`);
 	};
 	const finish = () => finishReport(directory, attempt, report);
 	try {
 		let previousBlockers: Finding[] = [];
-		let lastFailure = '';
+		const repairAttempts = new Map<string, number>();
+		const canRepair = (key: string) => {
+			if (audit || settings.maxRepairCycles === 0) return false;
+			const attempts = repairAttempts.get(key) ?? 0;
+			if (attempts >= settings.maxRepairCycles) return false;
+			repairAttempts.set(key, attempts + 1);
+			return true;
+		};
 		const additionalChecks = new Set<string>();
-		const requiredRequirements = new Set<string>();
-		for (let round = 0; round <= settings.maxRepairCycles; round++) {
+		let unresolvedRequirements = new Set<string>();
+		for (let round = 0; ; round++) {
 			beginPhase('Checks');
+			const requiredRequirements = new Set(unresolvedRequirements);
 			const context = captureContext(ticket, config, cwd, options.plan, options.branch);
 			let resume = false;
 			const supplementalKey = digest(['supplemental-checks', context.stamp.scope]);
@@ -60,7 +71,7 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 					resume = !audit && previous.outcome === 'incomplete';
 					report.findings = previous.findings;
 					previousBlockers = previous.findings.filter(blocks);
-					for (const requirement of previous.requirements) requiredRequirements.add(requirement.requirement);
+					for (const requirement of previous.requirements.filter(item => item.status !== 'covered')) requiredRequirements.add(requirement.requirement);
 				}
 				// Also resume after a process crash before result.json could be written.
 				if (!previous && !audit) resume = true;
@@ -123,11 +134,9 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 				if (settings.mode === 'deep' || context.risk.length) {report.mode = 'deep'; lenses.push('risk');}
 				// All required investigators start together. Drain all before disposing their snapshot.
 				const investigated = await Promise.allSettled(lenses.map(runPass));
-				for (const result of investigated) if (result.status === 'fulfilled') for (const requirement of result.value.requirements) requiredRequirements.add(requirement.requirement);
+				if (investigated[0]?.status === 'fulfilled') for (const requirement of investigated[0].value.requirements) requiredRequirements.add(requirement.requirement);
 				report.requirements = investigated.flatMap(result => result.status === 'fulfilled' ? result.value.requirements : []);
 				passes = investigated.map(result => {if (result.status === 'rejected') throw result.reason; return result.value;});
-				const gaps = passes.flatMap((pass, index) => passGaps(pass, context, lenses[index]!));
-				if (gaps.length) throw new ReviewGap(gaps.join('; '));
 				const unique = new Map<string, Finding>();
 				for (const candidate of passes.flatMap(pass => pass.findings)) {
 					validateLocation(candidate, context, cwd);
@@ -138,6 +147,9 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 					unique.set(id, {...candidate, priority, materialRegression: candidate.materialRegression || Boolean(previous?.materialRegression), id, head: context.stamp.head, status: 'candidate'});
 				}
 				candidates = [...unique.values()];
+				await saveJson(path.join(roundFolder, 'candidates.json'), candidates);
+				const gaps = passes.flatMap((pass, index) => passGaps(pass, context, lenses[index]!));
+				if (gaps.length) throw new ReviewGap(gaps.join('; '));
 				assertSnapshot(context, config, cwd);
 				beginPhase('Verification');
 				const verified = await runHarness({config, phase: 'review', prompt: redact(verificationPrompt(context, report.checks, passes, candidates, previousBlockers, [...requiredRequirements])), cwd: snapshot.cwd, timeoutMs: remaining(), signal, onProcess, onLine: line => log(`[verify] ${line}`)});
@@ -185,13 +197,14 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 			for (const requirement of report.requirements.filter(r => r.status === 'unverified')) report.gaps.push(`${requirement.requirement}: ${requirement.evidence}`);
 			previousBlockers = report.findings.filter(blocks);
 			if (report.gaps.length) {
-				report.outcome = 'incomplete'; report.reason = report.gaps.join('; ');
-				const failureKey = digest({gaps: [...report.gaps].sort()});
-				if (audit || round === settings.maxRepairCycles || failureKey === lastFailure) {log(report.reason); return finish();}
-				lastFailure = failureKey; report.repairs++;
-				log(`Recovery ${report.repairs}/${settings.maxRepairCycles}: ${report.reason}`);
+				unresolvedRequirements = new Set(report.requirements.filter(item => item.status !== 'covered').map(item => item.requirement));
+					report.outcome = 'incomplete'; report.reason = report.gaps.join('; ');
+				const failureKey = digest({gaps: [...report.gaps].sort(), candidates: candidates.map(f => f.id).sort()});
+				if (!canRepair(failureKey)) {log(report.reason); return finish();}
+				report.repairs++;
+				log(`Recovery ${report.repairs}: ${report.reason}`);
 				beginPhase('Recovery');
-				const recovered = await runHarness({config, phase: 'repair', prompt: redact(recoveryPrompt(context, report.gaps, report.requirements, report.checks, previousBlockers)), cwd, timeoutMs: remaining(), signal, onProcess, onLine: line => log(`[recovery] ${line}`)});
+				const recovered = await runHarness({config, phase: 'repair', prompt: redact(recoveryPrompt(context, report.gaps, report.requirements, report.checks, previousBlockers, candidates)), cwd, timeoutMs: remaining(), signal, onProcess, onLine: line => log(`[recovery] ${line}`)});
 				await saveJson(path.join(roundFolder, 'recovery-process.json'), recovered);
 				if (!recovered.success) throw new Error(recovered.error ?? 'Recovery failed');
 				const recovery = parseReport(recovered.finalText ?? recovered.text, recoverySchema);
@@ -199,21 +212,27 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 				const next = captureContext(ticket, config, cwd, options.plan, options.branch);
 				if (next.stamp.base !== context.stamp.base) throw new Error('Base changed during recovery; restart review.');
 				if (recovery.blockedReason) throw new Error(`Review recovery blocked: ${recovery.blockedReason}`);
+				const checkCount = additionalChecks.size;
 				for (const command of recovery.checks) additionalChecks.add(command);
+				if (next.stamp.head === context.stamp.head && additionalChecks.size === checkCount) {
+					report.reason += ' Recovery produced no new commit or check command.';
+					log(report.reason); return finish();
+				}
 				await saveCheckpoint(directory, supplementalKey, [...additionalChecks]);
 				continue;
 			}
 			previousBlockers = candidates.filter(blocks);
 			const failedChecks = report.checks.filter(check => check.exitCode !== 0);
 			const missing = report.requirements.filter(r => r.status === 'missing');
+			unresolvedRequirements = new Set(report.requirements.filter(item => item.status !== 'covered').map(item => item.requirement));
 			if (!previousBlockers.length && !failedChecks.length && !missing.length) {
 				report.outcome = 'passed'; report.reason = 'Required reviews and validation completed on the final commit.'; log(report.reason); assertSnapshot(context, config, cwd); return finish();
 			}
 			report.outcome = 'blocked'; report.reason = `${previousBlockers.length} blocking findings, ${missing.length} missing requirements, ${failedChecks.length} failed checks.`;
 			const failureKey = digest({findings: previousBlockers.map(f => f.id).sort(), missing: missing.map(r => r.requirement).sort(), checks: failedChecks.map(c => c.command)});
-			if (audit || round === settings.maxRepairCycles || failureKey === lastFailure) {log(report.reason); return finish();}
-			lastFailure = failureKey; report.repairs++;
-			log(`Repair ${report.repairs}/${settings.maxRepairCycles}: ${report.reason}`);
+			if (!canRepair(failureKey)) {log(report.reason); return finish();}
+			report.repairs++;
+			log(`Repair ${report.repairs}: ${report.reason}`);
 			beginPhase('Repair');
 			const repaired = await runHarness({config, phase: 'repair', prompt: redact(repairPrompt(context, previousBlockers, missing, failedChecks)), cwd, timeoutMs: remaining(), signal, onProcess, onLine: line => log(`[repair] ${line}`)});
 			await saveJson(path.join(roundFolder, 'repair.json'), repaired);

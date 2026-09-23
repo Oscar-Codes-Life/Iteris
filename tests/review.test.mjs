@@ -47,7 +47,7 @@ test('a disappearing blocker needs explicit resolution evidence',async t=>{
 });
 test('persistent findings stop the loop instead of repeatedly rewriting code',async t=>{
  const f=await fixture(t,{scenario:'blocker'});f.cfg.review.maxRepairCycles=2;
- const result=await runCodeReview(f.options);assert.equal(result.report.outcome,'blocked');assert.equal(result.report.repairs,1);
+ const result=await runCodeReview(f.options);assert.equal(result.report.outcome,'blocked');assert.equal(result.report.repairs,2);
 });
 test('audit reports blockers without invoking a repair or publishing',async t=>{
  const f=await fixture(t,{content:'broken\n'});f.cfg.review.maxRepairCycles=2;
@@ -180,9 +180,19 @@ test('a changed ticket invalidates completed review even on the same commit',asy
  assert.equal(result.report.outcome,'incomplete');assert.equal((await f.calls()).length,5);
 });
 
-test('repair budget also stops when each repair exposes a different blocker',async t=>{
- const f=await fixture(t,{scenario:'moving-blocker'});f.cfg.review.maxRepairCycles=2;
- const result=await runCodeReview(f.options);assert.equal(result.report.outcome,'blocked',result.error);assert.equal(result.report.repairs,2);assert.equal(result.report.rounds,3);
+test('new blockers after two repairs launch another repair and reach a clean review',async t=>{
+ const f=await fixture(t,{scenario:'progressive-blocker',content:'stage0\n'});f.cfg.review.maxRepairCycles=2;
+ const result=await runCodeReview(f.options);assert.equal(result.report.outcome,'passed',result.error);assert.equal(result.report.repairs,3);assert.equal(result.report.rounds,4);
+});
+test('reviewer candidates survive evidence gaps and reach the recovery agent',async t=>{
+ const f=await fixture(t,{scenario:'gap-candidate',content:'broken\n'});f.cfg.review.maxRepairCycles=2;
+ const result=await runCodeReview(f.options);assert.equal(result.report.outcome,'passed',result.error);
+ const recovery=(await f.calls()).find(c=>c.prompt.startsWith('ITERIS_RECOVER'));
+ assert.ok(JSON.parse(recovery.prompt.split('INPUT_JSON\n')[1]).candidates.some(f=>f.title==='Broken behavior'));
+});
+test('continually novel blockers stop at the overall review deadline',async t=>{
+ const f=await fixture(t,{scenario:'moving-blocker'});f.cfg.review.maxRepairCycles=2;f.cfg.timeout=4;
+ const result=await runCodeReview(f.options);assert.equal(result.report.outcome,'incomplete',result.error);assert.equal(result.timedOut,true);
 });
 test('unresolved findings survive a new review attempt and cannot vanish at the same HEAD',async t=>{
  const f=await fixture(t,{scenario:'blocker'});assert.equal((await runCodeReview(f.options)).report.outcome,'blocked');
@@ -213,7 +223,7 @@ test('unavailable external evidence stops with an actionable reason', async t =>
 test('failed supplemental checks cannot pass and repeated gaps stop recovery', async t => {
  const f = await fixture(t, {scenario:'recover-failed-check'}); f.cfg.review.maxRepairCycles = 2;
  const result = await runCodeReview(f.options);
- assert.equal(result.report.outcome, 'incomplete'); assert.equal(result.report.repairs, 1);
+ assert.equal(result.report.outcome, 'incomplete'); assert.equal(result.report.repairs, 2);
  assert.ok(result.report.checks.some(c => c.command === 'exit 9' && c.exitCode === 9));
 });
 for (const scenario of ['recover-evidence', 'malformed', 'wrong-head']) test(`${scenario}: audit never recovers`, async t => {
