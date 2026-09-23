@@ -265,7 +265,7 @@ These commands run configured checks and save results under `.iteris/reviews/`. 
 
 Reviewers inspect disposable detached copies. Claude receives only read/search tools, no MCP servers, and a per-run hook-disable setting; administrator-managed hooks remain subject to the CLI's managed policy. Codex uses its read-only sandbox. These are harness restrictions, not an OS isolation guarantee for arbitrary project tooling. Reproduction evidence comes from configured commands, additional local commands requested by recovery, and code tracing. Recovery commands run with the same local permissions and deadline as configured checks. Keep autonomous implementation, repair, and quality commands in an appropriate environment.
 
-Unexpected edits are preserved and stop review. Commits with diffs above 240,000 characters require splitting instead of silent truncation. If the remote base advances before publication finishes, fetch it and retry so the review uses the new base. Review artifacts are local and are not committed; the useful summary is embedded in the PR body.
+Unexpected edits are preserved and stop review. Diffs above 240,000 characters are supplied to reviewers as complete, ordered patch parts in the disposable snapshot; a missing part makes the review incomplete. If the remote base advances before publication finishes, fetch it and retry so the review uses the new base. Review artifacts are local and are not committed; the useful summary is embedded in the PR body.
 
 ## Review evaluation
 

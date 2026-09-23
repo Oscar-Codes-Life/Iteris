@@ -95,7 +95,7 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 			if (!audit && report.checks.every(check => check.exitCode === 0 && !check.error)) await saveCheckpoint(directory, checksKey, report.checks);
 			assertSnapshot(context, config, cwd);
 			beginPhase('Investigation');
-			const snapshot = await createSnapshot(cwd, context.stamp.head, deadline, signal);
+			const snapshot = await createSnapshot(cwd, context.stamp.head, deadline, signal, context.diff);
 			let passes: ReviewPass[];
 			let candidates: Finding[] = [];
 			try {

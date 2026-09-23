@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import {mkdir, readFile, writeFile, readdir, rm} from 'node:fs/promises';
 import path from 'node:path';
 import {runCodeReview} from '../dist/agent/reviewer.js';
-import {captureContext, assertPublished} from '../dist/review/context.js';
+import {captureContext, createSnapshot, assertPublished, INLINE_DIFF_LIMIT, reviewDiffParts} from '../dist/review/context.js';
+import {reviewPrompt, verificationPrompt, repairPrompt, recoveryPrompt} from '../dist/review/prompts.js';
 import {invocation} from '../dist/harness/process.js';
 import {runAllTickets} from '../dist/agent/runner.js';
 import {atomicWriteConfig, configSchema} from '../dist/config.js';
@@ -65,11 +66,36 @@ test('a check that changes source invalidates all review evidence',async t=>{
  const f=await fixture(t);f.cfg.qualityChecks=['printf mutated > feature.txt'];
  const result=await runCodeReview(f.options);assert.equal(result.report.outcome,'incomplete');assert.match(result.error,/uncommitted/);assert.equal((await f.calls()).length,0);
 });
-test('dirty and oversized changes fail without invoking reviewers',async t=>{
+test('dirty changes fail without invoking reviewers',async t=>{
  const f=await fixture(t);await writeFile(path.join(f.cwd,'unrelated.txt'),'user work');
  assert.equal((await runCodeReview(f.options)).report.outcome,'incomplete');
- f.git('add','unrelated.txt');f.git('commit','-qm','other');await writeFile(path.join(f.cwd,'feature.txt'),'x'.repeat(241_000));f.git('add','feature.txt');f.git('commit','-qm','huge');
- const result=await runCodeReview(f.options);assert.equal(result.report.outcome,'incomplete');assert.match(result.error,/Split this change/);assert.equal((await f.calls()).length,0);
+ assert.equal((await f.calls()).length,0);
+});
+test('oversized changes are reviewed through complete ordered patch parts',async t=>{
+ const f=await fixture(t);await writeFile(path.join(f.cwd,'feature.txt'),'x'.repeat(241_000)+'🚀');f.git('add','feature.txt');f.git('commit','-qm','huge');
+ const context=captureContext(ticket,f.cfg,f.cwd,f.options.plan);
+ assert.ok(context.diff.length>INLINE_DIFF_LIMIT);
+ const snapshot=await createSnapshot(f.cwd,context.stamp.head,Date.now()+30_000,undefined,context.diff);
+ try {
+  const input=JSON.parse(reviewPrompt('correctness',context,[]).split('INPUT_JSON\n')[1]);
+  const verification=JSON.parse(verificationPrompt(context,[],[],[],[],[]).split('INPUT_JSON\n')[1]);
+  assert.deepEqual(verification.context.diffParts,input.context.diffParts);
+  assert.ok(input.context.diffParts.length>1);
+  assert.equal(input.context.diff.includes('x'.repeat(100)),false);
+  assert.ok(repairPrompt(context,[],[],[]).length<INLINE_DIFF_LIMIT);
+  assert.ok(recoveryPrompt(context,[],[],[],[]).length<INLINE_DIFF_LIMIT);
+  const parts=await Promise.all(input.context.diffParts.map(async part=>readFile(path.join(snapshot.cwd,part.path),'utf8')));
+  assert.equal(parts.join(''),context.diff);
+  assert.deepEqual(parts.map(part=>part.length),input.context.diffParts.map(part=>part.characters));
+ } finally {await snapshot.dispose();}
+ const result=await runCodeReview(f.options);
+ assert.equal(result.report.outcome,'passed',result.error);
+ const calls=await f.calls();assert.equal(calls.length,3);
+ assert.ok(calls.every(call=>call.prompt.includes('diffParts') && call.prompt.length<INLINE_DIFF_LIMIT));
+});
+test('patch parts preserve Unicode characters at a part boundary',()=>{
+ const diff='x'.repeat(59_999)+'🚀'+'y'.repeat(181_000);
+ assert.equal(reviewDiffParts(diff).map(part=>part.content).join(''),diff);
 });
 test('HEAD mutation during verification invalidates an otherwise successful review',async t=>{
  const f=await fixture(t);let changed=false;

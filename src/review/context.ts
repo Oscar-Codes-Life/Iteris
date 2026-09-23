@@ -1,14 +1,42 @@
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
-import {mkdtemp, rm, readFile} from 'node:fs/promises';
+import {mkdtemp, mkdir, rm, readFile, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {ticketBranch, type IterisConfig, type Ticket} from '../types.js';
 import {reviewSettings, type ReviewStamp, type Candidate} from './schema.js';
 import {runCommand} from './command.js';
 
-export const REVIEW_VERSION = 3;
+export const REVIEW_VERSION = 4;
+export const INLINE_DIFF_LIMIT = 240_000;
+const DIFF_PART_SIZE = 60_000;
+const DIFF_DIRECTORY = '.iteris-review-diff';
 export const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+export function reviewDiffParts(diff: string): Array<{path: string; content: string; sha256: string}> {
+	if (diff.length <= INLINE_DIFF_LIMIT) return [];
+	const parts: Array<{path: string; content: string; sha256: string}> = [];
+	for (let start = 0; start < diff.length;) {
+		let end = Math.min(start + DIFF_PART_SIZE, diff.length);
+		// Keep UTF-16 surrogate pairs together so writing and reading preserves the exact diff.
+		if (end < diff.length && /[\uD800-\uDBFF]/.test(diff[end - 1]!)) end--;
+		const content = diff.slice(start, end);
+		parts.push({path: `${DIFF_DIRECTORY}/part-${String(parts.length + 1).padStart(4, '0')}.patch`, content,
+			sha256: createHash('sha256').update(content).digest('hex')});
+		start = end;
+	}
+	return parts;
+}
+export function reviewerContext(context: ReviewContext): ReviewContext & {diffParts?: Array<{path: string; characters: number; sha256: string}>; diffSha256?: string} {
+	const parts = reviewDiffParts(context.diff);
+	if (!parts.length) return context;
+	return {...context, diff: 'Complete diff is stored in the snapshot files listed in diffParts. Read every part in order; no content was omitted.',
+		diffParts: parts.map(part => ({path: part.path, characters: part.content.length, sha256: part.sha256})),
+		diffSha256: createHash('sha256').update(context.diff).digest('hex')};
+}
+export function writerContext(context: ReviewContext): ReviewContext {
+	if (context.diff.length <= INLINE_DIFF_LIMIT) return context;
+	return {...context, diff: `Complete diff is available in this Git checkout. Run git diff --no-ext-diff --no-textconv --no-color --no-renames --unified=5 ${context.stamp.mergeBase} ${context.stamp.head} to inspect it; no content was omitted from the checkout.`};
+}
 export function git(cwd: string, args: string[]): string {
 	return execFileSync('git', ['-c', 'core.hooksPath=/dev/null', ...args], {cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 15_000, maxBuffer: 8 * 1024 * 1024});
 }
@@ -33,7 +61,6 @@ export function captureContext(ticket: Ticket, config: IterisConfig, cwd: string
 	const changedFiles = git(cwd, ['diff', '--name-only', '-z', '--no-renames', mergeBase, head]).split('\0').filter(Boolean);
 	if (!changedFiles.length) throw new Error('No committed changes to review against the configured base.');
 	const diff = git(cwd, ['diff', '--no-ext-diff', '--no-textconv', '--no-color', '--no-renames', '--unified=5', mergeBase, head]);
-	if (diff.length > 240_000) throw new Error('Review diff exceeds 240,000 characters. Split this change before review; no content was silently omitted.');
 	let policy = '';
 	const policyExists = git(cwd, ['ls-tree', base, '--', 'REVIEW.md']).trim();
 	if (policyExists) {
@@ -59,7 +86,7 @@ export function suggestChecks(cwd: string, head: string): string[] {
 }
 
 /** A detached disposable checkout with no remote or Git metadata for reviewers to publish through. */
-export async function createSnapshot(cwd: string, head: string, deadline: number, signal?: AbortSignal): Promise<{cwd: string; dispose: () => Promise<void>}> {
+export async function createSnapshot(cwd: string, head: string, deadline: number, signal?: AbortSignal, diff = ''): Promise<{cwd: string; dispose: () => Promise<void>}> {
 	const root = await mkdtemp(path.join(tmpdir(), 'iteris-review-'));
 	const snapshot = path.join(root, 'source');
 	const dispose = () => rm(root, {recursive: true, force: true});
@@ -72,6 +99,11 @@ export async function createSnapshot(cwd: string, head: string, deadline: number
 			if (result.exitCode !== 0 || result.error) throw new Error(result.error ?? `Could not create review snapshot: ${result.output}`);
 		}
 		await rm(path.join(snapshot, '.git'), {recursive: true, force: true});
+		const parts = reviewDiffParts(diff);
+		if (parts.length) {
+			await mkdir(path.join(snapshot, DIFF_DIRECTORY));
+			for (const part of parts) await writeFile(path.join(snapshot, part.path), part.content, {mode: 0o400});
+		}
 		return {cwd: snapshot, dispose};
 	} catch (error) {await dispose(); throw error;}
 }
