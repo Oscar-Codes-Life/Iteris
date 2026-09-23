@@ -26,7 +26,7 @@ export function reviewPrompt(lens: 'correctness' | 'maintainability' | 'risk', c
 		risk: 'Trace sensitive boundaries and cross-file consequences: credentials, permissions, subprocess execution, migrations, shared contracts and concurrency. All claimed performance regressions need a concrete workload and mechanism.',
 	}[lens];
 	return `ITERIS_REVIEW ${lens}\n${rules}\n${focus}
-JSON shape (example finding is illustrative, omit findings when none):
+JSON shape (example finding is illustrative; use an empty findings array when none):
 ${JSON.stringify({head: context.stamp.head, complete: true, inspectedFiles: context.changedFiles, gaps: [], requirements: [{requirement: 'Requested outcome', status: 'covered', evidence: 'Implementation and relevant test references'}], findings: [findingExample]})}
 INPUT_JSON\n${JSON.stringify({context: reviewerContext(context), checks})}`;
 }

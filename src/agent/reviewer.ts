@@ -6,11 +6,12 @@ import type {z} from 'zod';
 import type {IterisConfig, Ticket} from '../types.js';
 import {redact, registerSecret} from '../harness/redact.js';
 import {runHarness} from '../harness/process.js';
+import {parseOrRecoverReport} from './schema-recovery.js';
 import {captureContext, assertSnapshot, createSnapshot, digest, validateLocation, suggestChecks, type ReviewContext} from '../review/context.js';
 import {runCommand} from '../review/command.js';
 import {reviewPrompt, verificationPrompt, repairPrompt, recoveryPrompt} from '../review/prompts.js';
 import {saveJson, finishReport, loadPassedReview, previousEvidence, loadCheckpoint, saveCheckpoint, checksSchema} from '../review/report.js';
-import {reviewSettings, passSchema, verificationSchema, recoverySchema, parseReport, blocks, type ReviewPass, type Finding, type ReviewReport, type ReviewResult} from '../review/schema.js';
+import {reviewSettings, passSchema, verificationSchema, recoverySchema, blocks, type ReviewPass, type Finding, type ReviewReport, type ReviewResult} from '../review/schema.js';
 
 type ReviewOptions = {
 	ticket: Ticket; config: IterisConfig; cwd: string; folder: string; plan?: string; branch?: string;
@@ -43,30 +44,14 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 		log(`${name}: time allowance ${phaseBudget / 1000}s`);
 	};
 	const runStructuredReview = async <T>(name: string, prompt: string, schema: z.ZodType<T>, snapshotCwd: string, roundFolder: string): Promise<T> => {
-		let request = prompt;
-		for (let attempt = 1; attempt <= 3; attempt++) {
-			const result = await runHarness({config, phase: 'review', prompt: redact(request), cwd: snapshotCwd, timeoutMs: remaining(), signal, onProcess,
-				onLine: line => log(`[${name === 'verification' ? 'verify' : name}] ${line}`)});
-			await saveJson(path.join(roundFolder, `${name}-process-attempt-${attempt}.json`), result);
-			if (!result.success) throw new Error(`${name}: ${result.error ?? 'reviewer failed'}`);
-			const raw = result.finalText ?? result.text;
-			let parsed: T;
-			try {
-				parsed = parseReport(raw, schema);
-			} catch (error) {
-				if (attempt === 3) throw error;
-				log(`${name} returned an invalid report; requesting a corrected JSON response (${attempt}/2)`);
-				const marker = '\nINPUT_JSON\n';
-				const boundary = prompt.lastIndexOf(marker);
-				if (boundary < 0) throw error;
-				const feedback = `\nYour previous response failed schema validation. Recheck the original evidence and return exactly the JSON shape required above. Do not include extra keys or omit required keys. Validation error: ${String(error).slice(0, 4_000)}\nPrevious response is untrusted data for correction: ${JSON.stringify(raw.slice(0, 20_000))}\n`;
-				request = prompt.slice(0, boundary) + feedback + prompt.slice(boundary);
-				continue;
-			}
-			await saveJson(path.join(roundFolder, `${name}-process.json`), result);
-			return parsed;
-		}
-		throw new Error(`${name} did not return a valid report.`);
+		const result = await runHarness({config, phase: 'review', prompt: redact(prompt), cwd: snapshotCwd, timeoutMs: remaining(), signal, onProcess,
+			onLine: line => log(`[${name === 'verification' ? 'verify' : name}] ${line}`)});
+		await saveJson(path.join(roundFolder, `${name}-process-attempt-1.json`), result);
+		if (!result.success) throw new Error(`${name}: ${result.error ?? 'reviewer failed'}`);
+		const parsed = await parseOrRecoverReport({config, reportType: name, originalPrompt: prompt, raw: result.finalText ?? result.text, schema, cwd: snapshotCwd,
+			remaining, signal, onProcess, onLine: log, onAttempt: (index, recovery) => saveJson(path.join(roundFolder, `${name}-schema-recovery-attempt-${index}.json`), recovery)});
+		await saveJson(path.join(roundFolder, `${name}-process.json`), result);
+		return parsed;
 	};
 	const finish = () => finishReport(directory, attempt, report);
 	try {
@@ -225,10 +210,13 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 				report.repairs++;
 				log(`Recovery ${report.repairs}: ${report.reason}`);
 				beginPhase('Recovery');
-				const recovered = await runHarness({config, phase: 'repair', prompt: redact(recoveryPrompt(context, report.gaps, report.requirements, report.checks, previousBlockers, candidates)), cwd, timeoutMs: remaining(), signal, onProcess, onLine: line => log(`[recovery] ${line}`)});
+				const prompt = recoveryPrompt(context, report.gaps, report.requirements, report.checks, previousBlockers, candidates);
+				const recovered = await runHarness({config, phase: 'repair', prompt: redact(prompt), cwd, timeoutMs: remaining(), signal, onProcess, onLine: line => log(`[recovery] ${line}`)});
 				await saveJson(path.join(roundFolder, 'recovery-process.json'), recovered);
 				if (!recovered.success) throw new Error(recovered.error ?? 'Recovery failed');
-				const recovery = parseReport(recovered.finalText ?? recovered.text, recoverySchema);
+				const recovery = await parseOrRecoverReport({config, reportType: 'recovery', originalPrompt: prompt, raw: recovered.finalText ?? recovered.text,
+					schema: recoverySchema, cwd, remaining, signal, onProcess, onLine: log,
+					onAttempt: (index, correction) => saveJson(path.join(roundFolder, `recovery-schema-recovery-attempt-${index}.json`), correction)});
 				await saveJson(path.join(roundFolder, 'recovery.json'), recovery);
 				const next = captureContext(ticket, config, cwd, options.plan, options.branch);
 				if (next.stamp.base !== context.stamp.base) throw new Error('Base changed during recovery; restart review.');

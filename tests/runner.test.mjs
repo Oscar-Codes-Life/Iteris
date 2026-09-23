@@ -51,16 +51,27 @@ test('a malformed verifier response is corrected and ticket reaches PR creation'
  await runAllTickets([ticket(1)],cfg,cwd,{onStatusChange(){},onLogLine(){},onComplete(){},onFailure:async(_,state)=>assert.fail(state.failureReason)},undefined,api);
  assert.equal(api.created.length,1);
  const calls=(await readFile(path.join(cwd,'calls.jsonl'),'utf8')).trim().split('\n').map(JSON.parse);
- assert.equal(calls.filter(call=>call.prompt.startsWith('ITERIS_REVIEW verify')).length,2);
+ assert.equal(calls.filter(call=>call.prompt.startsWith('ITERIS_REVIEW verify')).length,1);
+ assert.equal(calls.filter(call=>call.prompt.startsWith('ITERIS_SCHEMA_RECOVER')).length,1);
 });
-test('persistent malformed reviewer output never launches a project write agent',async t=>{
+test('a schema mismatch that survives recovery retries unattended and eventually opens a PR',async t=>{
  const {cwd}=await reviewRepository(t);await executable(cwd,'codex',fakeAgent);
  environment(t,{PATH:`${cwd}:${process.env.PATH}`,FAKE_IMPLEMENT:'1',REVIEW_SCENARIO:'malformed',CAPTURE:path.join(cwd,'calls.jsonl')});
- const cfg=config('codex');cfg.planMode=false;await atomicWriteConfig(cfg,cwd);const api=services();let failure='';
- await runAllTickets([ticket(1)],cfg,cwd,{onStatusChange(){},onLogLine(){},onComplete(){},onFailure:async(_,state)=>{failure=state.failureReason;return 'skip';}},undefined,api);
- assert.match(failure,/Invalid review report/);assert.equal(api.created.length,0);
+ const cfg=config('codex');cfg.planMode=false;await atomicWriteConfig(cfg,cwd);const api=services();let recoveries=0;
+ await runAllTickets([ticket(1)],cfg,cwd,{onStatusChange(_,state){if(state.status==='recovering'&&state.failureReason?.includes('Schema recovery')){recoveries++;process.env.REVIEW_SCENARIO='normal';}},onLogLine(){},onComplete(){},onFailure:async(_,state)=>assert.fail(state.failureReason)},undefined,api);
+ assert.equal(api.created.length,1);assert.ok(recoveries>=1);
  const calls=(await readFile(path.join(cwd,'calls.jsonl'),'utf8')).trim().split('\n').map(JSON.parse);
- assert.equal(calls.filter(call=>call.prompt.startsWith('ITERIS_REVIEW correctness')).length,3);
+ assert.equal(calls.some(call=>call.prompt.startsWith('ITERIS_FAILURE_RECOVER')),false);
+});
+test('persistent malformed reviewer output keeps retrying without launching a project write agent until cancelled',async t=>{
+ const {cwd}=await reviewRepository(t);await executable(cwd,'codex',fakeAgent);
+ environment(t,{PATH:`${cwd}:${process.env.PATH}`,FAKE_IMPLEMENT:'1',REVIEW_SCENARIO:'malformed',CAPTURE:path.join(cwd,'calls.jsonl')});
+ const cfg=config('codex');cfg.planMode=false;await atomicWriteConfig(cfg,cwd);const api=services();const controller=new AbortController();let recoveries=0;
+ await runAllTickets([ticket(1)],cfg,cwd,{onStatusChange(_,state){if(state.status==='recovering'&&state.failureReason?.includes('Schema recovery')){recoveries++;controller.abort();}},onLogLine(){},onComplete(){},onFailure:async()=>assert.fail('schema failure should retry unattended')},controller.signal,api);
+ assert.equal(recoveries,1);assert.equal(api.created.length,0);
+ const calls=(await readFile(path.join(cwd,'calls.jsonl'),'utf8')).trim().split('\n').map(JSON.parse);
+ assert.equal(calls.filter(call=>call.prompt.startsWith('ITERIS_REVIEW correctness')).length,1);
+ assert.equal(calls.filter(call=>call.prompt.startsWith('ITERIS_SCHEMA_RECOVER')).length,4);
  assert.equal(calls.some(call=>call.prompt.startsWith('ITERIS_FAILURE_RECOVER')),false);
 });
 test('a failed implementation launches a repair agent and continues to a PR',async t=>{

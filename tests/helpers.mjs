@@ -58,7 +58,7 @@ if (args[0] === 'app-server') {
    const evidenceStage=evidenceCommands.findIndex(command=>!input.checks.some(check=>check.command===command && check.exitCode===0));
    const requirement={requirement:scenario==='progressive-blocker'?'Implement stage '+progressiveStage:'Implement feature',status:scenario==='missing'?'missing':scenario==='unverified'?'unverified':'covered',evidence:'feature.txt implements the requested behavior'};
    const broken=context.diff.includes('+broken');
-   const needsEvidence=(scenario==='progressive-evidence' && evidenceStage>=0) || (['recover-evidence','recover-verifier','recover-unverified','recover-with-blocker','recover-failed-check','external-gap','gap-candidate'].includes(scenario) && !input.checks.some(c=>c.command==='printf recovery-evidence' && c.exitCode===0));
+   const needsEvidence=(scenario==='progressive-evidence' && evidenceStage>=0) || (['recover-evidence','recover-verifier','recover-unverified','recover-with-blocker','recover-failed-check','external-gap','gap-candidate','recovery-extra-findings'].includes(scenario) && !input.checks.some(c=>c.command==='printf recovery-evidence' && c.exitCode===0));
    if(['recover-unverified','recover-with-blocker'].includes(scenario) && needsEvidence) requirement.status='unverified';
    const finding={category:'correctness',priority:scenario==='advisory'?'medium':'high',file:'feature.txt',line:1,side:'new',title:scenario==='moving-blocker'?context.stamp.head:scenario==='progressive-blocker'?'Stage '+progressiveStage:'Broken behavior',trigger:'Call feature',expected:'fixed',actual:'broken',impact:'Wrong result',evidence:'feature.txt returns broken',remedy:'Return fixed',materialRegression:false,policyRule:''};
    const duplicateFinding={...finding,title:'Same broken behavior',trigger:'Call feature through wrapper'};
@@ -66,6 +66,7 @@ if (args[0] === 'app-server') {
    if (prompt.startsWith('ITERIS_REVIEW verify')) {
     const reply={head:context.stamp.head,complete:!(scenario==='recover-verifier' && needsEvidence),gaps:scenario==='recover-verifier' && needsEvidence?['Recovery tests were not run']:[],requirements:[requirement],decisions:scenario==='omit-decision'?[]:input.candidates.map((f,index)=>['duplicate-status','duplicate-status-ambiguous'].includes(scenario)&&index===1?{id:f.id,status:'duplicate',evidence:scenario==='duplicate-status'?'Same causal defect as candidate '+input.candidates[0].id:'Same causal defect as another candidate'}:{id:f.id,status:scenario==='false-positive'?'rejected':'confirmed',evidence:'Independent causal trace'}),resolved:scenario==='missing-resolution'?[]:input.previousBlockers.filter(f=>!input.candidates.some(c=>c.id===f.id)).map(f=>({id:f.id,evidence:'feature.txt now returns fixed'}))};
     if (scenario==='verifier-extra-findings' && (fs.readFileSync(process.env.CAPTURE,'utf8').match(/ITERIS_REVIEW verify/g)||[]).length===1) reply.findings=[];
+    if (scenario==='verifier-persistent-extra-findings') reply.findings=[];
     text=JSON.stringify(reply);
    } else {
     text=JSON.stringify({head:scenario==='wrong-head'?'wrong':context.stamp.head,complete:scenario!=='incomplete' && !(needsEvidence && !['recover-verifier','recover-unverified','recover-with-blocker'].includes(scenario)),inspectedFiles:scenario==='omit-file'?[]:context.changedFiles,gaps:needsEvidence && !['recover-verifier','recover-unverified','recover-with-blocker'].includes(scenario)?[scenario==='progressive-evidence'?'Required test '+evidenceCommands[evidenceStage]+' was not run':'Recovery tests were not run']:[],requirements:prompt.startsWith('ITERIS_REVIEW correctness')?[requirement]:[],findings:['duplicate-status','duplicate-status-ambiguous'].includes(scenario)?[finding,duplicateFinding]:['blocker','moving-blocker','false-positive','advisory','omit-decision'].includes(scenario)||broken||(scenario==='progressive-blocker'&&progressiveStage<3)?[finding]:[]});
@@ -83,6 +84,13 @@ if (args[0] === 'app-server') {
     fs.writeFileSync('feature.txt','fixed\\n');git('add','feature.txt');git('commit','-qm','recover candidate');
    }
    text=JSON.stringify({checks:[process.env.REVIEW_SCENARIO==='progressive-evidence'?['printf recovery-one','printf recovery-two','printf recovery-three'].find(command=>!input.checks.some(check=>check.command===command && check.exitCode===0)):process.env.REVIEW_SCENARIO==='recover-failed-check'?'exit 9':'printf recovery-evidence'],blockedReason:process.env.REVIEW_SCENARIO==='external-gap'?'Hosted credentials unavailable':process.env.REVIEW_SCENARIO==='gap-candidate'&&!input.candidates?.length?'Missing reviewer candidate':''});
+   if (process.env.REVIEW_SCENARIO==='recovery-extra-findings') text=JSON.stringify({...JSON.parse(text),findings:[]});
+  }
+  if (prompt.startsWith('ITERIS_SCHEMA_RECOVER')) {
+   const input=JSON.parse(prompt.split('INPUT_JSON\\n')[1]);
+   const original=JSON.parse(input.originalPrompt.split('INPUT_JSON\\n')[1]);
+   if (input.reportType==='verification') text=JSON.stringify({head:original.context.stamp.head,complete:true,gaps:[],requirements:[{requirement:'Implement feature',status:'covered',evidence:'feature.txt implements the requested behavior'}],decisions:original.candidates.map(f=>({id:f.id,status:'confirmed',evidence:'Independent causal trace'})),resolved:[]});
+   if (input.reportType==='recovery') text=JSON.stringify({checks:['printf recovery-evidence'],blockedReason:''});
   }
   if (prompt.startsWith('ITERIS_REPAIR') && process.env.REVIEW_SCENARIO!=='no-repair') {
    const git=(...args)=>require('node:child_process').execFileSync('git',args,{stdio:'pipe'});

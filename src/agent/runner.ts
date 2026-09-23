@@ -46,11 +46,21 @@ export async function runAllTickets(tickets: Ticket[], config: IterisConfig, cwd
 			const snapshot = structuredClone({...config, harness: latest.harness, harnesses: latest.harnesses, planMode: latest.planMode, timeout: latest.timeout, review: latest.review, qualityChecks: latest.qualityChecks});
 			const checkpoint: TicketCheckpoint = {};
 			const recoveryAttempts = new Map<string, number>();
+			let schemaRetryCount = 0;
 			let retry = true;
 			while (retry && !controller.signal.aborted) {
 				const result = await runSingleTicket(ticket, snapshot, cwd, callbacks, controller.signal, services, checkpoint);
 				const failed = ['failed', 'stale', 'blocked', 'incomplete'].includes(result.status);
 				if (!failed || controller.signal.aborted) {retry = false; continue;}
+				if (isSchemaReportFailure(result.failureReason)) {
+					const delayMs = Math.min(60_000, 1_000 * 2 ** Math.min(schemaRetryCount++, 6));
+					callbacks.onStatusChange(ticket.number, {...result, status: 'recovering'});
+					callbacks.onLogLine(ticket.number, `[iteris] Schema recovery needs another attempt; retrying ticket #${ticket.number} in ${delayMs / 1000}s without repeating implementation.`);
+					await waitForSchemaRetry(delayMs, controller.signal);
+					retry = !controller.signal.aborted;
+					continue;
+				}
+				schemaRetryCount = 0;
 				const failureKey = `${result.status}:${result.failureReason ?? ''}`;
 				const attempts = recoveryAttempts.get(failureKey) ?? 0;
 				if (attempts < 2 && snapshot.review?.maxRepairCycles !== 0 && !result.failureReason?.includes('Invalid review report')) {
@@ -71,6 +81,20 @@ export async function runAllTickets(tickets: Ticket[], config: IterisConfig, cwd
 		externalSignal?.removeEventListener('abort', abort);
 		await release();
 	}
+}
+
+function isSchemaReportFailure(reason?: string): boolean {
+	return Boolean(reason && (reason.includes('Invalid review report:') || reason.includes('Schema recovery')));
+}
+
+async function waitForSchemaRetry(delayMs: number, signal: AbortSignal): Promise<void> {
+	if (signal.aborted) return;
+	await new Promise<void>(resolve => {
+		const finish = () => {clearTimeout(timer); signal.removeEventListener('abort', finish); resolve();};
+		const timer = setTimeout(finish, delayMs);
+		signal.addEventListener('abort', finish, {once: true});
+		if (signal.aborted) finish();
+	});
 }
 
 type TicketCheckpoint = {plan?: string; implemented?: boolean};

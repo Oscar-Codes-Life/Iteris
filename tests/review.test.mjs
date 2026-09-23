@@ -40,9 +40,28 @@ test('an extra findings key in verifier output is corrected by a read-only revie
  assert.equal(result.report.outcome,'passed',result.error);
  assert.equal(f.git('rev-parse','HEAD'),head);
  const calls=await f.calls();
- assert.equal(calls.filter(call=>call.prompt.startsWith('ITERIS_REVIEW verify')).length,2);
+ assert.equal(calls.filter(call=>call.prompt.startsWith('ITERIS_REVIEW verify')).length,1);
+ assert.equal(calls.filter(call=>call.prompt.startsWith('ITERIS_SCHEMA_RECOVER')).length,1);
  assert.equal(calls.some(call=>call.prompt.startsWith('ITERIS_REPAIR')||call.prompt.startsWith('ITERIS_FAILURE_RECOVER')),false);
  assert.ok(calls.every(call=>!call.args.includes('--dangerously-bypass-approvals-and-sandbox')));
+});
+test('a persistent verifier schema mismatch launches a separate read-only schema recovery agent',async t=>{
+ const f=await fixture(t,{scenario:'verifier-persistent-extra-findings'});
+ const head=f.git('rev-parse','HEAD');const result=await runCodeReview(f.options);
+ assert.equal(result.report.outcome,'passed',result.error);
+ assert.equal(f.git('rev-parse','HEAD'),head);
+ const calls=await f.calls();
+ assert.ok(calls.some(call=>call.prompt.startsWith('ITERIS_SCHEMA_RECOVER')));
+ assert.equal(calls.some(call=>call.prompt.startsWith('ITERIS_REPAIR')||call.prompt.startsWith('ITERIS_FAILURE_RECOVER')),false);
+ assert.ok(calls.filter(call=>call.prompt.startsWith('ITERIS_SCHEMA_RECOVER')).every(call=>call.args.includes('--sandbox')&&call.args.includes('read-only')));
+});
+test('a malformed report from the write-capable recovery agent is repaired by a separate read-only agent',async t=>{
+ const f=await fixture(t,{scenario:'recovery-extra-findings'});f.cfg.review.maxRepairCycles=2;
+ const result=await runCodeReview(f.options);assert.equal(result.report.outcome,'passed',result.error);
+ const calls=await f.calls();
+ assert.equal(calls.filter(call=>call.prompt.startsWith('ITERIS_RECOVER')).length,1);
+ assert.ok(calls.some(call=>call.prompt.startsWith('ITERIS_SCHEMA_RECOVER')));
+ assert.ok(calls.filter(call=>call.prompt.startsWith('ITERIS_SCHEMA_RECOVER')).every(call=>call.args.includes('--sandbox')&&call.args.includes('read-only')));
 });
 test('separate repair must be committed, independently re-reviewed and verified resolved',async t=>{
  const f=await fixture(t,{content:'broken\n'});f.cfg.review.maxRepairCycles=2;
