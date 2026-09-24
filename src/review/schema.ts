@@ -35,6 +35,7 @@ export type CheckResult = {command: string; head: string; exitCode: number | nul
 export type ReviewStamp = {head: string; base: string; mergeBase: string; branch: string; scope: string; key: string};
 export type ReviewReport = {
 	version: 1; outcome: 'passed' | 'blocked' | 'incomplete'; reason: string;
+	deferredToCI?: boolean;
 	stamp?: ReviewStamp; startedAt: string; finishedAt: string; rounds: number; repairs: number;
 	findings: Finding[]; requirements: Verification['requirements']; checks: CheckResult[]; gaps: string[];
 	mode: 'standard' | 'deep'; selection: {harness: string; model?: string; effort?: string};
@@ -60,4 +61,5 @@ export function parseReport<T>(raw: string, schema: z.ZodType<T>): T {
 export const recoverySchema = z.object({
 	checks: z.array(z.string().trim().min(1).max(4000)).max(20),
 	blockedReason: z.string().max(12_000),
+	deferredToCI: z.boolean().optional(),
 }).strict();

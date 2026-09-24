@@ -144,10 +144,11 @@ async function runSingleTicket(ticket: Ticket, config: IterisConfig, cwd: string
 		}
 		await phase('reviewing');
 		const reviewed = await runCodeReview({ticket, config, cwd, folder, plan, onLogLine: log, onProcess() {}, signal});
-		if (reviewed.report.outcome !== 'passed') {
+		if (reviewed.report.outcome !== 'passed' && !(reviewed.report.outcome === 'incomplete' && reviewed.report.deferredToCI)) {
 			state.status = reviewed.report.outcome;
 			throw new Error(`Code review ${reviewed.report.outcome}: ${reviewed.error}`);
 		}
+		if (reviewed.report.deferredToCI) log(`[iteris] Creating PR with pending CI evidence: ${reviewed.report.reason}`);
 		const reviewedContext = captureContext(ticket, config, cwd, plan);
 		if (reviewedContext.stamp.key !== reviewed.report.stamp?.key) throw new Error('Code changed after review; rerun review before publication.');
 		await publishReviewed(reviewedContext, config, cwd, signal);
@@ -170,13 +171,16 @@ async function runSingleTicket(ticket: Ticket, config: IterisConfig, cwd: string
 		}
 		await assertPublished(reviewedContext, config, cwd, signal);
 		state.prUrl = pr.url; state.prNumber = pr.number;
+		if (reviewed.report.deferredToCI) state.reviewPending = reviewed.report.reason;
 		if (config.pr.addLabelOnOpen && (config.provider === 'github' || config.provider === undefined)) await services.addLabel(config, ticket.number, config.pr.addLabelOnOpen);
 		if (config.provider === 'trello') await services.moveCard(config, ticket.number);
 		await phase('summarizing'); await logWrites;
 		try {await generateSummary(folder, config, cwd, undefined, signal);} catch (error) {log(`Summary failed: ${String(error)}`);}
 		if (signal.aborted) throw new Error('Cancelled');
 		state.status = 'done';
-		await appendProgress(cwd, `#${ticket.number} (${ticket.title}) — completed successfully`);
+		await appendProgress(cwd, reviewed.report.deferredToCI
+			? `#${ticket.number} (${ticket.title}) — PR opened; ${reviewed.report.reason}`
+			: `#${ticket.number} (${ticket.title}) — completed successfully`);
 	} catch (error) {
 		state.status = signal.aborted || state.status === 'stale' ? 'stale' : state.status === 'blocked' || state.status === 'incomplete' ? state.status : 'failed';
 		state.failureReason = error instanceof Error ? error.message : String(error);

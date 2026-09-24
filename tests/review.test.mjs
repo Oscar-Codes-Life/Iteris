@@ -255,11 +255,24 @@ for (const scenario of ['recover-evidence', 'recover-verifier', 'recover-unverif
  assert.equal((await runCodeReview(f.options)).report.outcome, 'passed');
  assert.equal((await f.calls()).length, calls.length, 'completed recovery evidence should be reusable');
 });
-test('unavailable external evidence stops with an actionable reason', async t => {
+test('unavailable external evidence remains incomplete and is marked for CI', async t => {
  const f = await fixture(t, {scenario:'external-gap'}); f.cfg.review.maxRepairCycles = 2;
  const result = await runCodeReview(f.options);
- assert.equal(result.report.outcome, 'incomplete'); assert.match(result.error, /Hosted credentials unavailable/);
+ assert.equal(result.report.outcome, 'incomplete'); assert.equal(result.report.deferredToCI,true); assert.match(result.error, /Hosted credentials unavailable/);
  assert.equal(result.report.repairs, 1); assert.equal(result.report.rounds, 1);
+});
+test('external CI deferral never hides unresolved findings or failed local checks', async t => {
+ const finding = await fixture(t, {scenario:'external-gap',content:'broken\n'});
+ finding.cfg.review.maxRepairCycles=2;
+ const withFinding = await runCodeReview(finding.options);
+ assert.equal(withFinding.report.outcome,'incomplete');assert.notEqual(withFinding.report.deferredToCI,true);
+ assert.match(withFinding.error,/Review recovery blocked/);
+ const failed = await fixture(t, {scenario:'external-gap'});
+ failed.cfg.review.maxRepairCycles=2;
+ failed.cfg.qualityChecks=['false'];
+ const withFailedCheck = await runCodeReview(failed.options);
+ assert.equal(withFailedCheck.report.outcome,'incomplete');assert.notEqual(withFailedCheck.report.deferredToCI,true);
+ assert.match(withFailedCheck.error,/Review recovery blocked/);
 });
 test('failed supplemental checks cannot pass and repeated gaps stop recovery', async t => {
  const f = await fixture(t, {scenario:'recover-failed-check'}); f.cfg.review.maxRepairCycles = 2;

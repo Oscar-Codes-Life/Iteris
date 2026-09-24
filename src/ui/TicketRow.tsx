@@ -63,6 +63,7 @@ export function TicketRow({ state }: TicketRowProps) {
         <Text dimColor>branch: {state.branch}</Text>
       )}
       {state.prNumber && <Text color="cyan">PR #{state.prNumber}</Text>}
+      {state.reviewPending && <Text color="yellow">({state.reviewPending})</Text>}
       {state.failureReason && (["failed", "stale", "blocked", "incomplete"].includes(state.status)) && (
         <Text dimColor>({state.failureReason})</Text>
       )}

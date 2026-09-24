@@ -44,6 +44,28 @@ test('successive missing test evidence self-heals and reaches PR creation',async
  assert.equal(report.outcome,'passed');assert.equal(report.repairs,3);
  assert.deepEqual(report.checks.map(check=>check.command),['true','printf recovery-one','printf recovery-two','printf recovery-three']);
 });
+test('unavailable hosted gate opens a PR with incomplete evidence and continues the queue',async t=>{
+ const {cwd}=await reviewRepository(t);await executable(cwd,'codex',fakeAgent);
+ environment(t,{PATH:`${cwd}:${process.env.PATH}`,FAKE_IMPLEMENT:'1',REVIEW_SCENARIO:'external-gap-legacy'});
+ const cfg=config('codex');cfg.planMode=false;await atomicWriteConfig(cfg,cwd);
+ const api=services(),completed=[],doneStates=new Map();
+ await runAllTickets([ticket(1),ticket(2)],cfg,cwd,{onStatusChange(number,state){if(state.status==='done')doneStates.set(number,state);},onLogLine(){},onComplete:number=>completed.push(number),onFailure:async(_,state)=>assert.fail(state.failureReason)},undefined,api);
+ assert.equal(api.created.length,2);
+ assert.deepEqual(completed,[1,2]);
+ assert.match(doneStates.get(1).reviewPending,/SUPABASE_ACCESS_TOKEN/);
+ for(const pr of api.created){assert.match(pr.body,/INCOMPLETE/);assert.match(pr.body,/SUPABASE_ACCESS_TOKEN/);}
+ const report=JSON.parse(await readFile(path.join(cwd,'.iteris/runs/1-ticket-1/review/result.json'),'utf8'));
+ assert.equal(report.outcome,'incomplete');assert.equal(report.deferredToCI,true);
+});
+test('CI-only gaps continue to the next ticket when repair cycles are disabled',async t=>{
+ const {cwd}=await reviewRepository(t);await executable(cwd,'codex',fakeAgent);
+ environment(t,{PATH:`${cwd}:${process.env.PATH}`,FAKE_IMPLEMENT:'1',REVIEW_SCENARIO:'external-gap-direct'});
+ const cfg=config('codex');cfg.planMode=false;cfg.review.maxRepairCycles=0;await atomicWriteConfig(cfg,cwd);
+ const api=services(),completed=[];
+ await runAllTickets([ticket(1),ticket(2)],cfg,cwd,{onStatusChange(){},onLogLine(){},onComplete:number=>completed.push(number),onFailure:async(_,state)=>assert.fail(state.failureReason)},undefined,api);
+ assert.equal(api.created.length,2);assert.deepEqual(completed,[1,2]);
+ assert.match(api.created[0].body,/CI schema-contract gate requires SUPABASE_ACCESS_TOKEN/);
+});
 test('a malformed verifier response is corrected and ticket reaches PR creation',async t=>{
  const {cwd}=await reviewRepository(t);await executable(cwd,'codex',fakeAgent);
  environment(t,{PATH:`${cwd}:${process.env.PATH}`,FAKE_IMPLEMENT:'1',REVIEW_SCENARIO:'verifier-extra-findings',CAPTURE:path.join(cwd,'calls.jsonl')});

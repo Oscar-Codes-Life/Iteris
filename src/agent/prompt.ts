@@ -18,7 +18,7 @@ ${ticket.body}
 2. Implement the changes described in the ticket
 3. Run quality checks:
 ${qualityCheckLines}
-4. If checks pass: commit all changes with message \`fix: #${ticket.number} — ${ticket.title}\`
+4. Fix failures in checks that can run locally, then commit all changes with message \`fix: #${ticket.number} — ${ticket.title}\`. If a check needs unavailable hosted CI credentials or infrastructure, record the exact pending check and commit without waiting for CI; Iteris will open the PR so that gate can run there.
 5. Leave the branch committed and the working tree clean. Do not push; Iteris publishes only after independent review.
 6. When fully done, print exactly: <task>done</task>
 

@@ -206,7 +206,13 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 				unresolvedRequirements = new Set(report.requirements.filter(item => item.status !== 'covered').map(item => item.requirement));
 					report.outcome = 'incomplete'; report.reason = report.gaps.join('; ');
 				const failureKey = digest({gaps: [...report.gaps].sort(), candidates: candidates.map(f => f.id).sort()});
-				if (!canRepair(failureKey)) {log(report.reason); return finish();}
+				if (!canRepair(failureKey)) {
+					if (!audit && report.gaps.every(namesCiGate) && ciDeferralReady(report, candidates)) {
+						report.deferredToCI = true;
+						report.reason = `CI evidence pending: ${report.reason}`;
+					}
+					log(report.reason); return finish();
+				}
 				report.repairs++;
 				log(`Recovery ${report.repairs}: ${report.reason}`);
 				beginPhase('Recovery');
@@ -220,7 +226,15 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 				await saveJson(path.join(roundFolder, 'recovery.json'), recovery);
 				const next = captureContext(ticket, config, cwd, options.plan, options.branch);
 				if (next.stamp.base !== context.stamp.base) throw new Error('Base changed during recovery; restart review.');
-				if (recovery.blockedReason) throw new Error(`Review recovery blocked: ${recovery.blockedReason}`);
+				if (recovery.blockedReason) {
+					if ((recovery.deferredToCI || namesCiGate(recovery.blockedReason)) && recovery.checks.length === 0 && next.stamp.key === context.stamp.key && ciDeferralReady(report, candidates)) {
+						report.deferredToCI = true;
+						report.reason = `CI evidence pending: ${recovery.blockedReason}`;
+						log(report.reason);
+						return finish();
+					}
+					throw new Error(`Review recovery blocked: ${recovery.blockedReason}`);
+				}
 				const checkCount = additionalChecks.size;
 				for (const command of recovery.checks) additionalChecks.add(command);
 				if (next.stamp.head === context.stamp.head && additionalChecks.size === checkCount) {
@@ -257,6 +271,17 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 }
 
 class ReviewGap extends Error {}
+
+function namesCiGate(reason: string): boolean {
+	return /\b(?:CI|GitHub Actions|GitLab CI|CircleCI)\b/i.test(reason) && /\b(?:gate|check|job|workflow|pipeline|event)\b/i.test(reason);
+}
+
+function ciDeferralReady(report: ReviewReport, candidates: Finding[]): boolean {
+	return candidates.length === 0 && report.requirements.length > 0 && report.checks.every(check => check.exitCode === 0 && !check.error) &&
+		!report.gaps.some(gap => /missing file coverage|omitted ticket acceptance criteria|reviewer reported incomplete coverage/i.test(gap)) &&
+		!report.findings.some(finding => finding.status === 'candidate' || blocks(finding)) &&
+		!report.requirements.some(requirement => requirement.status === 'missing');
+}
 
 function passGaps(pass: ReviewPass, context: ReviewContext, lens: string): string[] {
 	const gaps = [...pass.gaps];

@@ -21,6 +21,7 @@ export type TicketState = {
 	branch: string;
 	prUrl?: string;
 	prNumber?: number;
+	reviewPending?: string;
 	failureReason?: string;
 	startedAt?: Date;
 	finishedAt?: Date;
