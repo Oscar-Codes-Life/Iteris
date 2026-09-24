@@ -57,6 +57,25 @@ test('unavailable hosted gate opens a PR with incomplete evidence and continues 
  const report=JSON.parse(await readFile(path.join(cwd,'.iteris/runs/1-ticket-1/review/result.json'),'utf8'));
  assert.equal(report.outcome,'incomplete');assert.equal(report.deferredToCI,true);
 });
+test('CI recovery blocker cannot stop PR creation when reviewer also returned a candidate',async t=>{
+ const {cwd}=await reviewRepository(t);await executable(cwd,'codex',fakeAgent);
+ environment(t,{PATH:`${cwd}:${process.env.PATH}`,FAKE_IMPLEMENT:'1',REVIEW_SCENARIO:'external-gap-with-candidate'});
+ const cfg=config('codex');cfg.planMode=false;await atomicWriteConfig(cfg,cwd);
+ const api=services(),completed=[];
+ await runAllTickets([ticket(1),ticket(2)],cfg,cwd,{onStatusChange(){},onLogLine(){},onComplete:number=>completed.push(number),onFailure:async(_,state)=>assert.fail(state.failureReason)},undefined,api);
+ assert.equal(api.created.length,2);assert.deepEqual(completed,[1,2]);
+ assert.match(api.created[0].body,/INCOMPLETE/);
+ assert.match(api.created[0].body,/SUPABASE_ACCESS_TOKEN/);
+});
+test('any incomplete review opens a PR and advances the queue without a CI classifier',async t=>{
+ const {cwd}=await reviewRepository(t);await executable(cwd,'codex',fakeAgent);
+ environment(t,{PATH:`${cwd}:${process.env.PATH}`,FAKE_IMPLEMENT:'1',REVIEW_SCENARIO:'incomplete'});
+ const cfg=config('codex');cfg.planMode=false;cfg.review.maxRepairCycles=0;await atomicWriteConfig(cfg,cwd);
+ const api=services(),completed=[];
+ await runAllTickets([ticket(1),ticket(2)],cfg,cwd,{onStatusChange(){},onLogLine(){},onComplete:number=>completed.push(number),onFailure:async(_,state)=>assert.fail(state.failureReason)},undefined,api);
+ assert.equal(api.created.length,2);assert.deepEqual(completed,[1,2]);
+ assert.match(api.created[0].body,/INCOMPLETE/);
+});
 test('CI-only gaps continue to the next ticket when repair cycles are disabled',async t=>{
  const {cwd}=await reviewRepository(t);await executable(cwd,'codex',fakeAgent);
  environment(t,{PATH:`${cwd}:${process.env.PATH}`,FAKE_IMPLEMENT:'1',REVIEW_SCENARIO:'external-gap-direct'});
@@ -76,25 +95,15 @@ test('a malformed verifier response is corrected and ticket reaches PR creation'
  assert.equal(calls.filter(call=>call.prompt.startsWith('ITERIS_REVIEW verify')).length,1);
  assert.equal(calls.filter(call=>call.prompt.startsWith('ITERIS_SCHEMA_RECOVER')).length,1);
 });
-test('a schema mismatch that survives recovery retries unattended and eventually opens a PR',async t=>{
+test('a persistent schema mismatch opens an incomplete PR without ticket retries',async t=>{
  const {cwd}=await reviewRepository(t);await executable(cwd,'codex',fakeAgent);
  environment(t,{PATH:`${cwd}:${process.env.PATH}`,FAKE_IMPLEMENT:'1',REVIEW_SCENARIO:'malformed',CAPTURE:path.join(cwd,'calls.jsonl')});
  const cfg=config('codex');cfg.planMode=false;await atomicWriteConfig(cfg,cwd);const api=services();let recoveries=0;
- await runAllTickets([ticket(1)],cfg,cwd,{onStatusChange(_,state){if(state.status==='recovering'&&state.failureReason?.includes('Schema recovery')){recoveries++;process.env.REVIEW_SCENARIO='normal';}},onLogLine(){},onComplete(){},onFailure:async(_,state)=>assert.fail(state.failureReason)},undefined,api);
- assert.equal(api.created.length,1);assert.ok(recoveries>=1);
+ await runAllTickets([ticket(1)],cfg,cwd,{onStatusChange(_,state){if(state.status==='recovering')recoveries++;},onLogLine(){},onComplete(){},onFailure:async(_,state)=>assert.fail(state.failureReason)},undefined,api);
+ assert.equal(api.created.length,1);assert.equal(recoveries,0);assert.match(api.created[0].body,/INCOMPLETE/);
  const calls=(await readFile(path.join(cwd,'calls.jsonl'),'utf8')).trim().split('\n').map(JSON.parse);
  assert.equal(calls.some(call=>call.prompt.startsWith('ITERIS_FAILURE_RECOVER')),false);
-});
-test('persistent malformed reviewer output keeps retrying without launching a project write agent until cancelled',async t=>{
- const {cwd}=await reviewRepository(t);await executable(cwd,'codex',fakeAgent);
- environment(t,{PATH:`${cwd}:${process.env.PATH}`,FAKE_IMPLEMENT:'1',REVIEW_SCENARIO:'malformed',CAPTURE:path.join(cwd,'calls.jsonl')});
- const cfg=config('codex');cfg.planMode=false;await atomicWriteConfig(cfg,cwd);const api=services();const controller=new AbortController();let recoveries=0;
- await runAllTickets([ticket(1)],cfg,cwd,{onStatusChange(_,state){if(state.status==='recovering'&&state.failureReason?.includes('Schema recovery')){recoveries++;controller.abort();}},onLogLine(){},onComplete(){},onFailure:async()=>assert.fail('schema failure should retry unattended')},controller.signal,api);
- assert.equal(recoveries,1);assert.equal(api.created.length,0);
- const calls=(await readFile(path.join(cwd,'calls.jsonl'),'utf8')).trim().split('\n').map(JSON.parse);
- assert.equal(calls.filter(call=>call.prompt.startsWith('ITERIS_REVIEW correctness')).length,1);
- assert.equal(calls.filter(call=>call.prompt.startsWith('ITERIS_SCHEMA_RECOVER')).length,4);
- assert.equal(calls.some(call=>call.prompt.startsWith('ITERIS_FAILURE_RECOVER')),false);
+ assert.equal(calls.some(call=>call.prompt.startsWith('Write a high-value pull request description')),false);
 });
 test('a failed implementation launches a repair agent and continues to a PR',async t=>{
  const {cwd}=await reviewRepository(t);await executable(cwd,'codex',fakeAgent);
@@ -162,16 +171,14 @@ test('Trello completion uses same pipeline without GitHub issue labeling',async 
  assert.equal(moved,1);assert.match(api.created[0].body,/Implements Trello card: https:\/\/example.com\/ticket$/);
 });
 
-test('review failure preserves cause and retries review without repeating implementation or planning',async t=>{
+test('review process failure opens an incomplete PR without repeating implementation or planning',async t=>{
  const {cwd}=await reviewRepository(t);await executable(cwd,'codex',fakeAgent);
  environment(t,{PATH:`${cwd}:${process.env.PATH}`,FAKE_IMPLEMENT:'1',FAKE_MODE:undefined,CAPTURE:path.join(cwd,'calls.jsonl')});
- const cfg=config('codex');await atomicWriteConfig(cfg,cwd);let failures=0;
- await runAllTickets([ticket(1)],cfg,cwd,{onStatusChange(_,s){if(s.status==='reviewing')process.env.FAKE_MODE=failures===0?'fail':undefined;},onLogLine(){},onComplete(){},onFailure:async(_,s)=>{
-  failures++;assert.match(s.failureReason,/review.*Process exited with 2/i);return 'retry';
- }},undefined,services());
+ const cfg=config('codex');await atomicWriteConfig(cfg,cwd);const api=services();
+ await runAllTickets([ticket(1)],cfg,cwd,{onStatusChange(_,s){if(s.status==='reviewing')process.env.FAKE_MODE='fail';},onLogLine(){},onComplete(){},onFailure:async(_,s)=>assert.fail(s.failureReason)},undefined,api);
  const calls=(await readFile(path.join(cwd,'calls.jsonl'),'utf8')).trim().split('\n').map(JSON.parse);
- assert.equal(failures,1);assert.equal(calls.length,10);
- assert.equal(calls.filter(c=>c.prompt.startsWith('ITERIS_FAILURE_RECOVER')).length,1);
+ assert.equal(api.created.length,1);assert.match(api.created[0].body,/INCOMPLETE/);assert.match(api.created[0].body,/Process exited with 2/);
+ assert.equal(calls.filter(c=>c.prompt.startsWith('ITERIS_FAILURE_RECOVER')).length,0);
  assert.equal(calls.filter(c=>c.prompt.startsWith('Inspect this task')).length,1);
  assert.equal(calls.filter(c=>c.prompt.startsWith('You are an autonomous')).length,1);
 });

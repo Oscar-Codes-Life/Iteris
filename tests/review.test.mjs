@@ -151,11 +151,11 @@ test('timeout and cancellation are incomplete, never passed',async t=>{
  const result=await runCodeReview(f.options);assert.equal(result.report.outcome,'incomplete');assert.equal(result.timedOut,true,result.error);
  const controller=new AbortController();controller.abort();const cancelled=await runCodeReview({...f.options,signal:controller.signal});assert.equal(cancelled.report.outcome,'incomplete');assert.equal(cancelled.error,'Cancelled');
 });
-test('blocked Trello tickets never publish, create PRs, label, move cards, or complete',async t=>{
- const f=await fixture(t,{scenario:'blocker'});f.cfg.provider='trello';f.cfg.planMode=false;await atomicWriteConfig(f.cfg,f.cwd);let status;
- const forbidden=async()=>assert.fail('A blocked ticket reached a completion action');
- await runAllTickets([ticket],f.cfg,f.cwd,{onStatusChange(){},onLogLine(){},onComplete:forbidden,onFailure:async(_,s)=>{status=s.status;return 'skip';}},undefined,{findPr:forbidden,createPr:forbidden,addLabel:forbidden,moveCard:forbidden});
- assert.equal(status,'blocked');assert.equal(f.git('ls-remote','origin','refs/heads/iteris/1-feature'),'');
+test('blocked Trello review opens an annotated PR and continues without moving the card',async t=>{
+ const f=await fixture(t,{scenario:'blocker'});f.cfg.provider='trello';f.cfg.planMode=false;await atomicWriteConfig(f.cfg,f.cwd);let body='',completed=false;
+ const forbidden=async()=>assert.fail('A blocked review moved the card or labeled an issue');
+ await runAllTickets([ticket],f.cfg,f.cwd,{onStatusChange(){},onLogLine(){},onComplete(){completed=true;},onFailure:async(_,state)=>assert.fail(state.failureReason)},undefined,{findPr:async()=>undefined,createPr:async(_,input)=>{body=input.body;return {url:'https://example.com/pr',number:9};},addLabel:forbidden,moveCard:forbidden});
+ assert.equal(completed,true);assert.match(body,/BLOCKED/);assert.notEqual(f.git('ls-remote','origin','refs/heads/iteris/1-feature'),'');
  assert.equal((await f.calls()).some(call=>call.prompt.startsWith('ITERIS_FAILURE_RECOVER')),false);
 });
 test('read-only review invocation differs from write-capable repair for both harnesses',()=>{

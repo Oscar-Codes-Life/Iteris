@@ -8,13 +8,13 @@ import {savePendingQueue} from '../state/queue.js';
 import {loadConfig} from '../config.js';
 import {createRunFolder, writeStatus, writePrompt, appendLog} from '../state/manager.js';
 import {readProgress, appendProgress} from '../state/progress.js';
-import {findPrForBranch, createPullRequest, addLabelToIssue, updatePrReview} from '../github/pr.js';
+import {findPrForBranch, createPullRequest, addLabelToIssue, updatePrReview, reviewSection} from '../github/pr.js';
 import {moveCardOnComplete} from '../trello/completion.js';
 import {expandPrompt} from './prompt.js';
 import {generateSummary} from './summarizer.js';
 import {runCodeReview} from './reviewer.js';
 import {recoverFailedTicket} from './failure-recovery.js';
-import {generatePrDescription} from './pr-description.js';
+import {generatePrDescription, ticketReference} from './pr-description.js';
 import {captureContext, publishReviewed, assertPublished, savedPlan} from '../review/context.js';
 import {loadPassedReview, previousEvidence, saveJson} from '../review/report.js';
 import {runHarness} from '../harness/process.js';
@@ -144,42 +144,52 @@ async function runSingleTicket(ticket: Ticket, config: IterisConfig, cwd: string
 		}
 		await phase('reviewing');
 		const reviewed = await runCodeReview({ticket, config, cwd, folder, plan, onLogLine: log, onProcess() {}, signal});
-		if (reviewed.report.outcome !== 'passed' && !(reviewed.report.outcome === 'incomplete' && reviewed.report.deferredToCI)) {
-			state.status = reviewed.report.outcome;
-			throw new Error(`Code review ${reviewed.report.outcome}: ${reviewed.error}`);
-		}
-		if (reviewed.report.deferredToCI) log(`[iteris] Creating PR with pending CI evidence: ${reviewed.report.reason}`);
+		const reviewPassed = reviewed.report.outcome === 'passed';
+		if (!reviewPassed) log(`[iteris] Review ${reviewed.report.outcome}: ${reviewed.report.reason}. Opening PR and continuing the queue.`);
 		const reviewedContext = captureContext(ticket, config, cwd, plan);
-		if (reviewedContext.stamp.key !== reviewed.report.stamp?.key) throw new Error('Code changed after review; rerun review before publication.');
+		const reviewMatchesHead = reviewedContext.stamp.key === reviewed.report.stamp?.key;
+		if (reviewPassed && !reviewMatchesHead) throw new Error('Code changed after review; rerun review before publication.');
+		const reviewForPr = reviewed.text.length > 55_000 ? `${reviewed.text.slice(0, 55_000)}\n\n[Review report truncated; the complete report remains in the local Iteris run.]` : reviewed.text;
+		const reviewWithHead = reviewMatchesHead ? reviewForPr : `${reviewForPr}\n\n**The current PR commit ${reviewedContext.stamp.head} was not covered by this incomplete review.**`;
 		await publishReviewed(reviewedContext, config, cwd, signal);
 		let pr = await services.findPr(config, state.branch);
 		if (!pr) {
 			await phase('creating-pr');
-			const described = await generatePrDescription({ticket, config, cwd, review: reviewed.text, baseCommit: reviewedContext.stamp.base, signal,
-				onLine(line) {log(`[pr] ${line}`);},
-			});
-			if (!described.success || !described.text) {
-				state.status = described.timedOut ? 'stale' : 'failed';
-				throw new Error(`PR description: ${described.error ?? 'Harness produced no description'}`);
+			let body: string;
+			if (!reviewPassed) {
+				body = `## Summary\n- ${ticket.title}\n\n## Changes\n- See the commits in this pull request.\n\n${reviewSection(reviewWithHead)}\n\n${ticketReference(ticket, config)}`;
+			} else {
+				const described = await generatePrDescription({ticket, config, cwd, review: reviewWithHead, baseCommit: reviewedContext.stamp.base, signal,
+					onLine(line) {log(`[pr] ${line}`);},
+				});
+				if (!described.success || !described.text) {
+					state.status = described.timedOut ? 'stale' : 'failed';
+					throw new Error(`PR description: ${described.error ?? 'Harness produced no description'}`);
+				}
+				body = described.text;
 			}
 			await assertPublished(reviewedContext, config, cwd, signal);
-			pr = await services.createPr(config, {branch: state.branch, title: ticketPrTitle(ticket), body: described.text});
+			pr = await services.createPr(config, {branch: state.branch, title: ticketPrTitle(ticket), body});
 			log(`[iteris] Created PR ${pr.url}`);
 		} else {
 			await assertPublished(reviewedContext, config, cwd, signal);
-			await services.updateReview?.(config, pr.number, reviewed.text);
+			await services.updateReview?.(config, pr.number, reviewWithHead);
 		}
 		await assertPublished(reviewedContext, config, cwd, signal);
 		state.prUrl = pr.url; state.prNumber = pr.number;
-		if (reviewed.report.deferredToCI) state.reviewPending = reviewed.report.reason;
-		if (config.pr.addLabelOnOpen && (config.provider === 'github' || config.provider === undefined)) await services.addLabel(config, ticket.number, config.pr.addLabelOnOpen);
-		if (config.provider === 'trello') await services.moveCard(config, ticket.number);
+		if (!reviewPassed) state.reviewPending = `${reviewed.report.outcome}: ${reviewed.report.reason}`;
+		if (config.pr.addLabelOnOpen && (config.provider === 'github' || config.provider === undefined)) {
+			try {await services.addLabel(config, ticket.number, config.pr.addLabelOnOpen);} catch (error) {log(`[iteris] Could not add issue label after opening PR: ${String(error)}`);}
+		}
+		if (reviewPassed && config.provider === 'trello') {
+			try {await services.moveCard(config, ticket.number);} catch (error) {log(`[iteris] Could not move Trello card after opening PR: ${String(error)}`);}
+		}
 		await phase('summarizing'); await logWrites;
 		try {await generateSummary(folder, config, cwd, undefined, signal);} catch (error) {log(`Summary failed: ${String(error)}`);}
 		if (signal.aborted) throw new Error('Cancelled');
 		state.status = 'done';
-		await appendProgress(cwd, reviewed.report.deferredToCI
-			? `#${ticket.number} (${ticket.title}) — PR opened; ${reviewed.report.reason}`
+		await appendProgress(cwd, !reviewPassed
+			? `#${ticket.number} (${ticket.title}) — PR opened with ${reviewed.report.outcome} review; ${reviewed.report.reason}`
 			: `#${ticket.number} (${ticket.title}) — completed successfully`);
 	} catch (error) {
 		state.status = signal.aborted || state.status === 'stale' ? 'stale' : state.status === 'blocked' || state.status === 'incomplete' ? state.status : 'failed';
