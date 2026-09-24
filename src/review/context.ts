@@ -116,20 +116,24 @@ export function validateLocation(candidate: Candidate, context: ReviewContext, c
 	if (candidate.category === 'policy' && (!candidate.policyRule || !context.policy.includes(candidate.policyRule))) throw new Error('Policy finding must cite an exact rule from base REVIEW.md.');
 }
 
-export async function publishReviewed(context: ReviewContext, config: IterisConfig, cwd: string, signal?: AbortSignal): Promise<void> {
+export async function publishReviewed(context: ReviewContext, config: IterisConfig, cwd: string, signal?: AbortSignal, allowBaseDrift = false): Promise<boolean> {
 	assertSnapshot(context, config, cwd);
 	const deadline = Date.now() + 120_000;
 	const pushed = await runCommand('git', ['-c', 'core.hooksPath=/dev/null', 'push', 'origin', `${context.stamp.head}:refs/heads/${context.stamp.branch}`], {cwd, deadline, signal});
 	if (pushed.exitCode !== 0 || pushed.error) throw new Error(pushed.error ?? `Push failed: ${pushed.output}`);
-	await assertPublished(context, config, cwd, signal);
+	return assertPublished(context, config, cwd, signal, allowBaseDrift);
 }
-export async function assertPublished(context: ReviewContext, config: IterisConfig, cwd: string, signal?: AbortSignal): Promise<void> {
+export async function assertPublished(context: ReviewContext, config: IterisConfig, cwd: string, signal?: AbortSignal, allowBaseDrift = false): Promise<boolean> {
 	assertSnapshot(context, config, cwd);
 	const remote = await runCommand('git', ['ls-remote', '--exit-code', 'origin', `refs/heads/${context.stamp.branch}`, `refs/heads/${config.baseBranch}`], {cwd, deadline: Date.now() + 30_000, signal});
 	const refs = new Map(remote.output.trim().split('\n').map(line => {const [sha, ref] = line.split(/\s+/); return [ref, sha];}));
 	if (remote.error || remote.exitCode !== 0 || refs.get(`refs/heads/${context.stamp.branch}`) !== context.stamp.head) throw new Error('Remote branch does not match the reviewed commit.');
-	if (refs.get(`refs/heads/${config.baseBranch}`) !== context.stamp.base) throw new Error('Remote base changed. Fetch the base and rerun review before opening the PR.');
+	const remoteBase = refs.get(`refs/heads/${config.baseBranch}`);
+	if (!remoteBase) throw new Error('Remote base branch is missing.');
+	const baseChanged = remoteBase !== context.stamp.base;
+	if (baseChanged && !allowBaseDrift) throw new Error('Remote base changed. Fetch the base and rerun review before opening the PR.');
 	assertSnapshot(context, config, cwd);
+	return baseChanged;
 }
 
 export async function savedPlan(folder: string): Promise<string> {

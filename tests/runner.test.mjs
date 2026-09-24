@@ -134,7 +134,7 @@ test('an interrupted queue resumes review without repeating implementation',asyn
  assert.equal(calls.filter(call=>call.prompt.startsWith('You are an autonomous')).length,1);
 });
 test('an unchanged incomplete review opens its PR on resume without spending another review attempt',async t=>{
- const {cwd}=await reviewRepository(t);await executable(cwd,'codex',fakeAgent);
+ const {cwd,remote,git}=await reviewRepository(t);await executable(cwd,'codex',fakeAgent);
  environment(t,{PATH:`${cwd}:${process.env.PATH}`,FAKE_IMPLEMENT:'1',REVIEW_SCENARIO:'incomplete',CAPTURE:path.join(cwd,'calls.jsonl')});
  const cfg=config('codex');cfg.planMode=false;cfg.review.maxRepairCycles=0;await atomicWriteConfig(cfg,cwd);
  const offline={...services(),createPr:async()=>{throw new Error('PR API temporarily unavailable');}};
@@ -142,6 +142,7 @@ test('an unchanged incomplete review opens its PR on resume without spending ano
  const resultPath=path.join(cwd,'.iteris/runs/1-ticket-1/review/result.json');
  const previous=JSON.parse(await readFile(resultPath,'utf8'));
  await writeFile(resultPath,JSON.stringify({...previous,reason:'Cancelled',finishedAt:'2999-01-01T00:00:00.000Z'}));
+ execFileSync('git',['--git-dir',remote,'update-ref','refs/heads/main',git('rev-parse','HEAD')]);
  const before=(await readFile(path.join(cwd,'calls.jsonl'),'utf8')).trim().split('\n').map(JSON.parse);
  const api=services();
  await runAllTickets([ticket(1)],cfg,cwd,{onStatusChange(){},onLogLine(){},onComplete(){},onFailure:async(_,state)=>assert.fail(state.failureReason)},undefined,api);
@@ -149,6 +150,7 @@ test('an unchanged incomplete review opens its PR on resume without spending ano
  assert.equal(after.filter(call=>call.prompt.startsWith('ITERIS_REVIEW')).length,before.filter(call=>call.prompt.startsWith('ITERIS_REVIEW')).length);
  assert.equal(after.filter(call=>call.prompt.startsWith('You are an autonomous')).length,1);
  assert.equal(api.created.length,1);assert.match(api.created[0].body,/INCOMPLETE/);assert.ok(api.created[0].body.includes(previous.reason));
+ assert.match(api.created[0].body,/remote base changed after this review/i);
 });
 test('a crash before review context resumes the committed implementation and saved plan',async t=>{
  const {cwd}=await reviewRepository(t);await executable(cwd,'codex',fakeAgent);

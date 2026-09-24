@@ -153,8 +153,9 @@ async function runSingleTicket(ticket: Ticket, config: IterisConfig, cwd: string
 		const reviewMatchesHead = reviewedContext.stamp.key === reviewed.report.stamp?.key;
 		if (reviewPassed && !reviewMatchesHead) throw new Error('Code changed after review; rerun review before publication.');
 		const reviewForPr = reviewed.text.length > 55_000 ? `${reviewed.text.slice(0, 55_000)}\n\n[Review report truncated; the complete report remains in the local Iteris run.]` : reviewed.text;
-		const reviewWithHead = reviewMatchesHead ? reviewForPr : `${reviewForPr}\n\n**The current PR commit ${reviewedContext.stamp.head} was not covered by this incomplete review.**`;
-		await publishReviewed(reviewedContext, config, cwd, signal);
+		let reviewWithHead = reviewMatchesHead ? reviewForPr : `${reviewForPr}\n\n**The current PR commit ${reviewedContext.stamp.head} was not covered by this incomplete review.**`;
+		const baseChanged = await publishReviewed(reviewedContext, config, cwd, signal, !reviewPassed);
+		if (baseChanged) reviewWithHead += `\n\n**The remote base changed after this review. Review and CI must assess the PR against the current base before merging.**`;
 		let pr = await services.findPr(config, state.branch);
 		if (!pr) {
 			await phase('creating-pr');
@@ -171,14 +172,14 @@ async function runSingleTicket(ticket: Ticket, config: IterisConfig, cwd: string
 				}
 				body = described.text;
 			}
-			await assertPublished(reviewedContext, config, cwd, signal);
+			await assertPublished(reviewedContext, config, cwd, signal, !reviewPassed);
 			pr = await services.createPr(config, {branch: state.branch, title: ticketPrTitle(ticket), body});
 			log(`[iteris] Created PR ${pr.url}`);
 		} else {
-			await assertPublished(reviewedContext, config, cwd, signal);
+			await assertPublished(reviewedContext, config, cwd, signal, !reviewPassed);
 			await services.updateReview?.(config, pr.number, reviewWithHead);
 		}
-		await assertPublished(reviewedContext, config, cwd, signal);
+		await assertPublished(reviewedContext, config, cwd, signal, !reviewPassed);
 		state.prUrl = pr.url; state.prNumber = pr.number;
 		if (!reviewPassed) state.reviewPending = `${reviewed.report.outcome}: ${reviewed.report.reason}`;
 		if (config.pr.addLabelOnOpen && (config.provider === 'github' || config.provider === undefined)) {

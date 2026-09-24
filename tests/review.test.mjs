@@ -176,6 +176,7 @@ test('a changed remote base prevents publication readiness even if local trackin
  await assertPublished(context,f.cfg,f.cwd);
  execFileSync('git',['--git-dir',f.remote,'update-ref','refs/heads/main',context.stamp.head]);
  await assert.rejects(assertPublished(context,f.cfg,f.cwd),/Remote base changed/);
+ assert.equal(await assertPublished(context,f.cfg,f.cwd,undefined,true),true);
 });
 test('PR evidence updates preserve authored content and do not append duplicate sections',async()=>{
  const {replaceReviewSection,reviewSection,updatePrReview}=await import('../dist/github/pr.js');
