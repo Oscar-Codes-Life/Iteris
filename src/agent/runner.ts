@@ -16,7 +16,7 @@ import {runCodeReview} from './reviewer.js';
 import {recoverFailedTicket} from './failure-recovery.js';
 import {generatePrDescription, ticketReference} from './pr-description.js';
 import {captureContext, publishReviewed, assertPublished, savedPlan} from '../review/context.js';
-import {loadPassedReview, previousEvidence, saveJson} from '../review/report.js';
+import {loadPassedReview, loadUnfinishedReview, previousEvidence, saveJson} from '../review/report.js';
 import {runHarness} from '../harness/process.js';
 
 export type RunnerCallbacks = {
@@ -143,7 +143,10 @@ async function runSingleTicket(ticket: Ticket, config: IterisConfig, cwd: string
 			checkpoint.implemented = true;
 		}
 		await phase('reviewing');
-		const reviewed = await runCodeReview({ticket, config, cwd, folder, plan, onLogLine: log, onProcess() {}, signal});
+		const currentContext = captureContext(ticket, config, cwd, plan);
+		const savedReview = await loadUnfinishedReview(path.join(folder, 'review'), currentContext);
+		if (savedReview) log(`[iteris] Reusing ${savedReview.report.outcome} review for unchanged commit ${currentContext.stamp.head}; opening PR without repeating review.`);
+		const reviewed = savedReview ?? await runCodeReview({ticket, config, cwd, folder, plan, onLogLine: log, onProcess() {}, signal});
 		const reviewPassed = reviewed.report.outcome === 'passed';
 		if (!reviewPassed) log(`[iteris] Review ${reviewed.report.outcome}: ${reviewed.report.reason}. Opening PR and continuing the queue.`);
 		const reviewedContext = captureContext(ticket, config, cwd, plan);

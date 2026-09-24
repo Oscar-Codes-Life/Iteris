@@ -1,4 +1,4 @@
-import {mkdir, writeFile, rename, readFile} from 'node:fs/promises';
+import {mkdir, writeFile, rename, readFile, readdir} from 'node:fs/promises';
 import {randomUUID} from 'node:crypto';
 import path from 'node:path';
 import {redact} from '../harness/redact.js';
@@ -60,6 +60,25 @@ export async function loadPassedReview(directory: string, context: ReviewContext
 		if (report.gaps.length || report.findings.some(blocks) || !report.requirements.length || report.requirements.some(r => r.status !== 'covered') || report.checks.some(c => c.head !== context.stamp.head || c.exitCode !== 0 || c.error)) return;
 		return {report, text: renderReport(report), success: true, done: true, timedOut: false};
 	} catch {return;}
+}
+
+/** An unfinished review is enough to open an annotated PR on queue resume. */
+export async function loadUnfinishedReview(directory: string, context: ReviewContext): Promise<ReviewResult | undefined> {
+	let files = [path.join(directory, 'result.json')];
+	try {
+		const attempts = await readdir(path.join(directory, 'attempts'), {withFileTypes: true});
+		files = files.concat(attempts.filter(entry => entry.isDirectory()).map(entry => path.join(directory, 'attempts', entry.name, 'result.json')));
+	} catch { /* The current report can still be reused without an attempts directory. */ }
+	let latest: ReviewReport | undefined;
+	for (const file of files) {
+		try {
+			const report = storedReportSchema.parse(JSON.parse(await readFile(file, 'utf8')));
+			if (report.outcome === 'passed' || report.reason === 'Cancelled' || report.stamp.key !== context.stamp.key || report.stamp.head !== context.stamp.head) continue;
+			if (!latest || report.finishedAt > latest.finishedAt) latest = report;
+		} catch { /* Ignore missing or interrupted reports. */ }
+	}
+	if (!latest) return;
+	return {report: latest, text: renderReport(latest), success: false, done: false, timedOut: /deadline|timed out/i.test(latest.reason), error: latest.reason};
 }
 
 export async function previousEvidence(directory: string, context: ReviewContext): Promise<ReviewReport | undefined> {
