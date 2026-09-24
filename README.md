@@ -193,7 +193,7 @@ Successful imports produce a directory such as:
   attachments/
 ```
 
-Iteris prints that location, then opens the normal task picker. Nothing is published until every task validates. Generated files are locally excluded from Git through its `info/exclude` file. When a REST item includes an `identifier` (for example, `ABC-123`), its PR title uses `ABC-123: Task title`. The identifier is preserved in downloaded tasks; run `iteris refresh` to pick it up for older downloads. Items without an identifier keep the task title as their PR title.
+Iteris prints that location, then opens the normal task picker. Nothing is published until every task validates. Generated files are locally excluded from Git through its `info/exclude` file. When a REST item includes an `identifier` (for example, `ABC-123`), its PR title uses `ABC-123: Task title` and its branch looks like `iteris/abc-123-xyz`. The three-letter suffix is stable for the source task, and Iteris saves the branch so edits and retries keep it. Items without an identifier use a shortened task title in the branch. The identifier is preserved in downloaded tasks; run `iteris refresh` to pick it up for older downloads. Items without an identifier keep the task title as their PR title. Saved imports and queues from older Iteris versions retain their original branch names.
 
 GitHub authentication is still required: selected custom tasks use the normal branch, review, and PR workflow, without closing or labeling GitHub issues or updating the custom API.
 

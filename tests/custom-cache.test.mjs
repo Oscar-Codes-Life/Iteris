@@ -6,6 +6,7 @@ import path from 'node:path';
 import {loadCustomTasks, readSavedCustomTasks} from '../dist/custom/cache.js';
 import {customStatuses, importCustom} from '../dist/custom/import.js';
 import {createRunFolder, writeStatus} from '../dist/state/manager.js';
+import {ticketBranch} from '../dist/types.js';
 import {temporary, environment, config} from './helpers.mjs';
 const cfg = () => ({...config(), provider: 'custom', custom: {endpoint: 'https://example.com/tasks', apiKeyEnv: 'CACHE_TEST_KEY', itemsPath: ''}});
 const offline = {fetcher: async () => assert.fail('must not fetch'), harness: async () => assert.fail('must not convert')};
@@ -67,6 +68,7 @@ test('legacy downloads require one confirmation, then reuse automatically', asyn
  const manifest = JSON.parse(await readFile(file, 'utf8'));
  delete manifest.sourceKey;
  delete manifest.tasks[0].identifier;
+ delete manifest.tasks[0].branch;
  await writeFile(file, JSON.stringify(manifest));
  let confirmed = 0;
  const loaded = await loadCustomTasks(cfg(), f.cwd, {...offline, useLegacy: async (dir, count) => {
@@ -74,6 +76,7 @@ test('legacy downloads require one confirmation, then reuse automatically', asyn
  }});
  assert.equal(loaded.cached, true);
  assert.equal(loaded.tickets[0].custom.identifier, undefined);
+ assert.equal(ticketBranch(loaded.tickets[0]),`iteris/custom-${loaded.tickets[0].custom.identity}`);
  await loadCustomTasks(cfg(), f.cwd, {...offline, useLegacy: async () => assert.fail('already confirmed')});
  assert.equal(confirmed, 1);
 });

@@ -5,12 +5,12 @@ import {z} from 'zod';
 import {runHarness} from '../harness/process.js';
 import {registerSecret, redact} from '../harness/redact.js';
 import {acquireRun} from '../state/active.js';
-import type {IterisConfig, Ticket, TicketStatus} from '../types.js';
+import {customBranch, type IterisConfig, type Ticket, type TicketStatus} from '../types.js';
 import {atPath, identifyItems, customSourceKey} from './identity.js';
 import {download, MAX_BYTES} from './http.js';
 import {httpUrl, customConfigSchema, draftSchema, taskSchema, manifestSchema, sourceIdentifierSchema, type Attachment} from './schema.js';
 
-const registrySchema = z.object({next: z.number().int().positive(), entries: z.record(z.object({number: z.number().int().positive(), fingerprint: z.string()}))});
+const registrySchema = z.object({next: z.number().int().positive(), entries: z.record(z.object({number: z.number().int().positive(), fingerprint: z.string(), branch: z.string().optional()}))});
 type Services = {fetcher?: typeof fetch; harness?: typeof runHarness; now?: () => Date; onProgress?: (message: string) => void};
 export function timestamp(date: Date): string {
 	const pad = (n: number, length = 2) => String(n).padStart(length, '0');
@@ -132,9 +132,11 @@ export async function importCustom(config: IterisConfig, cwd: string, services: 
 			const normalized = attachments.some(attachment => attachment.file) ? await convert(taskSchema, `${instructions}\nAnalyze the available attachments and incorporate relevant facts in the description and analysis. Do not claim unavailable attachments were analyzed.\nDRAFT:\n${JSON.stringify(draft)}\nATTACHMENTS:\n${JSON.stringify(attachments)}\nTEXT:\n${text.join('\n\n')}\nIMAGE FILES (read these):\n${images.join('\n')}`, config, staging, services, signal, images) : taskSchema.parse(draft);
 			const previous = registry.entries[source.identity];
 			const number = previous?.number ?? registry.next++;
-			registry.entries[source.identity] = {number, fingerprint: source.fingerprint};
 			const identifier = sourceIdentifierSchema.safeParse(atPath(source.item, ['identifier']));
-			const task = {...normalized, identifier: identifier.success ? identifier.data : undefined, identity: source.identity, fingerprint: source.fingerprint, number, file: `task${index + 1}.md`, attachments};
+			const sourceIdentifier = identifier.success ? identifier.data : undefined;
+			const branch = previous?.branch ?? (previous ? `iteris/custom-${source.identity}` : customBranch(sourceIdentifier, normalized.title, source.identity));
+			registry.entries[source.identity] = {number, fingerprint: source.fingerprint, branch};
+			const task = {...normalized, identifier: sourceIdentifier, branch, identity: source.identity, fingerprint: source.fingerprint, number, file: `task${index + 1}.md`, attachments};
 			tasks.push(task);
 			const markdown = [`# ${task.title}`, '', task.description, '', ...(task.sourceUrl ? [`Source: ${task.sourceUrl}`, ''] : []), `Labels: ${task.labels.join(', ') || '(none)'}`, '', '## Attachment analysis', '', task.analysis || '(none)', '', '## Attachments', '', ...attachments.map(a => `- ${a.name}${a.file ? ` ([local file](${a.file}))` : ''}${a.url ? ` — ${a.url}` : ''}${a.warning ? ` — Warning: ${a.warning}` : ''}`)].join('\n') + '\n';
 			await writeFile(path.join(staging, task.file), redact(markdown), {flag: 'wx', mode: 0o600});
@@ -155,7 +157,7 @@ export async function importCustom(config: IterisConfig, cwd: string, services: 
 		}
 		try {await rename(staging, directory);} catch (error) {await rm(directory, {recursive: true, force: true}); throw error;}
 		staging = undefined;
-		const tickets = await Promise.all(tasks.map(async task => ({number: task.number, title: task.title, body: await readFile(path.join(directory, task.file), 'utf8') + `\nTask file: ${path.join(directory, task.file)}\nResolve attachment paths relative to this task file.`, slug: `custom-${task.identity}`, labels: task.labels, htmlUrl: task.sourceUrl ?? '', custom: {identifier: task.identifier, identity: task.identity, fingerprint: task.fingerprint, taskFile: path.join(directory, task.file)}})));
+		const tickets = await Promise.all(tasks.map(async task => ({number: task.number, title: task.title, body: await readFile(path.join(directory, task.file), 'utf8') + `\nTask file: ${path.join(directory, task.file)}\nResolve attachment paths relative to this task file.`, slug: `custom-${task.identity}`, labels: task.labels, htmlUrl: task.sourceUrl ?? '', custom: {identifier: task.identifier, identity: task.identity, fingerprint: task.fingerprint, taskFile: path.join(directory, task.file), branch: task.branch}})));
 		return {tickets, directory, duplicates: identified.duplicates};
 	} finally {
 		try {if (staging) await rm(staging, {recursive: true, force: true});}

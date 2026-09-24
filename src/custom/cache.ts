@@ -31,7 +31,7 @@ export async function readSavedCustomTasks(directory: string): Promise<ImportRes
 		for (const attachment of task.attachments) if (attachment.file) await localFile(directory, attachment.file);
 		const body = await readFile(taskFile, 'utf8');
 		if (!body.trim()) throw new Error('Empty saved task file.');
-		tickets.push({number: task.number, title: task.title, body: body + `\nTask file: ${taskFile}\nResolve attachment paths relative to this task file.`, slug: `custom-${task.identity}`, labels: task.labels, htmlUrl: task.sourceUrl ?? '', custom: {identifier: task.identifier, identity: task.identity, fingerprint: task.fingerprint, taskFile}});
+		tickets.push({number: task.number, title: task.title, body: body + `\nTask file: ${taskFile}\nResolve attachment paths relative to this task file.`, slug: `custom-${task.identity}`, labels: task.labels, htmlUrl: task.sourceUrl ?? '', custom: {identifier: task.identifier, identity: task.identity, fingerprint: task.fingerprint, taskFile, branch: task.branch ?? `iteris/custom-${task.identity}`}});
 	}
 	return {tickets, directory, duplicates: 0};
 }

@@ -1,7 +1,9 @@
+import {createHash} from 'node:crypto';
+
 export type TicketStatus = 'pending' | 'planning' | 'summarizing' | 'running' | 'reviewing' | 'recovering' | 'creating-pr' | 'done' | 'stale' | 'failed' | 'blocked' | 'incomplete';
 
 export type Ticket = {
-	custom?: {identifier?: string; identity: string; fingerprint: string; taskFile: string; changed?: boolean};
+	custom?: {identifier?: string; identity: string; fingerprint: string; taskFile: string; changed?: boolean; branch?: string};
 	number: number;
 	title: string;
 	body: string;
@@ -58,7 +60,18 @@ export type IterisConfig = {
 };
 
 export function ticketBranch(ticket: Ticket): string {
-	return ticket.custom ? `iteris/custom-${ticket.custom.identity}` : `iteris/${ticket.number}-${ticket.slug}`;
+	if (!ticket.custom) return `iteris/${ticket.number}-${ticket.slug}`;
+	if (ticket.custom.branch) return ticket.custom.branch;
+	return customBranch(ticket.custom.identifier, ticket.title, ticket.custom.identity);
+}
+
+export function customBranch(identifier: string | undefined, title: string, identity: string): string {
+	const readable = (identifier || title).normalize('NFKD').toLowerCase()
+		.replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48).replace(/-+$/g, '') || 'task';
+	const hash = createHash('sha256').update(identity).digest();
+	const code = hash.readUInt32BE(0) % 17_576;
+	const suffix = [676, 26, 1].map(divisor => String.fromCharCode(97 + Math.floor(code / divisor) % 26)).join('');
+	return `iteris/${readable}-${suffix}`;
 }
 
 export function ticketPrTitle(ticket: Ticket): string {

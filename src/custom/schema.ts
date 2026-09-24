@@ -28,6 +28,7 @@ export const attachmentSchema = z.object({
 export const sourceIdentifierSchema = z.union([z.string().trim().min(1), z.number().int().safe().transform(String)]);
 export const importedTaskSchema = taskSchema.extend({
 	identifier: sourceIdentifierSchema.optional(),
+	branch: z.string().optional(),
 	identity: z.string(), fingerprint: z.string(), number: z.number().int().positive(),
 	file: z.string(), attachments: z.array(attachmentSchema),
 });

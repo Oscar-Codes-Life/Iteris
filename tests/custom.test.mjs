@@ -9,6 +9,7 @@ import {importCustom, customStatuses, timestamp} from '../dist/custom/import.js'
 import {invocation, runHarness} from '../dist/harness/process.js';
 import {configSchema, atomicWriteConfig} from '../dist/config.js';
 import {createRunFolder, writeStatus} from '../dist/state/manager.js';
+import {loadPendingQueue, savePendingQueue} from '../dist/state/queue.js';
 import {ticketBranch, ticketPrTitle} from '../dist/types.js';
 import {runAllTickets} from '../dist/agent/runner.js';
 import {temporary, environment, executable, config, fakeAgent, reviewRepository} from './helpers.mjs';
@@ -40,6 +41,29 @@ test('mixed identities support id/key, zero, numeric strings, custom paths and f
  assert.notEqual(canonical([1,2]),canonical([2,1]));
  assert.equal(identifyItems([{id:1},{id:1},{title:'a'}],custom).duplicates,1);
  assert.throws(()=>identifyItems([{id:1,title:'a'},{id:'1',title:'b'}],custom),/conflicting/);
+});
+test('custom branch names use a readable identifier and a stable three-letter suffix',()=>{
+ const ticket={number:1,title:'Fix navigation',body:'',slug:'custom-hash',labels:[],htmlUrl:'',custom:{identifier:' GRP-493 ',identity:'stable-identity',fingerprint:'first',taskFile:'/task.md'}};
+ const branch=ticketBranch(ticket);
+ assert.match(branch,/^iteris\/grp-493-[a-z]{3}$/);
+ assert.equal(ticketBranch({...ticket,title:'Edited title',custom:{...ticket.custom,fingerprint:'second'}}),branch);
+ assert.notEqual(ticketBranch({...ticket,custom:{...ticket.custom,identity:'different-identity'}}),branch);
+ assert.match(ticketBranch({...ticket,custom:{...ticket.custom,identifier:'../A@{x}/foo.lock'}}),/^iteris\/a-x-foo-lock-[a-z]{3}$/);
+ assert.match(ticketBranch({...ticket,custom:{...ticket.custom,identifier:undefined}}),/^iteris\/fix-navigation-[a-z]{3}$/);
+ assert.equal(ticketBranch({...ticket,custom:undefined,slug:'navigation'}),'iteris/1-navigation');
+});
+test('saved queues keep legacy custom branches while new queues persist readable names',async t=>{
+ const cwd=await temporary(t);const c=cfg();const ticket={number:1,title:'Fix navigation',body:'',slug:'custom-hash',labels:[],htmlUrl:'',custom:{identifier:'NAV-123',identity:'stable-identity',fingerprint:'first',taskFile:'/task.md'}};
+ await savePendingQueue(cwd,c,[ticket]);
+ const current=await loadPendingQueue(cwd,c);
+ assert.match(ticketBranch(current[0]),/^iteris\/nav-123-[a-z]{3}$/);
+ const queueFile=path.join(cwd,'.iteris','pending-queue.json');
+ const legacy=JSON.parse(await readFile(queueFile,'utf8'));delete legacy.tickets[0].custom.branch;
+ await writeFile(queueFile,JSON.stringify(legacy));
+ const resumed=await loadPendingQueue(cwd,c);
+ assert.equal(ticketBranch(resumed[0]),'iteris/custom-stable-identity');
+ await savePendingQueue(cwd,c,resumed);
+ assert.equal(ticketBranch((await loadPendingQueue(cwd,c))[0]),'iteris/custom-stable-identity');
 });
 test('HTTP rejects endpoint redirects, status failures and oversized streamed bodies',async()=>{
  const opts={endpoint:custom.endpoint,token:'secret'};
@@ -114,6 +138,14 @@ test('completion identity is isolated and changed ID-based tasks retain history'
  await createRunFolder(cwd,changed.tickets[0]);assert.equal((await readdir(path.join(folder,'history'))).length,1);
  const unrelated={...ticket,custom:{...ticket.custom,identity:'unrelated'}};assert.equal((await customStatuses(cwd,[unrelated])).size,0);
 });
+test('an ID-based task without a display identifier retains its branch after a title edit',async t=>{
+ const cwd=await fixture(t);
+ const services=title=>({fetcher:async()=>Response.json([{id:1,title}]),harness:async()=>ok({...draft,title})});
+ const first=await importCustom(cfg(),cwd,services('Old title'));
+ const changed=await importCustom(cfg(),cwd,services('New title'));
+ assert.match(ticketBranch(first.tickets[0]),/^iteris\/old-title-[a-z]{3}$/);
+ assert.equal(ticketBranch(changed.tickets[0]),ticketBranch(first.tickets[0]));
+});
 test('an unfinished custom ticket keeps its saved plan when the queue resumes',async t=>{
  const cwd=await fixture(t);const imported=await importCustom(cfg(),cwd,importer([{id:1,title:'resume'}]));const ticket=imported.tickets[0];
  const folder=await createRunFolder(cwd,ticket);
@@ -163,7 +195,7 @@ test('reimport instructions reuse the stable custom branch',async()=>{
  const {expandPrompt}=await import('../dist/agent/prompt.js');
  const ticket={number:1,title:'A',body:'B',labels:[],slug:'a',htmlUrl:'',custom:{identity:'stable',fingerprint:'f',taskFile:'/task.md'}};
  assert.match(expandPrompt(ticket,cfg(),''),/already exists locally or on origin/);
- assert.match(expandPrompt(ticket,cfg(),''),/iteris\/custom-stable/);
+ assert.match(expandPrompt(ticket,cfg(),''),/iteris\/a-[a-z]{3}/);
 });
 test('streamed bytes count against the import budget even on oversized failures',async()=>{
  let bytes=0;
