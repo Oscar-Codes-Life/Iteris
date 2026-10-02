@@ -4,7 +4,7 @@ node_modules/
 .DS_Store
 .claude
 
-.iteris.json.v1.bak
+.iteris.json.v*.bak
 .iteris.json.*.tmp
 
 .tasks/

@@ -13,7 +13,7 @@ test('migrates legacy settings, preserves unknown fields and backup, and is idem
  const old=JSON.stringify({repo:'org/repo',claudeFlags:['--dangerously-skip-permissions'],timeout:12,extensionData:{x:1},trello:{boardId:'abc',extension:true}});
  await writeFile(file,old);
  const migrated=await loadConfig(cwd);
- assert.equal(migrated.version,2); assert.equal(migrated.harness,'claude'); assert.equal(migrated.setupComplete,false);
+ assert.equal(migrated.version,3); assert.equal(migrated.harness,'claude'); assert.equal(migrated.setupComplete,false);
  assert.equal(migrated.harnesses.claude.model,undefined); assert.deepEqual(migrated.extensionData,{x:1}); assert.equal(migrated.trello.extension,true);
  assert.equal('claudeFlags' in migrated,false); assert.equal(await readFile(file+'.v1.bak','utf8'),old);
  const first=await readFile(file,'utf8'); await loadConfig(cwd); assert.equal(await readFile(file,'utf8'),first);
@@ -33,7 +33,7 @@ test('parallel field updates preserve both changes',async t=>{
  const result=await loadConfig(cwd);assert.equal(result.timeout,44);assert.equal(result.baseBranch,'develop');
 });
 test('managed flags reject hidden overrides',()=>{
- for(const flag of ['--model=foo','-mfoo','--effort','-c','--output-format','--permission-mode','--sandbox']) {
+ for(const flag of ['--model=foo','-mfoo','--effort','-c','--output-format','--permission-mode','--sandbox','--add-dir','--mcp-config','--setting-sources','--yolo','--dangerously-skip-permissions=true']) {
   const value=config();value.harnesses.claude.flags=[flag]; assert.equal(configSchema.safeParse(value).success,false,flag);
  }
 });

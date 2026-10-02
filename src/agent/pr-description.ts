@@ -2,6 +2,7 @@ import {reviewSection} from '../github/pr.js';
 import {execFileSync} from 'node:child_process';
 import {ticketBranch, type IterisConfig, type Ticket} from '../types.js';
 import {runHarness, type ProcessResult} from '../harness/process.js';
+import {githubTaskRepository} from '../lifecycle/adapters.js';
 
 const MAX_DIFF_CHARS = 120_000;
 const MAX_REVIEW_CHARS = 20_000;
@@ -39,8 +40,10 @@ function changesForDescription(config: IterisConfig, cwd: string, branch: string
 }
 
 export function ticketReference(ticket: Ticket, config: IterisConfig): string {
+	if (config.provider === 'command') return `Implements ${ticket.source?.namespace ?? 'configured source'} task: ${ticket.htmlUrl || ticket.source?.id || ticket.title}`;
 	if (config.provider === 'custom') return `Implements custom task: ${ticket.title}${ticket.htmlUrl ? ` (${ticket.htmlUrl})` : ''}`;
 	if (config.provider === 'trello') return `Implements Trello card: ${ticket.htmlUrl}`;
+	const sourceRepo=githubTaskRepository(ticket,config);if(sourceRepo!==config.repo)return `Closes ${sourceRepo}#${ticket.number}`;
 	return `Closes #${ticket.number}`;
 }
 
@@ -83,7 +86,7 @@ ${changes.commits}
 FINAL DIFF AGAINST ${config.baseBranch}
 ${changes.diff}`;
 
-	const result = await runHarness({config, phase: 'pr-description', prompt, cwd, timeoutMs: config.timeout * 1000, onLine, signal});
+	const result = await runHarness({config, phase: 'pr-description', prompt, cwd, timeoutMs: Math.max(1,Math.min(config.timeout*1000,(config._deadline??Infinity)-Date.now())), onLine, signal});
 	if (!result.success || !result.text.trim()) return {...result, success: false, error: result.error ?? 'PR description generation produced no content'};
 	const reference = ticketReference(ticket, config);
 	const description = result.text.split(/\r?\n/).filter(line => line.trim() !== reference).join('\n').trim();

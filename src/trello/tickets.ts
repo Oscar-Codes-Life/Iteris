@@ -53,6 +53,7 @@ export async function fetchTrelloTickets(
 	const tickets: Ticket[] = cards.map(card => {
 		cacheCardId(card.idShort, card.id);
 		return {
+			source: {provider:'trello',namespace:resolvedBoardId,id:card.id},
 			number: card.idShort,
 			title: card.name,
 			body: card.desc,

@@ -1,0 +1,33 @@
+{
+  "version": 3,
+  "repo": "owner/repository",
+  "provider": "command",
+  "harness": "claude",
+  "harnesses": {"claude": {"model": "configured-model", "flags": []}},
+  "qualityChecks": [],
+  "workflow": {"boundary": "verified-pr", "unfinishedDraft": true},
+  "verification": {
+    "policyFiles": ["REVIEW.md"],
+    "contextFiles": ["AGENTS.md"],
+    "fixtures": ["tests/fixtures"],
+    "checks": [{"id": "behavior", "behavioral": true, "command": {"executable": "./scripts/check-behavior", "timeout": 300}}],
+    "stages": [
+      {"id": "release", "kind": "deployment", "required": false, "idempotent": true, "execute": {"executable": "./scripts/release-adapter", "args": ["execute"], "env": {"TOKEN": "RELEASE_TOKEN"}}, "verify": {"executable": "./scripts/release-adapter", "args": ["verify"], "env": {"TOKEN": "RELEASE_TOKEN"}}},
+      {"id": "hardware", "kind": "device", "required": false, "verify": {"executable": "./scripts/device-probe"}},
+      {"id": "observation", "kind": "monitoring", "required": false, "observationSeconds": 86400, "verify": {"executable": "./scripts/monitor-probe"}}
+    ]
+  },
+  "environment": {
+    "runtimes": [{"id": "runtime", "executable": ".iteris/tools/bin/project-runtime", "versionPattern": "project-runtime 1\\.", "setup": {"executable": "./scripts/install-project-runtime"}}],
+    "probes": [{"id": "dependencies", "command": {"executable": "./scripts/check-project-setup"}}],
+    "setup": [{"executable": "./scripts/prepare-project"}]
+  },
+  "recovery": {"enabled": true, "scope": "project-local", "attempts": 2, "finalVerificationReserve": 0.2},
+  "continuation": {"watch": true, "initialSeconds": 60, "maxSeconds": 900},
+  "integrations": {
+    "source": {"name": "task-system", "namespace": "workspace/board", "command": {"executable": "./scripts/task-adapter", "env": {"TOKEN": "TASK_SYSTEM_TOKEN"}}},
+    "externalActions": ["release"],
+    "status": {"command": {"idempotent": true, "command": {"executable": "./scripts/status-adapter", "env": {"TOKEN": "TASK_SYSTEM_TOKEN"}}}}
+  },
+  "profiles": [{"id": "security", "match": {"labels": ["security"], "paths": ["src/**"]}, "verification": {"checks": [{"id": "security-behavior", "behavioral": true, "command": {"executable": "./scripts/check-security-behavior"}}]}}]
+}

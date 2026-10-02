@@ -5,12 +5,16 @@ import {listModels, validateSelection} from './harness/models.js';
 import {ensureHarness, findExecutable, ReadinessError} from './harness/readiness.js';
 import {setHarness, setModel, setEffort, selectionLabel} from './harness/settings.js';
 import {choose, type ChoiceOption} from './ui/Choice.js';
+import {prepareEnvironment} from './lifecycle/environment.js';
 export type Picker = (title: string, options: ChoiceOption[], initial?: string) => Promise<string>;
 const harnessOptions = [{value: 'claude', label: 'Claude Code'}, {value: 'codex', label: 'Codex'}];
 export async function prepareHarness(config: IterisConfig, picker: Picker = choose, cwd = process.cwd(), selection = true): Promise<IterisConfig> {
 	let skipUpdate = false;
 	for (;;) {
+		const originalPath=process.env['PATH'];
 		try {
+			const manifest=await prepareEnvironment(config,cwd);
+			process.env['PATH']=manifest.path;
 			await ensureHarness(config.harness, {skipUpdate});
 			if (!selection) return config;
 			const models = await listModels(config.harness);
@@ -31,7 +35,7 @@ export async function prepareHarness(config: IterisConfig, picker: Picker = choo
 				config = await updateConfig(current => {current.harness = harness;}, cwd);
 				skipUpdate = false;
 			} else {skipUpdate = choice === 'continue'; config = await loadConfig(cwd);}
-		}
+		}finally{process.env['PATH']=originalPath;}
 	}
 }
 export async function configure(command: string, argument?: string, options: {picker?: Picker; cwd?: string; active?: boolean} = {}): Promise<IterisConfig> {

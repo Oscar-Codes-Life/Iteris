@@ -1,15 +1,17 @@
 import {mkdir, writeFile, appendFile, readdir, readFile, copyFile, unlink} from 'node:fs/promises';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
-import type {Ticket, TicketState, TicketStatus} from '../types.js';
+import type {Ticket, TicketState, TicketStatus, IterisConfig} from '../types.js';
+import {taskKey} from '../lifecycle/state.js';
 
 function runFolder(cwd: string, ticket: Ticket): string {
 	return path.join(cwd, '.iteris', 'runs', ticket.custom ? `custom-${ticket.custom.identity}` : `${ticket.number}-${ticket.slug}`);
 }
 
-export async function createRunFolder(cwd: string, ticket: Ticket): Promise<string> {
-	const folder = runFolder(cwd, ticket);
+export async function createRunFolder(cwd: string, ticket: Ticket, config?: IterisConfig): Promise<string> {
+	const folder = config ? path.join(cwd,'.iteris','tasks',taskKey(ticket,config),'artifacts') : runFolder(cwd, ticket);
 	await mkdir(folder, {recursive: true});
+	if (config) return folder;
 	if (ticket.custom) {
 		let resume = false;
 		try {

@@ -70,3 +70,18 @@ export async function updatePrReview(config: IterisConfig, number: number, repor
 	const body = replaceReviewSection(data.body ?? '', report);
 	if (body !== data.body) await octokit.pulls.update({owner, repo, pull_number: number, body});
 }
+
+export const LIFECYCLE_START = '<!-- iteris:lifecycle:start -->';
+export const LIFECYCLE_END = '<!-- iteris:lifecycle:end -->';
+export function replaceLifecycleSection(body: string, report: string): string {
+	const section = `${LIFECYCLE_START}\n## Task completion\n${report}\n${LIFECYCLE_END}`;
+	const start = body.indexOf(LIFECYCLE_START), end = body.indexOf(LIFECYCLE_END, start);
+	if (start >= 0 && end >= start) return body.slice(0,start) + section + body.slice(end + LIFECYCLE_END.length);
+	return `${body.trim()}\n\n${section}`;
+}
+export async function updatePrLifecycle(config: IterisConfig, number: number, report: string, octokit: Octokit = createOctokit()): Promise<void> {
+	const [owner,repo] = config.repo.split('/') as [string,string];
+	const {data} = await octokit.pulls.get({owner,repo,pull_number:number});
+	const body = replaceLifecycleSection(data.body ?? '',report);
+	if (body !== data.body) await octokit.pulls.update({owner,repo,pull_number:number,body});
+}

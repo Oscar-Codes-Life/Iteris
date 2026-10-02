@@ -12,6 +12,7 @@ export async function fetchRepositoryIssues(octokit: Octokit, repository: string
 	// GitHub's issues endpoint includes PRs. Only actual open issues belong in
 	// the ticket picker; project Status fields do not apply to this source.
 	const tickets: Ticket[] = issues.filter(issue => !issue.pull_request && issue.state === 'open').map(issue => ({
+		source: {provider:'github', namespace:repository, id:String(issue.id), issueId:issue.node_id},
 		number: issue.number,
 		title: issue.title,
 		body: issue.body ?? '',

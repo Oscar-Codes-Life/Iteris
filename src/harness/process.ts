@@ -2,19 +2,21 @@ import {redact} from './redact.js';
 import {spawn, type ChildProcess} from 'node:child_process';
 import {createInterface} from 'node:readline';
 import type {IterisConfig} from '../types.js';
+import {protectHostAuthority} from '../lifecycle/authority.js';
 
 export type Phase = 'planning' | 'implementation' | 'review' | 'repair' | 'pr-description' | 'summary' | 'import';
 export type ProcessResult = {success: boolean; text: string; finalText?: string; done: boolean; timedOut: boolean; error?: string};
 export function invocation(config: IterisConfig, phase: Phase, images: string[] = []): {command: string; args: string[]; env: NodeJS.ProcessEnv} {
 	const settings = config.harnesses[config.harness];
 	const readOnly = phase === 'planning' || phase === 'pr-description' || phase === 'summary' || phase === 'import' || phase === 'review';
-	const flags = readOnly ? [] : settings.flags;
-	const env = {...process.env};
+	const flags = readOnly ? [] : settings.flags.filter(flag => flag !== '--dangerously-skip-permissions');
+	const env: NodeJS.ProcessEnv = {...process.env, ...config._execution?.env, PATH:config._execution?.path ?? process.env['PATH']};
 	if (config.custom) delete env[config.custom.apiKeyEnv];
-	if (phase === 'review') for (const key of ['GH_TOKEN', 'GITHUB_TOKEN', 'TRELLO_TOKEN', 'TRELLO_API_KEY', 'SSH_AUTH_SOCK']) delete env[key];
+	const credentials=[...config.verification.checks.map(check=>check.command),...config.verification.stages.flatMap(stage=>[stage.execute,stage.verify].filter((command):command is NonNullable<typeof command>=>!!command)),...Object.values(config.integrations.status).flatMap(mapping=>[mapping.command,mapping.verify].filter((command):command is NonNullable<typeof command>=>!!command)),...(config.integrations.source?[config.integrations.source.command]:[])].flatMap(command=>[...Object.keys(command.env),...Object.values(command.env)]);
+	for (const key of ['GH_TOKEN', 'GITHUB_TOKEN', 'TRELLO_TOKEN', 'TRELLO_API_KEY', 'SSH_AUTH_SOCK', ...Object.keys(config.environment.env), ...Object.values(config.environment.env),...credentials]) delete env[key];
 	if (config.harness === 'codex') {
 		const args = ['exec', '--json', ...flags];
-		args.push(...(readOnly ? ['--sandbox', 'read-only', '-c', 'approval_policy="never"'] : ['--dangerously-bypass-approvals-and-sandbox']));
+		args.push('--sandbox', readOnly ? 'read-only' : 'workspace-write', '-c', 'approval_policy="never"');
 		if (settings.model) args.push('--model', settings.model);
 		if (settings.effort) args.push('-c', `model_reasoning_effort=${JSON.stringify(settings.effort)}`);
 		if (phase === 'review') args.push('--skip-git-repo-check');
@@ -27,6 +29,7 @@ export function invocation(config: IterisConfig, phase: Phase, images: string[] 
 	}
 	delete env['CLAUDE_CODE_EFFORT_LEVEL'];
 	const args = ['--print', '--verbose', '--output-format', 'stream-json', ...flags];
+	if (!readOnly) args.push('--setting-sources','','--tools','Read,Glob,Grep,Edit,Write,Bash','--strict-mcp-config','--mcp-config','{"mcpServers":{}}','--permission-mode','acceptEdits','--settings',JSON.stringify({disableAllHooks:true,sandbox:{enabled:true,failIfUnavailable:true,autoAllowBashIfSandboxed:true,allowUnsandboxedCommands:false,filesystem:{denyWrite:['.iteris/tasks/**','.iteris/active.json','.iteris.json']},network:{allowedDomains:[],strictAllowlist:true}},permissions:{deny:['Edit(.iteris.json)','Write(.iteris.json)','Edit(.iteris/tasks/**)','Write(.iteris/tasks/**)','Bash(git push *)','Bash(gh *)','Bash(curl *)','Bash(wget *)']}}));
 	if (phase === 'review') args.push('--settings', JSON.stringify({disableAllHooks: true}));
 	if (readOnly) args.push('--permission-mode', 'plan', '--tools', phase === 'summary' || phase === 'pr-description' ? '' : phase === 'import' ? 'Read' : 'Read,Glob,Grep', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}');
 	if (settings.model) args.push('--model', settings.model);
@@ -59,6 +62,7 @@ export async function runHarness(options: {
 	onLine?: (line: string) => void; onProcess?: (process: ChildProcess) => void; signal?: AbortSignal;
 }): Promise<ProcessResult> {
 	const {command, args, env} = invocation(options.config, options.phase, options.images);
+	const verifyAuthority=await protectHostAuthority(options.cwd);
 	return new Promise(resolve => {
 		if (options.signal?.aborted) {resolve({success: false, done: false, text: '', timedOut: false, error: 'Cancelled'}); return;}
 		const proc = spawn(command, args, {cwd: options.cwd, env, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe']});
@@ -85,13 +89,14 @@ export async function runHarness(options: {
 				options.onLine?.(event.assistant);
 			}
 		});
-		stderr.on('line', line => options.onLine?.(`[stderr] ${redact(line)}`));
+		stderr.on('line', line => {const safe=redact(line);options.onLine?.(`[stderr] ${safe}`);if(/sandbox/i.test(safe)&&/unavailable|not supported|missing|cannot initialize|required.*fail|operation not permitted/i.test(safe))error=`Local permission capability unavailable: ${safe}`;});
 		proc.stdin.on('error', err => {if ((err as NodeJS.ErrnoException).code !== 'EPIPE') error = err.message;});
 		proc.on('error', err => {error = err.message;});
 		// close occurs after stdout/stderr drain, including a final unterminated line.
-		proc.on('close', (code, signal) => {
+		proc.on('close', async (code, signal) => {
 			clearTimeout(timer); clearTimeout(killTimer);
 			options.signal?.removeEventListener('abort', abort);
+			try{await verifyAuthority();}catch(failure){error=failure instanceof Error?failure.message:String(failure);}
 			const success = code === 0 && !signal && !error && !timedOut;
 			resolve({success, text: text.trim(), finalText, done, timedOut, error: error ?? (success ? undefined : `Process exited with ${signal ?? code}`)});
 		});

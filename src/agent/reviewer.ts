@@ -2,7 +2,7 @@ import type {ChildProcess} from 'node:child_process';
 import {mkdir} from 'node:fs/promises';
 import {randomUUID} from 'node:crypto';
 import path from 'node:path';
-import type {z} from 'zod';
+import {z} from 'zod';
 import type {IterisConfig, Ticket} from '../types.js';
 import {redact, registerSecret} from '../harness/redact.js';
 import {runHarness} from '../harness/process.js';
@@ -12,6 +12,10 @@ import {runCommand} from '../review/command.js';
 import {reviewPrompt, verificationPrompt, repairPrompt, recoveryPrompt} from '../review/prompts.js';
 import {saveJson, finishReport, loadPassedReview, previousEvidence, loadCheckpoint, saveCheckpoint, checksSchema} from '../review/report.js';
 import {reviewSettings, passSchema, verificationSchema, recoverySchema, blocks, type ReviewPass, type Finding, type ReviewReport, type ReviewResult} from '../review/schema.js';
+import {applicableChecks} from '../lifecycle/requirements.js';
+import {executeCommand,CapabilityUnavailable} from '../lifecycle/environment.js';
+import {runRecoveryCheck} from '../lifecycle/local-check.js';
+import {commitSourceChanges} from '../lifecycle/commit.js';
 
 type ReviewOptions = {
 	ticket: Ticket; config: IterisConfig; cwd: string; folder: string; plan?: string; branch?: string;
@@ -28,7 +32,8 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 	await mkdir(attempt, {recursive: true});
 	const started = Date.now();
 	const phaseBudget = Math.min(config.timeout, settings.timeout ?? (settings.mode === 'deep' ? 1800 : 900)) * 1000;
-	const overallDeadline = started + config.timeout * 1000;
+	const overallDeadline = config._deadline ?? started + config.timeout * 1000;
+	const repairDeadline = overallDeadline - config.timeout * 1000 * config.recovery.finalVerificationReserve;
 	let deadline = Math.min(started + phaseBudget, overallDeadline);
 	let phase = 'setup';
 	const report: ReviewReport = {version: 1, outcome: 'incomplete', reason: 'Review not completed', startedAt: new Date(started).toISOString(), finishedAt: '', rounds: 0, repairs: 0,
@@ -57,11 +62,14 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 	try {
 		let previousBlockers: Finding[] = [];
 		const repairAttempts = new Map<string, number>();
-		const canRepair = (key: string) => {
-			if (audit || settings.maxRepairCycles === 0) return false;
+		let codeSpent=0,budgetKey='';
+		const canRepair = (key: string,code=false) => {
+			if (audit || !config.recovery.enabled || settings.maxRepairCycles === 0 || report.repairs >= config.recovery.attempts || Date.now() >= repairDeadline) return false;
+			if(code && codeSpent>=config.recovery.attempts)return false;
 			const attempts = repairAttempts.get(key) ?? 0;
 			if (attempts >= settings.maxRepairCycles) return false;
 			repairAttempts.set(key, attempts + 1);
+			if(code)codeSpent++;
 			return true;
 		};
 		const additionalChecks = new Set<string>();
@@ -70,12 +78,16 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 			beginPhase('Checks');
 			const requiredRequirements = new Set(unresolvedRequirements);
 			const context = captureContext(ticket, config, cwd, options.plan, options.branch);
+			for(const requirement of context.requirements.filter(r=>r.stage==='local' && r.id!=='local-checks'))requiredRequirements.add(requirement.text);
 			let resume = false;
 			const supplementalKey = digest(['supplemental-checks', context.stamp.scope]);
 			report.stamp = context.stamp;
 			if (round === 0 && !audit) {
+				budgetKey=digest(['repair-budget',context.stamp.scope]);
+				const budget=await loadCheckpoint(directory,budgetKey,z.object({spent:z.number().int().nonnegative(),attempts:z.record(z.number().int().nonnegative())}));
+				if(budget){codeSpent=budget.spent;for(const [key,attempts] of Object.entries(budget.attempts))repairAttempts.set(key,attempts);}
 				const cached = await loadPassedReview(directory, context);
-				if (cached && (config.qualityChecks.length || settings.allowNoChecks)) {log(`Reusing verified review of ${context.stamp.head}`); return cached;}
+				if (cached && (config.qualityChecks.length || context.checkIds.length || settings.allowNoChecks)) {log(`Reusing verified review of ${context.stamp.head}`); return cached;}
 			}
 			if (round === 0) {
 				const previous = await previousEvidence(directory, context);
@@ -93,12 +105,13 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 			const roundFolder = path.join(attempt, `round-${round + 1}`);
 			await saveJson(path.join(roundFolder, 'context.json'), context);
 			await saveJson(path.join(directory, 'context.json'), context);
-			if (!context.checks.length && !settings.allowNoChecks) {
+			const namedChecks = applicableChecks(config, context.changedFiles);
+			if (!context.checks.length && !namedChecks.length && !settings.allowNoChecks) {
 				const suggested = suggestChecks(cwd, context.stamp.head);
 				throw new Error(`No qualityChecks configured. ${suggested.length ? `Suggested qualityChecks: ${JSON.stringify(suggested)}. ` : ''}Configure repository checks, or explicitly set review.allowNoChecks for a change that needs none.`);
 			}
 			log(`Round ${round + 1}: checking ${context.stamp.head.slice(0, 12)}`);
-			const commands = [...context.checks, ...[...additionalChecks].filter(command => !context.checks.includes(command))];
+			const commands = [...context.checks, ...[...additionalChecks].filter(command => !context.checks.includes(command)), ...namedChecks.map(check => `check:${check.id}`)];
 			const checksKey = digest(['checks', context.stamp.key, commands]);
 			const cachedChecks = resume ? await loadCheckpoint(directory, checksKey, checksSchema) : undefined;
 			if (cachedChecks && cachedChecks.length === commands.length && cachedChecks.every((check, index) => check.command === commands[index] && check.head === context.stamp.head && check.exitCode === 0 && !check.error)) {
@@ -106,12 +119,16 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 				log(`Reusing successful checks for ${context.stamp.head.slice(0, 12)}`);
 			} else for (const command of commands) {
 				remaining();
-				const result = await runCommand(command, [], {cwd, deadline, signal, shell: true});
-				report.checks.push({command, head: context.stamp.head, ...result});
+				const named = namedChecks.find(check => command === `check:${check.id}`);
+				let result;
+				try{result = named ? await executeCommand(named.command, cwd, {...config, _deadline:deadline}, signal) : config._plannedChecks?.includes(command) || (additionalChecks.has(command) && !config.qualityChecks.includes(command)) ? await runRecoveryCheck(command,cwd,config,deadline,signal) : await runCommand(command, [], {cwd, deadline, signal, shell: true, env:{...process.env,...config._execution?.env,PATH:config._execution?.path ?? process.env['PATH']}});}
+				catch(error){if(!(error instanceof CapabilityUnavailable))throw error;report.dependencies=[...(report.dependencies??[]),{id:error.dependency,kind:'capability',description:error.message,nextAction:error.nextAction}];result={exitCode:null,output:'',durationMs:0,truncated:false,error:error.message};}
+				const {stdout:_stdout,stderr:_stderr,...checkResult}=result;
+				report.checks.push({command, head: context.stamp.head, ...checkResult});
 				await saveJson(path.join(roundFolder, 'checks.json'), report.checks);
 				log(`${command}: ${result.error ?? `exit ${result.exitCode}`}`);
 				assertSnapshot(context, config, cwd);
-				if (result.error || result.exitCode === null) throw new Error(result.error ?? 'Check did not exit normally');
+				if(signal?.aborted)throw new Error('Cancelled');
 			}
 			await saveJson(path.join(roundFolder, 'checks.json'), report.checks);
 			await saveJson(path.join(directory, 'checks.json'), report.checks);
@@ -125,6 +142,7 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 				const runPass = async (lens: 'correctness' | 'maintainability' | 'risk') => {
 					const key = digest(['investigation', context.stamp.key, lens, report.checks]);
 					let cached = resume ? await loadCheckpoint(directory, key, passSchema) : undefined;
+					if(cached && (!cached.complete || cached.gaps.length || cached.requirements.some(r=>r.status==='unverified') || context.changedFiles.some(file=>!cached!.inspectedFiles.includes(file))))cached=undefined;
 					try {for (const candidate of cached?.findings ?? []) validateLocation(candidate, context, cwd);} catch {cached = undefined;}
 					if (cached && cached.head === context.stamp.head) {
 						log(`Reusing ${lens} investigation for ${context.stamp.head.slice(0, 12)}`);
@@ -136,7 +154,7 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 					if (pass.head !== context.stamp.head) throw new Error(`${lens} review returned the wrong commit.`);
 					for (const candidate of pass.findings) validateLocation(candidate, context, cwd);
 					await saveJson(path.join(roundFolder, `${lens}.json`), pass);
-					if (!audit) await saveCheckpoint(directory, key, pass);
+					if (!audit && pass.complete && !pass.gaps.length && pass.requirements.every(r=>r.status!=='unverified')) await saveCheckpoint(directory, key, pass);
 					return pass;
 				};
 				const lenses: Array<'correctness' | 'maintainability' | 'risk'> = ['correctness', 'maintainability'];
@@ -153,7 +171,7 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 					const previous = unique.get(id);
 					const rank = ['critical', 'high', 'medium', 'low'];
 					const priority = previous && rank.indexOf(previous.priority) < rank.indexOf(candidate.priority) ? previous.priority : candidate.priority;
-					unique.set(id, {...candidate, priority, materialRegression: candidate.materialRegression || Boolean(previous?.materialRegression), id, head: context.stamp.head, status: 'candidate'});
+					unique.set(id, {...candidate, priority, policyRule:[...new Set([candidate.policyRule,previous?.policyRule].filter(Boolean))].join('\n'), materialRegression: candidate.materialRegression || Boolean(previous?.materialRegression), id, head: context.stamp.head, status: 'candidate'});
 				}
 				candidates = [...unique.values()];
 				await saveJson(path.join(roundFolder, 'candidates.json'), candidates);
@@ -176,13 +194,23 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 						const referenced = verification.decisions.filter(other => other.id !== decision.id && other.status === 'confirmed' && decision.evidence.includes(other.id));
 						if (referenced.length === 1) duplicateOf = referenced[0]!.id;
 					}
-					if (decision.status === 'duplicate' && !duplicateOf) throw new Error(`Duplicate finding ${decision.id} must identify one confirmed canonical candidate in duplicateOf or evidence.`);
+					// An uncertain duplicate remains an unresolved finding rather than
+					// dropping an obligation or stopping before available repair.
+					if (decision.status === 'duplicate' && !duplicateOf) Object.assign(finding,{status:'confirmed',verification:decision.evidence});
 					if (decision.status === 'rejected' && duplicateOf) throw new Error('Rejected decisions cannot reference a canonical finding.');
 					if (duplicateOf && (duplicateOf === decision.id || !verification.decisions.some(d => d.id === duplicateOf && d.status === 'confirmed' && !d.duplicateOf))) throw new Error('Invalid duplicate finding reference.');
 					Object.assign(finding, {status: decision.status === 'duplicate' ? 'confirmed' : decision.status, verification: decision.evidence, duplicateOf});
 				}
 				for (const finding of candidates) {
-					if (finding.duplicateOf && blocks({...finding, duplicateOf: undefined}) && !blocks(candidates.find(f => f.id === finding.duplicateOf)!)) throw new Error('Deduplication cannot downgrade a blocking finding.');
+					if (!finding.duplicateOf) continue;
+					const canonical = candidates.find(f => f.id === finding.duplicateOf)!;
+					const rank = ['critical','high','medium','low'];
+					if (rank.indexOf(finding.priority) < rank.indexOf(canonical.priority)) canonical.priority = finding.priority;
+					canonical.materialRegression ||= finding.materialRegression;
+					if (finding.category === 'acceptance') canonical.category = 'acceptance';
+					if (finding.policyRule) canonical.policyRule = [...new Set([canonical.policyRule,finding.policyRule].filter(Boolean))].join('\n');
+					// Preserve each blocking obligation when the canonical category differs.
+					if (blocks({...finding,duplicateOf:undefined}) && !blocks(canonical)) finding.duplicateOf = undefined;
 				}
 				if (new Set(verification.resolved.map(f => f.id)).size !== verification.resolved.length || verification.resolved.some(f => !previousBlockers.some(p => p.id === f.id) || candidates.some(c => c.id === f.id && c.status === 'confirmed'))) throw new Error('Invalid resolution evidence.');
 				for (const previous of previousBlockers) {
@@ -205,7 +233,7 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 			if (report.gaps.length) {
 				unresolvedRequirements = new Set(report.requirements.filter(item => item.status !== 'covered').map(item => item.requirement));
 					report.outcome = 'incomplete'; report.reason = report.gaps.join('; ');
-				const failureKey = digest({gaps: [...report.gaps].sort(), candidates: candidates.map(f => f.id).sort()});
+				const failureKey = digest({kind:'review-gap', files:context.changedFiles, candidates:candidates.map(f=>[f.category,f.file,f.line,f.policyRule]).sort()});
 				if (!canRepair(failureKey)) {
 					if (!audit && report.gaps.every(namesCiGate) && ciDeferralReady(report, candidates)) {
 						report.deferredToCI = true;
@@ -216,7 +244,9 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 				report.repairs++;
 				log(`Recovery ${report.repairs}: ${report.reason}`);
 				beginPhase('Recovery');
-				const prompt = recoveryPrompt(context, report.gaps, report.requirements, report.checks, previousBlockers, candidates);
+				const repeated=(repairAttempts.get(failureKey)??0)>1;
+				const prompt = recoveryPrompt(context, report.gaps, report.requirements, report.checks, previousBlockers, candidates,repeated?'This invariant remains unresolved after recovery. Replan from the recorded failure: trace why the prior strategy failed and choose a different local reproduction or setup approach. Keep the same acceptance obligation and budget.':'');
+				if(repeated)await saveJson(path.join(roundFolder,'replanning.json'),{signature:failureKey,head:context.stamp.head,attempt:repairAttempts.get(failureKey),progressMetric:'Available local commands execute successfully; independent coverage resolves the same invariant',reason:report.reason});
 				const recovered = await runHarness({config, phase: 'repair', prompt: redact(prompt), cwd, timeoutMs: remaining(), signal, onProcess, onLine: line => log(`[recovery] ${line}`)});
 				await saveJson(path.join(roundFolder, 'recovery-process.json'), recovered);
 				if (!recovered.success) throw new Error(recovered.error ?? 'Recovery failed');
@@ -224,21 +254,15 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 					schema: recoverySchema, cwd, remaining, signal, onProcess, onLine: log,
 					onAttempt: (index, correction) => saveJson(path.join(roundFolder, `recovery-schema-recovery-attempt-${index}.json`), correction)});
 				await saveJson(path.join(roundFolder, 'recovery.json'), recovery);
+				commitSourceChanges(cwd,context.stamp.branch,'Recover project verification');
 				const next = captureContext(ticket, config, cwd, options.plan, options.branch);
 				if (next.stamp.base !== context.stamp.base) throw new Error('Base changed during recovery; restart review.');
-				if (recovery.blockedReason) {
-					if ((recovery.deferredToCI || namesCiGate(recovery.blockedReason)) && recovery.checks.length === 0 && next.stamp.key === context.stamp.key && ciDeferralReady(report, candidates)) {
-						report.deferredToCI = true;
-						report.reason = `CI evidence pending: ${recovery.blockedReason}`;
-						log(report.reason);
-						return finish();
-					}
-					throw new Error(`Review recovery blocked: ${recovery.blockedReason}`);
-				}
+				report.dependencies = recovery.dependencies?.length ? recovery.dependencies : recovery.blockedReason ? [{id:namesCiGate(recovery.blockedReason)?'ci':'recovery-capability',kind:'external',description:recovery.blockedReason,nextAction:'Refresh the dependency or configure a verification probe, then resume'}] : [];
+				if (recovery.deferredToCI || namesCiGate(recovery.blockedReason ?? '')) report.deferredToCI = true;
 				const checkCount = additionalChecks.size;
 				for (const command of recovery.checks) additionalChecks.add(command);
 				if (next.stamp.head === context.stamp.head && additionalChecks.size === checkCount) {
-					report.reason += ' Recovery produced no new commit or check command.';
+					report.reason += recovery.blockedReason ? ` External evidence pending: ${recovery.blockedReason}` : ' Recovery produced no new commit or check command.';
 					log(report.reason); return finish();
 				}
 				await saveCheckpoint(directory, supplementalKey, [...additionalChecks]);
@@ -246,20 +270,25 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 			}
 			previousBlockers = candidates.filter(blocks);
 			const failedChecks = report.checks.filter(check => check.exitCode !== 0);
+			if(failedChecks.some(check=>check.exitCode===null) && report.dependencies?.some(d=>d.kind==='capability')){report.outcome='incomplete';report.reason='Local checks await the recorded execution capability';return finish();}
 			const missing = report.requirements.filter(r => r.status === 'missing');
 			unresolvedRequirements = new Set(report.requirements.filter(item => item.status !== 'covered').map(item => item.requirement));
 			if (!previousBlockers.length && !failedChecks.length && !missing.length) {
 				report.outcome = 'passed'; report.reason = 'Required reviews and validation completed on the final commit.'; log(report.reason); assertSnapshot(context, config, cwd); return finish();
 			}
 			report.outcome = 'blocked'; report.reason = `${previousBlockers.length} blocking findings, ${missing.length} missing requirements, ${failedChecks.length} failed checks.`;
-			const failureKey = digest({findings: previousBlockers.map(f => f.id).sort(), missing: missing.map(r => r.requirement).sort(), checks: failedChecks.map(c => c.command)});
-			if (!canRepair(failureKey)) {log(report.reason); return finish();}
+			const failureKey = digest({findings: previousBlockers.map(f => [f.category,f.file,f.line,f.policyRule]).sort(), missing: missing.map(r => r.requirement).sort(), checks: failedChecks.map(c => c.command)});
+			if (!canRepair(failureKey,true)) {log(report.reason); return finish();}
+			await saveCheckpoint(directory,budgetKey,{spent:codeSpent,attempts:Object.fromEntries(repairAttempts)});
 			report.repairs++;
 			log(`Repair ${report.repairs}: ${report.reason}`);
 			beginPhase('Repair');
-			const repaired = await runHarness({config, phase: 'repair', prompt: redact(repairPrompt(context, previousBlockers, missing, failedChecks)), cwd, timeoutMs: remaining(), signal, onProcess, onLine: line => log(`[repair] ${line}`)});
+			const repeated=(repairAttempts.get(failureKey)??0)>1;
+			if(repeated)await saveJson(path.join(roundFolder,'replanning.json'),{signature:failureKey,head:context.stamp.head,attempt:repairAttempts.get(failureKey),progressMetric:'The same behavioral check and independent invariant become satisfied',reason:report.reason});
+			const repaired = await runHarness({config, phase: 'repair', prompt: redact(repairPrompt(context, previousBlockers, missing, failedChecks,repeated?'The same invariant failed after a prior repair. Replan before editing: trace the root cause and why the prior patch failed, choose a different strategy, then demonstrate measurable progress with the failing behavioral check. Do not repeat the same patch or change the acceptance obligation.':'')), cwd, timeoutMs: remaining(), signal, onProcess, onLine: line => log(`[repair] ${line}`)});
 			await saveJson(path.join(roundFolder, 'repair.json'), repaired);
 			if (!repaired.success || !repaired.done) throw new Error(repaired.error ?? 'Repair did not report completion');
+			commitSourceChanges(cwd,context.stamp.branch,'Repair verified project invariant');
 			const next = captureContext(ticket, config, cwd, options.plan, options.branch);
 			if (next.stamp.head === context.stamp.head) {report.reason += ' Repair produced no new commit.'; return finish();}
 			if (next.stamp.base !== context.stamp.base) throw new Error('Base changed during repair; restart review.');

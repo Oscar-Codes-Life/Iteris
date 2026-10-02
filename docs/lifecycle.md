@@ -1,0 +1,71 @@
+# Configurable completion and recovery
+
+Iteris completes a coding task when the published commit has successful local checks, independent review, required CI evidence, all explicit acceptance stages, and any configured source update. Publication alone never completes a task. Unfinished work is a draft PR and remains resumable.
+
+`.iteris.json` version 3 preserves the existing harness, provider, branch, quality-check and PR settings. Version-1 and version-2 files are backed up before migration. A permanent `pr.draft: true` setting remains effective after verification.
+
+## Configuration
+
+Start with [the minimal example](examples/lifecycle-minimal.json). [The extended example](examples/lifecycle-extended.json) shows named behavioral checks, runtime preparation, task profiles, deployment, device and monitoring probes, and a command task source. Replace executable names and credential references with your own commands. The examples contain no automatic deployment to an actual service.
+
+Configuration resolves from defaults, project settings, matching profiles, and explicit CLI execution selections. Profiles match provider, labels and changed paths; checks and stages merge by stable ID. Conflicting definitions fail validation. Path profiles are applied after the actual diff is available. Setup commands must operate within project directories; Iteris never automatically upgrades global harness installations or edits shell profiles.
+
+`verification.maxContextCharacters` limits the combined trusted policy/context text supplied to reviewers (default 40,000, maximum 1,000,000). Raise it when a repository's engineering guide exceeds the default; context is never silently truncated. Matching profiles can raise this limit.
+
+Structured commands use `executable`, `args`, `cwd`, `timeout` (seconds), `env` (destination variable → host variable reference), and optional platform variants. An explicit `shell` is required for structured shell execution. Existing string `qualityChecks` retain their historical shell semantics. Model-suggested recovery commands run with local isolation; unavailable isolation is a capability dependency. External actions require a configured stage and its ID in `integrations.externalActions`. Ticket or model text cannot enable them.
+
+The preflight manifest resolves runtime paths, versions, probe output hashes and environment references. Host checks and harness processes share its PATH. Only redacted environment metadata is persisted. Configure environment probes for prerequisites whose identity matters to cached checks, such as an installed dependency tree or a local service schema. Configured installers run with project-local filesystem isolation. Missing isolation becomes a waiting dependency; prepare prerequisites manually when the platform cannot provide it.
+
+Claude write sessions use its sandbox with `failIfUnavailable`, a strict network allowlist and no unsandboxed fallback. Codex uses `workspace-write` and no interactive approval requests. Git branch preparation and committing source changes belong to the host, allowing harness sandboxes to protect `.git`. The settings follow [Claude's sandbox documentation](https://code.claude.com/docs/en/sandboxing). Missing platform or sandbox support must be resolved before local repair can proceed; it is never permission to bypass isolation.
+
+## State and completion
+
+Records live in `.iteris/tasks/<key>/run.json`. The key includes destination repository, task provider, source namespace and stable source ID. Display numbers and titles are not identity. The record contains requirements, commit/base evidence, execution metadata, retries, PR details, dependencies and action intents. Writes use a temporary file and atomic rename. `status.md` is a generated view.
+
+States are `queued`, `active`, `waiting`, `blocked`, `complete` and `cancelled`. Execution phase is independent. Waiting dependencies include the missing capability, next action, probe time and persisted retry schedule. Probes start at 60 seconds and back off to 15 minutes. Runnable work takes priority; a repository lock serializes writes. Stopping the foreground process preserves unfinished work. Explicit cancellation prevents resumption.
+
+Planning saves a verification pack before implementation. It includes stable requirement IDs, trusted base policy/context files, fixtures, reproduction strategy, behavioral checks and required capabilities. Acceptance extraction conservatively retains ticket content and recognizes deployment, device, provider, merge and monitoring stages. Use explicit configured stages for precise acceptance semantics and observation durations. Later stages are verified by host probes after publication; local reviewers assess implementation and preparation for them.
+
+Checks and independent review must cover the final commit. Cache keys include task content, base, configured verification and environment identity. Failed checks and incomplete investigations never become completion caches. Every repair commit receives fresh checks and review. Local evidence commands still execute when external dependencies remain. Duplicate findings keep the strongest severity and all blocking obligations; ambiguous duplicates remain unresolved findings. Harness changes to host-owned run records or verification/action configuration are restored and rejected. Live CLI harness, model and effort selections remain available.
+
+Recovery defaults to two attempts within the existing task timeout, reserving 20% for final verification. Repeated prose cannot reset the budget. Failed CI enters bounded local repair, followed by checks and review of the new published commit. CI verification uses explicit required names when configured, otherwise branch-protection and ruleset discovery. Discovery failures remain visible. Published-head and current-base changes invalidate readiness and trigger reconciliation.
+
+## Adapters and action protocol
+
+Task sources and publication are separate. GitHub Issues/Projects, full Trello card IDs and custom imports supply tasks; GitHub publishes PRs. Other systems use `integrations.source` with a command adapter. Each request is one JSON object on stdin, version `1`. Emit one JSON object on stdout; write diagnostic logging to stderr.
+
+Source requests have `operation: fetch | refresh | synchronize`, repository, source identity, and relevant task/run/publication fields. A successful response is `{ "version": 1, "ok": true, ... }`. Fetch adds `tasks`; refresh adds `task`; synchronization adds `verified: true` and optionally a receipt. Each task has `id`, `number`, `title`, `body`, `labels`, and `url`. Refresh must return the same source ID and namespace. Credentials stay in configured host environment references.
+
+External stages have separate `execute` and `verify` commands. Verification requests include operation ID, requirement IDs, commit, base, run key and publication. A verified receipt is:
+
+```json
+{"version":1,"verified":true,"commit":"<published SHA>","observedAt":"2026-09-30T12:00:00.000Z","build":"optional build ID","details":"provider receipt or observation"}
+```
+
+A nonzero probe exit or `verified: false` means evidence is pending. Invalid, truncated, wrong-commit or future-dated evidence does not satisfy a stage. Monitoring records observations across probes for the configured window; failed probes reset the window. Device stages can use probes or explicitly submitted evidence. The PR contains a generated completion section alongside independent review, including remaining dependencies and provenance.
+
+The host persists action intent and operation ID before executing it. After interruption it probes the outcome first. Ambiguous non-idempotent operations remain waiting rather than being repeated. Changed ticket content invalidates planning and evidence while preserving unresolved action intent. Source synchronization uses the same durable outbox. Trello updates target the full card ID and verify the board/list afterward. Missing cards or lists are visible dependencies. Optional GitHub/custom status mappings use configured commands; provide an idempotent mapping or a reliable verification command.
+
+## Commands and migration
+
+```sh
+iteris                         # select work, then foreground continuation
+iteris --once                  # one scheduling pass
+iteris status                  # requirements, dependencies and provenance
+iteris resume --once            # refresh and retry unfinished work, including blocked work
+iteris doctor                  # inspect prerequisites without running installers
+iteris evidence <key> receipt.json
+iteris cancel <key>
+```
+
+Submitted receipts contain `version`, `requirementId`, `commit`, optional `build`, `observedAt`, `provenance`, `details`, and `success`. They can satisfy external requirements; they cannot substitute for local checks, independent review, publication or required CI. Monitoring submissions must span the configured observation window with matching provenance and build. Use `iteris status` to obtain the task key and requirement ID. Evidence updates use the repository writer lock; cancellation records a separate intent and stops active harness or stage execution without overwriting it.
+
+Normal startup imports identifiable legacy artifacts conservatively and reconciles unfinished work. Legacy `done` with blocked/incomplete review is unfinished. Original artifacts remain intact, existing PRs are reused, and committed implementation is preserved when task identity/content match. Legacy Trello display IDs must resolve uniquely through the configured board before any external update. Unidentifiable legacy folders remain intact for explicit reconciliation.
+
+There is no daemon or additional built-in code host. Continuation runs while Iteris is foreground. Merging is an observed external acceptance stage and requires a configured probe; an execution command requires explicit project authorization.
+
+## Verification and rollout
+
+Run `npm run typecheck` and `npm test`. Tests use temporary repositories, scripted Claude/Codex harnesses, mock provider APIs, fake probe schedules and fixture command adapters. Default tests perform no provider writes or deployment. Status and PR projections expose verified completion, current-commit evidence coverage, repair/setup attempt counts, elapsed time and typed waiting dependencies. Use these measures to evaluate completion rather than counting PRs.
+
+The Roxbase regressions assert that mixed local/external recovery executes local checks and reviews the final commit, unchanged-HEAD dependency recovery is reevaluated, and mixed-severity duplicates reach repair without losing severity. Lifecycle fixtures measure verified completion, correct waiting, current-commit evidence and bounded convergence, including restart and interrupted outbox actions. The historical audit and its original diagnostic artifacts remain in `docs/audits/roxbase-2026-09-30`.

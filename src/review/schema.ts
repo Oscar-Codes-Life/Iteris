@@ -36,6 +36,7 @@ export type ReviewStamp = {head: string; base: string; mergeBase: string; branch
 export type ReviewReport = {
 	version: 1; outcome: 'passed' | 'blocked' | 'incomplete'; reason: string;
 	deferredToCI?: boolean;
+	dependencies?: Array<{id: string; kind: 'capability' | 'external'; description: string; nextAction: string}>;
 	stamp?: ReviewStamp; startedAt: string; finishedAt: string; rounds: number; repairs: number;
 	findings: Finding[]; requirements: Verification['requirements']; checks: CheckResult[]; gaps: string[];
 	mode: 'standard' | 'deep'; selection: {harness: string; model?: string; effort?: string};
@@ -60,6 +61,9 @@ export function parseReport<T>(raw: string, schema: z.ZodType<T>): T {
 
 export const recoverySchema = z.object({
 	checks: z.array(z.string().trim().min(1).max(4000)).max(20),
-	blockedReason: z.string().max(12_000),
+	// Accept legacy reports while separating runnable work from dependencies.
+	blockedReason: z.string().max(12_000).default(''),
+	sourceChanged: z.boolean().default(false),
+	dependencies: z.array(z.object({id: text, kind: z.enum(['capability','external']), description: text, nextAction: text}).strict()).default([]),
 	deferredToCI: z.boolean().optional(),
 }).strict();

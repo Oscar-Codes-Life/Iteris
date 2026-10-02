@@ -1,0 +1,12 @@
+{
+  "version": 3,
+  "repo": "owner/repository",
+  "provider": "github",
+  "githubSource": "issues",
+  "baseBranch": "main",
+  "harness": "codex",
+  "qualityChecks": [],
+  "verification": {
+    "checks": [{"id": "behavior", "behavioral": true, "command": {"executable": "./scripts/check-behavior"}}]
+  }
+}

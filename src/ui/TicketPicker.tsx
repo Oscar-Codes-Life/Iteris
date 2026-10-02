@@ -2,6 +2,9 @@ import {useState} from 'react';
 import {Box, Text, useInput} from 'ink';
 import type {Ticket, TicketStatus} from '../types.js';
 
+export const ticketIdentity=(ticket:Ticket)=>ticket.source?JSON.stringify([ticket.source.provider,ticket.source.namespace,ticket.source.id]):ticket.custom?.identity??String(ticket.number);
+const identity=ticketIdentity;
+
 const priorityConfig: Record<string, {color: string; label: string}> = {
 	p0: {color: 'red', label: 'p0'},
 	p1: {color: 'yellow', label: 'p1'},
@@ -13,23 +16,27 @@ const statusBadge: Record<string, {color: string; label: string}> = {
 	failed: {color: 'red', label: '✗ Failed'},
 	blocked: {color: 'red', label: '! Review blocked'},
 	incomplete: {color: 'yellow', label: '? Review incomplete'},
+	waiting: {color: 'yellow', label: '… Waiting for evidence'},
+	cancelled: {color: 'gray', label: '⊘ Cancelled'},
 	stale: {color: 'gray', label: '⊘ Stale'},
 };
 
 type TicketPickerProps = {
 	tickets: Ticket[];
 	previousStatuses: Map<number, TicketStatus>;
+	sourceStatuses?:Map<string,TicketStatus>;
 	onSelect: (tickets: Ticket[]) => void;
 };
 
-export function TicketPicker({tickets, previousStatuses, onSelect}: TicketPickerProps) {
+export function TicketPicker({tickets, previousStatuses, sourceStatuses, onSelect}: TicketPickerProps) {
+	const previousStatus=(ticket:Ticket)=>sourceStatuses?.get(identity(ticket)) ?? (ticket.source ? undefined : previousStatuses.get(ticket.number));
 	const [cursor, setCursor] = useState(0);
-	const [selected, setSelected] = useState<Set<number>>(() => {
-		const initial = new Set<number>();
+	const [selected, setSelected] = useState<Set<string>>(() => {
+		const initial = new Set<string>();
 		for (const ticket of tickets) {
-			const status = previousStatuses.get(ticket.number);
+			const status = previousStatus(ticket);
 			if (status !== 'done' || ticket.custom?.changed) {
-				initial.add(ticket.number);
+				initial.add(identity(ticket));
 			}
 		}
 
@@ -45,25 +52,25 @@ export function TicketPicker({tickets, previousStatuses, onSelect}: TicketPicker
 			const ticket = tickets[cursor]!;
 			setSelected(prev => {
 				const next = new Set(prev);
-				if (next.has(ticket.number)) {
-					next.delete(ticket.number);
+				if (next.has(identity(ticket))) {
+					next.delete(identity(ticket));
 				} else {
-					next.add(ticket.number);
+					next.add(identity(ticket));
 				}
 
 				return next;
 			});
 		} else if (input === 'a') {
 			setSelected(prev => {
-				const allSelected = tickets.every(t => prev.has(t.number));
+				const allSelected = tickets.every(t => prev.has(identity(t)));
 				if (allSelected) {
-					return new Set<number>();
+					return new Set<string>();
 				}
 
-				return new Set(tickets.map(t => t.number));
+				return new Set(tickets.map(t => identity(t)));
 			});
 		} else if (key.return) {
-			const chosen = tickets.filter(t => selected.has(t.number));
+			const chosen = tickets.filter(t => selected.has(identity(t)));
 			onSelect(chosen);
 		}
 	});
@@ -77,14 +84,14 @@ export function TicketPicker({tickets, previousStatuses, onSelect}: TicketPicker
 
 			{tickets.map((ticket, i) => {
 				const isCurrent = i === cursor;
-				const isSelected = selected.has(ticket.number);
+				const isSelected = selected.has(identity(ticket));
 				const priority = ticket.labels.find(l => priorityConfig[l]);
 				const pConfig = priority ? priorityConfig[priority] : undefined;
-				const status = previousStatuses.get(ticket.number);
+				const status = previousStatus(ticket);
 				const badge = status ? statusBadge[status] : undefined;
 
 				return (
-					<Box key={ticket.number} gap={1}>
+					<Box key={identity(ticket)} gap={1}>
 						<Text color={isCurrent ? 'magenta' : 'gray'}>{isCurrent ? '>' : ' '}</Text>
 						<Text color={isSelected ? 'green' : 'gray'}>{isSelected ? '[x]' : '[ ]'}</Text>
 						<Text bold color={isCurrent ? 'white' : 'gray'}>#{ticket.number}</Text>

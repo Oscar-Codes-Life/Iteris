@@ -13,6 +13,8 @@ const statusIcons: Record<string, string> = {
   failed: "✗",
   blocked: "!",
   incomplete: "?",
+  waiting: "◷",
+  cancelled: "−",
 };
 
 const statusColors: Record<string, string> = {
@@ -27,6 +29,8 @@ const statusColors: Record<string, string> = {
   failed: "red",
   blocked: "red",
   incomplete: "yellow",
+  waiting: "yellow",
+  cancelled: "gray",
 };
 
 function formatElapsed(ms: number): string {
@@ -64,7 +68,8 @@ export function TicketRow({ state }: TicketRowProps) {
       )}
       {state.prNumber && <Text color="cyan">PR #{state.prNumber}</Text>}
       {state.reviewPending && <Text color="yellow">({state.reviewPending})</Text>}
-      {state.failureReason && (["failed", "stale", "blocked", "incomplete"].includes(state.status)) && (
+      {state.remaining?.length && <Text dimColor>{state.remaining.length} requirements remaining</Text>}
+      {state.failureReason && (["failed", "stale", "blocked", "incomplete", "waiting"].includes(state.status)) && (
         <Text dimColor>({state.failureReason})</Text>
       )}
     </Box>

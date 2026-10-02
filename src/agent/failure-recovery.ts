@@ -4,6 +4,8 @@ import {ticketBranch} from '../types.js';
 import {runHarness} from '../harness/process.js';
 import {captureContext, git} from '../review/context.js';
 import {redact} from '../harness/redact.js';
+import {taskKey} from '../lifecycle/state.js';
+import {prepareBranch,commitSourceChanges} from '../lifecycle/commit.js';
 
 export async function recoverFailedTicket(options: {
 	ticket: Ticket; config: IterisConfig; cwd: string; state: TicketState; plan: string; signal: AbortSignal;
@@ -12,6 +14,7 @@ export async function recoverFailedTicket(options: {
 	const {ticket, config, cwd, state, plan, signal, onLogLine} = options;
 	if (signal.aborted || !state.failureReason) return false;
 	const branch = ticketBranch(ticket);
+	try{prepareBranch(cwd,branch,config.baseBranch);}catch{return false;}
 	let before = '';
 	try {before = git(cwd, ['rev-parse', 'HEAD']).trim();} catch { /* An initial implementation may not have made a commit. */ }
 	const prompt = `ITERIS_FAILURE_RECOVER
@@ -25,12 +28,13 @@ Plan:
 ${plan}
 Failure status: ${state.status}
 Failure reason: ${state.failureReason}
-Saved log: ${path.join(cwd, '.iteris', 'runs', ticket.custom ? `custom-${ticket.custom.identity}` : `${ticket.number}-${ticket.slug}`, 'log.txt')}
-If the ticket branch does not exist yet, create it from the configured base. Commit any source changes and leave the working tree clean. If the existing committed implementation is already complete, verify it and continue without an empty commit. If the issue cannot be repaired locally, explain why and stop. Print exactly <task>done</task> on its own line only after the branch is ready for independent review.`;
-	const result = await runHarness({config, phase: 'repair', prompt: redact(prompt), cwd, timeoutMs: config.timeout * 1000, signal,
+Saved log: ${path.join(cwd, '.iteris', 'tasks', taskKey(ticket,config), 'artifacts', 'log.txt')}
+The host prepared this branch and will commit your source changes. If the existing committed implementation is already complete, verify it and continue without an empty commit. If the issue cannot be repaired locally, explain why and stop. Print exactly <task>done</task> on its own line only after the source changes are ready for independent review.`;
+	const result = await runHarness({config, phase: 'repair', prompt: redact(prompt), cwd, timeoutMs: Math.max(1,Math.min(config.timeout*1000,(config._deadline??Date.now()+config.timeout*1000)-Date.now()-config.timeout*1000*config.recovery.finalVerificationReserve)), signal,
 		onLine: line => onLogLine(`[self-heal] ${line}`)});
 	if (!result.success || !result.done) return false;
 	try {
+		commitSourceChanges(cwd,branch,`Recover ${ticket.title}`);
 		const context = captureContext(ticket, config, cwd, plan);
 		// A failed review already assessed this HEAD; retry only when the agent changed it.
 		return state.status === 'blocked' || state.status === 'incomplete' || state.failureReason.startsWith('Code review')

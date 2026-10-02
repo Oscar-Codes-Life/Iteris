@@ -26,7 +26,12 @@ import {TrelloSetup} from './trello/ui/TrelloSetup.js';
 import type {IterisConfig, Provider, Ticket, TicketStatus} from './types.js';
 import {App} from './ui/App.js';
 import {ProviderPicker} from './ui/ProviderPicker.js';
-import {TicketPicker} from './ui/TicketPicker.js';
+import {TicketPicker,ticketIdentity} from './ui/TicketPicker.js';
+import {lifecycleCommand} from './lifecycle/cli.js';
+import {sourceAdapter} from './lifecycle/adapters.js';
+import {unfinishedTickets} from './lifecycle/worker.js';
+import {listRuns,taskKey} from './lifecycle/state.js';
+import {migrateLegacyRuns} from './lifecycle/migration.js';
 
 async function printBranding() {
 	const dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -88,10 +93,10 @@ function showListPicker(lists: TrelloList[]): Promise<TrelloList> {
 	});
 }
 
-function showTicketPicker(tickets: Ticket[], previousStatuses: Map<number, TicketStatus>): Promise<Ticket[]> {
+function showTicketPicker(tickets: Ticket[], previousStatuses: Map<number, TicketStatus>,sourceStatuses:Map<string,TicketStatus>): Promise<Ticket[]> {
 	return new Promise(resolve => {
 		const {unmount} = render(
-			<TicketPicker tickets={tickets} previousStatuses={previousStatuses} onSelect={(selected) => {
+			<TicketPicker tickets={tickets} previousStatuses={previousStatuses} sourceStatuses={sourceStatuses} onSelect={(selected) => {
 				unmount();
 				resolve(selected);
 			}} />,
@@ -119,14 +124,20 @@ function waitForTrelloCredentials(): Promise<void> {
 }
 
 async function main() {
-	const [command, argument, ...extra] = process.argv.slice(2);
+	const once=process.argv.includes('--once');
+	const args=process.argv.slice(2).filter(arg=>arg!=='--once');
+	const [command, argument, ...extra] = args;
 	if (command === '--help' || command === '-h') {
-		console.log('iteris [setup | refresh | review [standard|deep|audit] | harness [claude|codex] | model [id] | effort [level]]');
+		console.log('iteris [--once] [setup | refresh | resume | status [task-key] | doctor | evidence <task-key> <receipt.json> | cancel <task-key> | review [standard|deep|audit] | harness [claude|codex] | model [id] | effort [level]]');
 		return;
 	}
+	let config = await loadConfig();
+	await migrateLegacyRuns(process.cwd(),config);
+	if(once)config.continuation.watch=false;
+	if(command && await lifecycleCommand(command,[...args.slice(1),...(once?['--once']:[])],config,process.cwd()))return;
+	if(!command && (await unfinishedTickets(process.cwd(),config)).length){await lifecycleCommand('resume',once?['--once']:[],config,process.cwd());return;}
 	if (extra.length || ((command === 'setup' || command === 'refresh') && argument) || (command && !['setup', 'refresh', 'review', 'harness', 'model', 'effort'].includes(command))) throw new Error('Unknown command. Run iteris --help.');
 	await printBranding();
-	let config = await loadConfig();
 	if (command && command !== 'setup' && command !== 'refresh' && command !== 'review') {
 		config = await configure(command, argument);
 		console.log(`Saved: ${selectionLabel(config)}`);
@@ -155,6 +166,7 @@ async function main() {
 }
 
 async function fetchTicketsForProvider(config: IterisConfig, refresh = false): Promise<Ticket[]> {
+	if(config.provider==='command')return sourceAdapter(config,process.cwd()).fetch();
 	if (config.provider === 'custom') {
 		const imported = await loadCustomTasks(config, process.cwd(), {
 			refresh, onProgress: message => console.log(message),
@@ -230,6 +242,8 @@ async function fetchTrelloFlow(config: IterisConfig): Promise<Ticket[]> {
 }
 
 async function run(config: IterisConfig, refresh = false) {
+	const unfinished=refresh ? [] : await unfinishedTickets(process.cwd(),config);
+	if(unfinished.length){await lifecycleCommand('resume',config.continuation.watch?[]:['--once'],config,process.cwd());return;}
 	const pending = refresh ? undefined : await loadPendingQueue(process.cwd(), config);
 	if (pending?.length) {
 		console.log(`Resuming ${pending.length} ticket${pending.length === 1 ? '' : 's'} from the interrupted queue.`);
@@ -251,7 +265,9 @@ async function run(config: IterisConfig, refresh = false) {
 	}
 
 	const previousStatuses = config.provider === 'custom' ? await customStatuses(process.cwd(), tickets) : await getTicketStatuses(process.cwd());
-	const selected = await showTicketPicker(tickets, previousStatuses);
+	const sourceStatuses=new Map<string,TicketStatus>();
+	for(const run of await listRuns(process.cwd(),config.repo)){const ticket=tickets.find(ticket=>taskKey(ticket,config)===run.key);if(ticket)sourceStatuses.set(ticketIdentity(ticket),run.state==='complete'?'done':run.state==='waiting'?'waiting':run.state==='cancelled'?'cancelled':'incomplete');}
+	const selected = await showTicketPicker(tickets, previousStatuses,sourceStatuses);
 
 	if (selected.length === 0) {
 		console.log('No tickets selected. Nothing to do.');

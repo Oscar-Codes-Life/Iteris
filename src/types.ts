@@ -1,8 +1,10 @@
 import {createHash} from 'node:crypto';
 
-export type TicketStatus = 'pending' | 'planning' | 'summarizing' | 'running' | 'reviewing' | 'recovering' | 'creating-pr' | 'done' | 'stale' | 'failed' | 'blocked' | 'incomplete';
+export type TicketStatus = 'pending' | 'planning' | 'summarizing' | 'running' | 'reviewing' | 'recovering' | 'creating-pr' | 'done' | 'stale' | 'failed' | 'blocked' | 'incomplete' | 'waiting' | 'cancelled';
 
 export type Ticket = {
+	branch?: string;
+	source?: {provider: Provider; namespace: string; id: string; issueId?: string; projectItemId?: string; repository?:string};
 	custom?: {identifier?: string; identity: string; fingerprint: string; taskFile: string; changed?: boolean; branch?: string};
 	number: number;
 	title: string;
@@ -17,6 +19,8 @@ export type HarnessSettings = {model?: string; effort?: string; flags: string[]}
 export type ExecutionSelection = {harness: Harness; model?: string; effort?: string};
 
 export type TicketState = {
+	runKey?: string;
+	remaining?: string[];
 	selection?: ExecutionSelection;
 	ticket: Ticket;
 	status: TicketStatus;
@@ -31,13 +35,25 @@ export type TicketState = {
 	elapsedMs: number;
 };
 
-export type Provider = 'github' | 'trello' | 'custom';
+export type Provider = 'github' | 'trello' | 'custom' | 'command';
 
 export type {TrelloConfig} from './trello/types.js';
 import type {TrelloConfig} from './trello/types.js';
 
 export type IterisConfig = {
-	version: 2;
+	version: 3;
+	workflow: import('./lifecycle/config.js').LifecycleConfig['workflow'];
+	verification: import('./lifecycle/config.js').LifecycleConfig['verification'];
+	environment: import('./lifecycle/config.js').LifecycleConfig['environment'];
+	recovery: import('./lifecycle/config.js').LifecycleConfig['recovery'];
+	continuation: import('./lifecycle/config.js').LifecycleConfig['continuation'];
+	integrations: import('./lifecycle/config.js').LifecycleConfig['integrations'];
+	profiles: import('./lifecycle/config.js').LifecycleConfig['profiles'];
+	/** Resolved by the host, never loaded from task text or serialized. */
+	_execution?: import('./lifecycle/environment.js').ExecutionManifest;
+	_deadline?: number;
+	_plannedChecks?: string[];
+	_requirements?: import('./lifecycle/state.js').Requirement[];
 	harness: Harness;
 	harnesses: Record<Harness, HarnessSettings>;
 	setupComplete: boolean;
@@ -60,6 +76,10 @@ export type IterisConfig = {
 };
 
 export function ticketBranch(ticket: Ticket): string {
+	if (ticket.branch) return ticket.branch;
+	if (ticket.custom?.branch) return ticket.custom.branch;
+	if(ticket.source?.provider==='github' && (ticket.source.projectItemId || ticket.source.namespace.includes('/project/')))return customBranch(undefined,ticket.title,JSON.stringify([ticket.source.provider,ticket.source.namespace,ticket.source.id]));
+	if (ticket.source && ticket.source.provider !== 'github') return customBranch(ticket.custom?.identifier, ticket.title, JSON.stringify([ticket.source.provider,ticket.source.namespace,ticket.source.id]));
 	if (!ticket.custom) return `iteris/${ticket.number}-${ticket.slug}`;
 	if (ticket.custom.branch) return ticket.custom.branch;
 	return customBranch(ticket.custom.identifier, ticket.title, ticket.custom.identity);
@@ -68,9 +88,7 @@ export function ticketBranch(ticket: Ticket): string {
 export function customBranch(identifier: string | undefined, title: string, identity: string): string {
 	const readable = (identifier || title).normalize('NFKD').toLowerCase()
 		.replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48).replace(/-+$/g, '') || 'task';
-	const hash = createHash('sha256').update(identity).digest();
-	const code = hash.readUInt32BE(0) % 17_576;
-	const suffix = [676, 26, 1].map(divisor => String.fromCharCode(97 + Math.floor(code / divisor) % 26)).join('');
+	const suffix = createHash('sha256').update(identity).digest('hex').slice(0,16);
 	return `iteris/${readable}-${suffix}`;
 }
 

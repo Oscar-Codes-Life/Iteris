@@ -2,7 +2,6 @@ import {spawn} from 'node:child_process';
 import {access, realpath} from 'node:fs/promises';
 import {constants} from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import type {Harness} from '../types.js';
 
 export type CommandResult = {code: number; output: string};
@@ -34,41 +33,16 @@ export class ReadinessError extends Error {
 export async function codexCapabilities(): Promise<boolean> {
 	const exec = await command('codex', ['exec', '--help']);
 	const server = await command('codex', ['app-server', '--help']);
-	return exec.code === 0 && server.code === 0 && ['--json', '--model', '--sandbox', '--dangerously-bypass-approvals-and-sandbox'].every(flag => exec.output.includes(flag));
+	return exec.code === 0 && server.code === 0 && ['--json', '--model', '--sandbox'].every(flag => exec.output.includes(flag));
 }
 let lastChecked: Harness | undefined;
 export function resetReadiness(): void {lastChecked = undefined;}
 export async function ensureHarness(harness: Harness, options: {skipUpdate?: boolean; onStatus?: (message: string) => void} = {}): Promise<void> {
 	if (lastChecked === harness) return;
 	const status = options.onStatus ?? console.log;
-	let executable = await findExecutable(harness);
+	const executable = await findExecutable(harness);
 	if (!executable && harness === 'claude') throw new ReadinessError('Claude Code is missing. Install it and authenticate with claude auth login, then retry.');
-	if (!executable) {
-		if (!['darwin', 'linux'].includes(process.platform)) throw new ReadinessError('Automatic Codex installation supports macOS and Linux only.');
-		status('Installing Codex. Waiting for the installer…');
-		// Fixed official URL; no user input is interpolated into shell code.
-		const install = await command('sh', ['-c', 'set -e; installer=$(mktemp); trap \'rm -f "$installer"\' EXIT; curl -fsSL https://chatgpt.com/codex/install.sh -o "$installer"; sh "$installer"'], true);
-		if (install.code !== 0) throw new ReadinessError('Codex installation failed. Retry after checking network and filesystem permissions.');
-		process.env['PATH'] = `${process.env['PATH'] ?? ''}${path.delimiter}${path.join(os.homedir(), '.local', 'bin')}`;
-		executable = await findExecutable('codex');
-		if (!executable) throw new ReadinessError('Installer completed but Codex was not found on PATH.');
-	}
-	if (harness === 'codex' && !options.skipUpdate) {
-		const before = await command('codex', ['--version']);
-		if (before.code !== 0) throw new ReadinessError('Cannot read the installed Codex version.');
-		status(`${before.output.trim()} — checking for updates; waiting until complete…`);
-		const supportsUpdate = await command('codex', ['update', '--help']);
-		let update: CommandResult;
-		if (supportsUpdate.code === 0) update = await command('codex', ['update'], true);
-		else if (executable!.includes('/Cellar/') || executable!.includes('/Caskroom/')) update = await command('brew', ['upgrade', 'codex'], true);
-		else if (executable!.includes('/node_modules/')) update = await command('npm', ['install', '-g', '@openai/codex@latest'], true);
-		else if (executable!.startsWith(path.join(os.homedir(), '.local') + path.sep)) update = await command('sh', ['-c', 'set -e; installer=$(mktemp); trap \'rm -f "$installer"\' EXIT; curl -fsSL https://chatgpt.com/codex/install.sh -o "$installer"; sh "$installer"'], true);
-		else throw new ReadinessError('Cannot identify this older Codex installation manager. Update Codex manually, then retry.', await codexCapabilities());
-		if (update.code !== 0) throw new ReadinessError('Codex update failed. Retry or explicitly continue with the installed version.', await codexCapabilities());
-		const after = await command('codex', ['--version']);
-		if (after.code !== 0) throw new ReadinessError('Codex update finished but version verification failed.');
-		status(`Ready: ${after.output.trim()}`);
-	}
+	if (!executable) throw new ReadinessError('Codex is missing. Configure a project-local installer or install and authenticate it manually.');
 	if (harness === 'codex' && !await codexCapabilities()) throw new ReadinessError('Installed Codex lacks required exec/app-server capabilities. Update it before continuing.');
 	const authArgs = harness === 'codex' ? ['login', 'status'] : ['auth', 'status'];
 	if ((await command(harness, authArgs)).code !== 0) {

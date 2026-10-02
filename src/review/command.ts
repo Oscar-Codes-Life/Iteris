@@ -3,29 +3,32 @@ import {redact} from '../harness/redact.js';
 
 /** Host-owned commands only. Model output is never executed by this helper. */
 export async function runCommand(command: string, args: string[], options: {
-	cwd: string; deadline: number; signal?: AbortSignal; shell?: boolean;
-}): Promise<{exitCode: number | null; output: string; durationMs: number; error?: string; truncated: boolean}> {
+	cwd: string; deadline: number; signal?: AbortSignal; shell?: boolean | string; env?: NodeJS.ProcessEnv; input?: string;
+}): Promise<{exitCode: number | null; output: string; stdout?: string; stderr?: string; durationMs: number; error?: string; truncated: boolean}> {
 	const started = Date.now();
 	if (options.signal?.aborted || started >= options.deadline) return {exitCode: null, output: '', durationMs: 0, error: options.signal?.aborted ? 'Cancelled' : 'Review deadline exceeded', truncated: false};
 	return new Promise(resolve => {
-		const proc = spawn(command, args, {cwd: options.cwd, shell: options.shell, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe']});
-		let output = ''; let error: string | undefined; let truncated = false; let escalation: NodeJS.Timeout | undefined;
+		const proc = spawn(command, args, {cwd: options.cwd, shell: options.shell, env: options.env, detached: process.platform !== 'win32', stdio: [options.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe']});
+		if (options.input !== undefined) {proc.stdin?.on('error', () => {}); proc.stdin?.end(options.input);}
+		let output = '', stdout = '', stderr = ''; let error: string | undefined; let truncated = false; let escalation: NodeJS.Timeout | undefined;
 		const kill = (signal: NodeJS.Signals) => {try {if (proc.pid && process.platform !== 'win32') process.kill(-proc.pid, signal); else proc.kill(signal);} catch { /* already exited */ }};
 		const stop = (reason: string) => {error = reason; kill('SIGTERM'); escalation ??= setTimeout(() => kill('SIGKILL'), 2000);};
 		const abort = () => stop('Cancelled');
 		options.signal?.addEventListener('abort', abort, {once: true});
 		if (options.signal?.aborted) abort();
 		const timer = setTimeout(() => stop('Review deadline exceeded'), Math.max(1, options.deadline - Date.now()));
-		const capture = (chunk: Buffer) => {
+		const capture = (chunk: Buffer, stream: 'stdout' | 'stderr') => {
 			const remaining = 1_000_000 - output.length;
-			output += chunk.toString().slice(0, Math.max(0, remaining));
+			const value = chunk.toString().slice(0, Math.max(0, remaining));
+			output += value;
+			if (stream === 'stdout') stdout += value; else stderr += value;
 			if (chunk.length > remaining) truncated = true;
 		};
-		proc.stdout.on('data', capture); proc.stderr.on('data', capture);
+		proc.stdout!.on('data', chunk => capture(chunk, 'stdout')); proc.stderr!.on('data', chunk => capture(chunk, 'stderr'));
 		proc.on('error', failure => {error = failure.message;});
 		proc.on('close', (code, signal) => {
 			clearTimeout(timer); clearTimeout(escalation); options.signal?.removeEventListener('abort', abort);
-			resolve({exitCode: code, output: redact(output), durationMs: Date.now() - started, truncated, error: error ?? (signal ? `Terminated by ${signal}` : undefined)});
+			resolve({exitCode: code, output: redact(output), stdout: redact(stdout), stderr: redact(stderr), durationMs: Date.now() - started, truncated, error: error ?? (signal ? `Terminated by ${signal}` : undefined)});
 		});
 	});
 }

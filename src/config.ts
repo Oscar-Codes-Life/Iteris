@@ -6,6 +6,7 @@ import {reviewConfigSchema} from './review/schema.js';
 import {customConfigSchema} from './custom/schema.js';
 import {detectRepoFromRemote, detectDefaultBranch} from './github/repo.js';
 import type {IterisConfig} from './types.js';
+import {lifecycleShape, validateDefinitions} from './lifecycle/config.js';
 
 const settings = z.object({
 	model: z.string().min(1).optional(),
@@ -13,7 +14,8 @@ const settings = z.object({
 	flags: z.array(z.string()).default([]),
 }).passthrough();
 export const configSchema = z.object({
-	version: z.literal(2),
+	...lifecycleShape,
+	version: z.union([z.literal(2), z.literal(3)]).transform(() => 3 as const),
 	harness: z.enum(['claude', 'codex']).default('claude'),
 	harnesses: z.object({
 		claude: settings.default({flags: ['--dangerously-skip-permissions']}),
@@ -21,7 +23,7 @@ export const configSchema = z.object({
 	}).passthrough().default({}),
 	setupComplete: z.boolean().default(false),
 	repo: z.string().regex(/^[^/]+\/[^/]+$/, 'Must be in "owner/repo" format'),
-	provider: z.enum(['github', 'trello', 'custom']).optional(),
+	provider: z.enum(['github', 'trello', 'custom', 'command']).optional(),
 	githubSource: z.enum(['auto', 'issues', 'projects']).default('auto'),
 	todoStatus: z.string().default('Todo'),
 	projectNumber: z.number().int().positive().optional(),
@@ -34,11 +36,12 @@ export const configSchema = z.object({
 	custom: customConfigSchema.optional(),
 	trello: z.object({boardId: z.string().optional(), listId: z.string().optional(), moveOnComplete: z.string().optional()}).passthrough().optional(),
 }).passthrough().superRefine((config, context) => {
+	try {validateDefinitions(config);} catch (error) {context.addIssue({code: 'custom', message: String(error)});}
 	for (const harness of ['claude', 'codex'] as const) {
 		for (const flag of config.harnesses[harness].flags) {
 			// Iteris owns transport, selection and phase permissions. Do not allow
 			// opaque config overrides to undo read-only planning or stream parsing.
-			if (/^(--(model|effort|config|profile|output-format|input-format|permission-mode|tools|allowedTools|allowed-tools|disallowedTools|disallowed-tools|settings|json|sandbox|ask-for-approval|output-last-message|output-schema|print|resume|fork-session|session-id|system-prompt|append-system-prompt|dangerously-bypass-approvals-and-sandbox|full-auto|approve-for-me|ignore-rules|ignore-user-config|restricted)|-[mcpsao])(?:=|$)/.test(flag) || /^-[mcpsao].+/.test(flag)) {
+			if (/^(--(model|effort|config|profile|output-format|input-format|permission-mode|permission-prompt-tool|tools|allowedTools|allowed-tools|disallowedTools|disallowed-tools|settings|setting-sources|mcp-config|strict-mcp-config|add-dir|add-directory|json|sandbox|ask-for-approval|output-last-message|output-schema|print|resume|fork-session|session-id|system-prompt|append-system-prompt|dangerously-bypass-approvals-and-sandbox|allow-dangerously-skip-permissions|yolo|full-auto|approve-for-me|ignore-rules|ignore-user-config|restricted)|-[mcpsao])(?:=|$)/.test(flag) || /^-[mcpsao].+/.test(flag) || flag.startsWith('--dangerously-skip-permissions=')) {
 				context.addIssue({code: 'custom', path: ['harnesses', harness, 'flags'], message: `${flag} is managed by Iteris. Use model/effort settings or remove the conflicting flag.`});
 			}
 		}
@@ -48,14 +51,17 @@ export const configSchema = z.object({
 function validate(data: unknown): IterisConfig {
 	const result = configSchema.safeParse(data);
 	if (!result.success) throw new Error(`.iteris.json validation failed:\n${result.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('\n')}`);
-	return result.data as IterisConfig;
+	const validated=result.data as IterisConfig;
+	delete validated._execution;delete validated._deadline;delete validated._plannedChecks;delete validated._requirements;
+	return validated;
 }
 
 export function migrateConfig(data: Record<string, unknown>): Record<string, unknown> {
-	if (data['version'] === 2) return data;
+	if (data['version'] === 3) return data;
+	if (data['version'] === 2) return {...data, version: 3};
 	if (data['version'] !== undefined && data['version'] !== 1) throw new Error(`Unsupported .iteris.json version: ${String(data['version'])}`);
 	const {claudeFlags, ...rest} = data;
-	return {...rest, version: 2, harness: 'claude', setupComplete: false,
+	return {...rest, version: 3, harness: 'claude', setupComplete: false,
 		harnesses: {claude: {flags: claudeFlags ?? ['--dangerously-skip-permissions']}, codex: {flags: []}}};
 }
 
@@ -86,7 +92,8 @@ export async function loadConfig(cwd = process.cwd()): Promise<IterisConfig> {
 		if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
 		existed = false;
 	}
-	const needsMigration = data['version'] !== 2;
+	const previousVersion = data['version'] ?? 1;
+	const needsMigration = previousVersion !== 3;
 	data = migrateConfig(data);
 	if (!data['repo']) {
 		const detected = detectRepoFromRemote(cwd);
@@ -96,7 +103,7 @@ export async function loadConfig(cwd = process.cwd()): Promise<IterisConfig> {
 	if (!data['baseBranch']) data['baseBranch'] = detectDefaultBranch(cwd) ?? 'main';
 	const config = validate(data);
 	if (existed && needsMigration) {
-		await copyFile(configPath, `${configPath}.v1.bak`, constants.COPYFILE_EXCL).catch(error => {
+		await copyFile(configPath, `${configPath}.v${previousVersion}.bak`, constants.COPYFILE_EXCL).catch(error => {
 			if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
 		});
 	}

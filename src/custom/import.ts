@@ -25,8 +25,11 @@ async function readRegistry(cwd: string) {
 }
 export async function customStatuses(cwd: string, tickets: Ticket[]): Promise<Map<number, TicketStatus>> {
 	const statuses = new Map<number, TicketStatus>();
+	const runs=await import('../lifecycle/state.js').then(module=>module.listRuns(cwd));
 	for (const ticket of tickets) {
 		if (!ticket.custom) continue;
+		const run=runs.find(run=>run.source.provider==='custom' && run.source.id===ticket.custom!.identity);
+		if(run){statuses.set(ticket.number,run.state==='complete'?'done':run.state==='waiting'?'waiting':'incomplete');ticket.custom.changed=run.ticket.custom?.fingerprint!==ticket.custom.fingerprint;continue;}
 		try {
 			const state = z.object({identity: z.string(), fingerprint: z.string(), status: z.enum(['pending', 'planning', 'summarizing', 'running', 'reviewing', 'creating-pr', 'done', 'stale', 'failed', 'blocked', 'incomplete'])}).parse(JSON.parse(await readFile(path.join(cwd, '.iteris/runs', `custom-${ticket.custom.identity}`, 'custom.json'), 'utf8')));
 			if (state.identity !== ticket.custom.identity) throw new Error('Identity mismatch');

@@ -14,6 +14,11 @@ export function environment(t, values) {
  t.after(() => {for (const key of Object.keys(process.env)) if (!(key in original)) delete process.env[key]; Object.assign(process.env, original);});
 }
 export async function executable(folder, name, script) {await writeFile(path.join(folder,name), `#!${process.execPath}\n${script}`, {mode:0o755});}
+// Scripted isolation capability: verifies dispatch without installing real tools.
+export async function setupIsolationFixture(folder) {
+ const name=process.platform==='darwin'?'sandbox-exec':'bwrap';
+ await executable(folder,name,`const args=process.argv.slice(2);const start=args[0]==='-p'?2:args.indexOf('--chdir')+2;const result=require('node:child_process').spawnSync(args[start],args.slice(start+1),{stdio:'inherit'});process.exit(result.status??1);`);
+}
 export const fakeAgent = `
 const fs = require('node:fs');
 const path = require('node:path');
@@ -50,6 +55,7 @@ if (args[0] === 'app-server') {
    git('commit','--allow-empty','-qm','implement');
   }
   let text=prompt.startsWith('Inspect this task')?'Implementation plan':prompt.startsWith('Write a high-value pull request description')?'## Summary\\n- Adds useful behavior.\\n\\n## Changes\\n- Updates the implementation.':prompt.startsWith('You are summarizing')?'Session summary':'<task>done</task>';
+  if(prompt.startsWith('Inspect this task')) {const pack=JSON.parse(prompt.split('PLANNING_INPUT_JSON\\n')[1]);text=JSON.stringify({plan:'Implementation plan',requirements:pack.requirements.map(({id,text,stage,method})=>({id,text,stage,method})),invariants:[],reproductionStrategy:'Run the behavioral fixture',fixtures:[],capabilities:pack.capabilities,checks:[]});}
   if (prompt.startsWith('ITERIS_REVIEW')) {
    const input=JSON.parse(prompt.split('INPUT_JSON\\n')[1]);
    const context=input.context, scenario=process.env.REVIEW_SCENARIO;
@@ -64,12 +70,12 @@ if (args[0] === 'app-server') {
    const duplicateFinding={...finding,title:'Same broken behavior',trigger:'Call feature through wrapper'};
    if (scenario==='invalid-location') finding.line = 99999;
    if (prompt.startsWith('ITERIS_REVIEW verify')) {
-    const reply={head:context.stamp.head,complete:!(scenario==='recover-verifier' && needsEvidence),gaps:scenario==='recover-verifier' && needsEvidence?['Recovery tests were not run']:[],requirements:[requirement],decisions:scenario==='omit-decision'?[]:input.candidates.map((f,index)=>['duplicate-status','duplicate-status-ambiguous'].includes(scenario)&&index===1?{id:f.id,status:'duplicate',evidence:scenario==='duplicate-status'?'Same causal defect as candidate '+input.candidates[0].id:'Same causal defect as another candidate'}:{id:f.id,status:scenario==='false-positive'?'rejected':'confirmed',evidence:'Independent causal trace'}),resolved:scenario==='missing-resolution'?[]:input.previousBlockers.filter(f=>!input.candidates.some(c=>c.id===f.id)).map(f=>({id:f.id,evidence:'feature.txt now returns fixed'}))};
+    const reply={head:context.stamp.head,complete:!(scenario==='recover-verifier' && needsEvidence),gaps:scenario==='recover-verifier' && needsEvidence?['Recovery tests were not run']:[],requirements:[requirement,...(input.requiredRequirements||[]).filter(text=>text!==requirement.requirement).map(text=>({...requirement,requirement:text}))],decisions:scenario==='omit-decision'?[]:input.candidates.map((f,index)=>['duplicate-status','duplicate-status-ambiguous'].includes(scenario)&&index===1?{id:f.id,status:'duplicate',evidence:scenario==='duplicate-status'?'Same causal defect as candidate '+input.candidates[0].id:'Same causal defect as another candidate'}:{id:f.id,status:scenario==='false-positive'?'rejected':'confirmed',evidence:'Independent causal trace'}),resolved:scenario==='missing-resolution'?[]:input.previousBlockers.filter(f=>!input.candidates.some(c=>c.id===f.id)).map(f=>({id:f.id,evidence:'feature.txt now returns fixed'}))};
     if (scenario==='verifier-extra-findings' && (fs.readFileSync(process.env.CAPTURE,'utf8').match(/ITERIS_REVIEW verify/g)||[]).length===1) reply.findings=[];
     if (scenario==='verifier-persistent-extra-findings') reply.findings=[];
     text=JSON.stringify(reply);
    } else {
-    text=JSON.stringify({head:scenario==='wrong-head'?'wrong':context.stamp.head,complete:scenario!=='incomplete' && !(needsEvidence && !['recover-verifier','recover-unverified','recover-with-blocker'].includes(scenario)),inspectedFiles:scenario==='omit-file'?[]:context.changedFiles,gaps:needsEvidence && !['recover-verifier','recover-unverified','recover-with-blocker'].includes(scenario)?[scenario==='progressive-evidence'?'Required test '+evidenceCommands[evidenceStage]+' was not run':scenario==='external-gap-direct'?'CI schema-contract gate requires SUPABASE_ACCESS_TOKEN':'Recovery tests were not run']:[],requirements:prompt.startsWith('ITERIS_REVIEW correctness')?[requirement]:[],findings:['duplicate-status','duplicate-status-ambiguous'].includes(scenario)?[finding,duplicateFinding]:['blocker','moving-blocker','false-positive','advisory','omit-decision','external-gap-with-candidate'].includes(scenario)||broken||(scenario==='progressive-blocker'&&progressiveStage<3)?[finding]:[]});
+    text=JSON.stringify({head:scenario==='wrong-head'?'wrong':context.stamp.head,complete:scenario!=='incomplete' && !(needsEvidence && !['recover-verifier','recover-unverified','recover-with-blocker'].includes(scenario)),inspectedFiles:scenario==='omit-file'?[]:context.changedFiles,gaps:needsEvidence && !['recover-verifier','recover-unverified','recover-with-blocker'].includes(scenario)?[scenario==='progressive-evidence'?'Required test '+evidenceCommands[evidenceStage]+' was not run':scenario==='external-gap-direct'?'CI schema-contract gate requires SUPABASE_ACCESS_TOKEN':'Recovery tests were not run']:[],requirements:prompt.startsWith('ITERIS_REVIEW correctness')?[requirement,...(context.requirements||[]).filter(r=>r.stage==='local'&&r.id!=='local-checks'&&r.text!==requirement.requirement).map(r=>({...requirement,requirement:r.text}))]:[],findings:['duplicate-status','duplicate-status-ambiguous'].includes(scenario)?[finding,duplicateFinding]:['blocker','moving-blocker','false-positive','advisory','omit-decision','external-gap-with-candidate'].includes(scenario)||broken||(scenario==='progressive-blocker'&&progressiveStage<3)?[finding]:[]});
    }
    if (scenario==='malformed') text='<task>done</task>';
   }
@@ -90,7 +96,7 @@ if (args[0] === 'app-server') {
   if (prompt.startsWith('ITERIS_SCHEMA_RECOVER')) {
    const input=JSON.parse(prompt.split('INPUT_JSON\\n')[1]);
    const original=JSON.parse(input.originalPrompt.split('INPUT_JSON\\n')[1]);
-   if (input.reportType==='verification') text=JSON.stringify({head:original.context.stamp.head,complete:true,gaps:[],requirements:[{requirement:'Implement feature',status:'covered',evidence:'feature.txt implements the requested behavior'}],decisions:original.candidates.map(f=>({id:f.id,status:'confirmed',evidence:'Independent causal trace'})),resolved:[]});
+   if (input.reportType==='verification') text=JSON.stringify({head:original.context.stamp.head,complete:true,gaps:[],requirements:[{requirement:'Implement feature',status:'covered',evidence:'feature.txt implements the requested behavior'},...(original.requiredRequirements||[]).filter(text=>text!=='Implement feature').map(text=>({requirement:text,status:'covered',evidence:'verified local fixture'}))],decisions:original.candidates.map(f=>({id:f.id,status:'confirmed',evidence:'Independent causal trace'})),resolved:[]});
    if (input.reportType==='recovery') text=JSON.stringify({checks:['printf recovery-evidence'],blockedReason:''});
   }
   if (prompt.startsWith('ITERIS_REPAIR') && process.env.REVIEW_SCENARIO!=='no-repair') {
@@ -123,3 +129,5 @@ export async function reviewRepository(t, existing) {
  execFileSync('git',['init','--bare','-q',remote]); git('remote','add','origin',remote); git('push','-q','origin','main');
  return {cwd, remote, git};
 }
+
+export const completionServices={ci:async(_cfg,run)=>({state:'passed',details:'fixture CI passed',head:run.publication.head,base:run.publication.base}),draft:async()=>{}};

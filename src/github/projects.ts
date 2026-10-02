@@ -20,9 +20,11 @@ type ProjectItemsQueryResult = {
 		items: {
 			pageInfo: {hasNextPage: boolean; endCursor: string | null};
 			nodes: Array<{
+				id: string;
 				fieldValueByName: {name: string} | null;
 				content: {
 					__typename: string;
+					id: string;
 					number: number;
 					title: string;
 					body: string;
@@ -102,6 +104,7 @@ export async function fetchProjectItems(
 								endCursor
 							}
 							nodes {
+								id
 								fieldValueByName(name: "Status") {
 									... on ProjectV2ItemFieldSingleSelectValue {
 										name
@@ -110,6 +113,7 @@ export async function fetchProjectItems(
 								content {
 									__typename
 									... on Issue {
+										id
 										number
 										title
 										body
@@ -152,6 +156,7 @@ export async function fetchProjectItems(
 			if (statusName !== todoStatus) continue;
 
 			tickets.push({
+				source: {provider:'github',namespace:`${owner}/project/${projectNumber}`,id:node.id,projectItemId:node.id,issueId:content.id},
 				number: content.number,
 				title: content.title,
 				body: content.body ?? '',

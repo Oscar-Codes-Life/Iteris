@@ -37,6 +37,8 @@ export type TrelloBoard = {id: string; name: string; url: string};
 export type TrelloList = {id: string; name: string};
 export type TrelloLabel = {id: string; name: string; color: string};
 export type TrelloCard = {
+	idBoard: string;
+	idList: string;
 	id: string;
 	idShort: number;
 	name: string;
@@ -51,6 +53,9 @@ export async function listBoards(): Promise<TrelloBoard[]> {
 		fields: 'id,name,url',
 	});
 }
+
+export async function getCard(id: string): Promise<TrelloCard> {return trelloFetch(`/cards/${encodeURIComponent(id)}`, {fields:'id,idShort,idBoard,idList,name,desc,shortUrl,labels'});}
+export async function listBoardCards(id: string): Promise<TrelloCard[]> {return trelloFetch(`/boards/${encodeURIComponent(id)}/cards`, {fields:'id,idShort,idBoard,idList,name,desc,shortUrl,labels'});}
 
 export async function listBoardLists(boardId: string): Promise<TrelloList[]> {
 	return trelloFetch<TrelloList[]>(`/boards/${boardId}/lists`, {

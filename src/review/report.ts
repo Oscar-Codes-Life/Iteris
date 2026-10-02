@@ -57,7 +57,8 @@ export async function loadPassedReview(directory: string, context: ReviewContext
 		if (report.version !== 1 || report.outcome !== 'passed' || report.stamp?.key !== context.stamp.key || report.stamp.head !== context.stamp.head) return;
 		// Recovery may append checks; configured checks must still be present in order.
 		if (report.checks.length < context.checks.length || context.checks.some((command, index) => report.checks[index]?.command !== command)) return;
-		if (report.gaps.length || report.findings.some(blocks) || !report.requirements.length || report.requirements.some(r => r.status !== 'covered') || report.checks.some(c => c.head !== context.stamp.head || c.exitCode !== 0 || c.error)) return;
+		if(context.checkIds.some(id=>!report.checks.some(check=>check.command===`check:${id}`)))return;
+		if (report.dependencies?.length || report.gaps.length || report.findings.some(blocks) || !report.requirements.length || report.requirements.some(r => r.status !== 'covered') || report.checks.some(c => c.head !== context.stamp.head || c.exitCode !== 0 || c.error)) return;
 		return {report, text: renderReport(report), success: true, done: true, timedOut: false};
 	} catch {return;}
 }
@@ -92,6 +93,7 @@ export async function previousEvidence(directory: string, context: ReviewContext
 const storedReportSchema = z.object({
 	version: z.literal(1), outcome: z.enum(['passed', 'blocked', 'incomplete']), reason: z.string(),
 	deferredToCI: z.boolean().optional(),
+	dependencies: z.array(z.object({id:z.string(),kind:z.enum(['capability','external']),description:z.string(),nextAction:z.string()})).optional(),
 	stamp: z.object({head: z.string(), base: z.string(), mergeBase: z.string(), branch: z.string(), scope: z.string(), key: z.string()}),
 	startedAt: z.string().datetime(), finishedAt: z.string().datetime(), rounds: z.number().int().positive(), repairs: z.number().int().nonnegative(),
 	findings: z.array(candidateSchema.extend({id: z.string(), head: z.string(), status: z.enum(['candidate', 'confirmed', 'rejected', 'fixed']), verification: z.string().optional(), fixedAt: z.string().optional(), duplicateOf: z.string().optional()})),

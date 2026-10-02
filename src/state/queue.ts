@@ -5,6 +5,8 @@ import {z} from 'zod';
 import {ticketBranch, type IterisConfig, type Ticket} from '../types.js';
 
 const ticketSchema = z.object({
+	branch:z.string().optional(),
+	source: z.object({provider:z.enum(['github','trello','custom','command']),namespace:z.string(),id:z.string(),issueId:z.string().optional(),projectItemId:z.string().optional(),repository:z.string().optional()}).optional(),
 	number: z.number().int(), title: z.string(), body: z.string(), slug: z.string(), labels: z.array(z.string()), htmlUrl: z.string(),
 	custom: z.object({identifier: z.string().optional(), identity: z.string(), fingerprint: z.string(), taskFile: z.string(), changed: z.boolean().optional(), branch: z.string().optional()}).optional(),
 });

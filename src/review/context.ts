@@ -6,6 +6,8 @@ import path from 'node:path';
 import {ticketBranch, type IterisConfig, type Ticket} from '../types.js';
 import {reviewSettings, type ReviewStamp, type Candidate} from './schema.js';
 import {runCommand} from './command.js';
+import {resolveTaskConfig} from '../lifecycle/config.js';
+import {extractRequirements,applicableChecks} from '../lifecycle/requirements.js';
 
 export const REVIEW_VERSION = 4;
 export const INLINE_DIFF_LIMIT = 240_000;
@@ -37,8 +39,8 @@ export function writerContext(context: ReviewContext): ReviewContext {
 	if (context.diff.length <= INLINE_DIFF_LIMIT) return context;
 	return {...context, diff: `Complete diff is available in this Git checkout. Run git diff --no-ext-diff --no-textconv --no-color --no-renames --unified=5 ${context.stamp.mergeBase} ${context.stamp.head} to inspect it; no content was omitted from the checkout.`};
 }
-export function git(cwd: string, args: string[]): string {
-	return execFileSync('git', ['-c', 'core.hooksPath=/dev/null', ...args], {cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 15_000, maxBuffer: 8 * 1024 * 1024});
+export function git(cwd: string, args: string[], input?: string): string {
+	return execFileSync('git', ['-c', 'core.hooksPath=/dev/null', ...args], {cwd, encoding: 'utf8', input, stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'], timeout: 15_000, maxBuffer: 8 * 1024 * 1024});
 }
 export function assertClean(cwd: string): void {
 	// Only untracked Iteris-owned state is exempt. Tracked modifications always invalidate review.
@@ -46,7 +48,7 @@ export function assertClean(cwd: string): void {
 	const unexpected = changes.filter(entry => !(entry.startsWith('?? ') && /^(\.iteris\/|\.tasks\/|\.iteris\.json(?:\.|$))/.test(entry.slice(3))));
 	if (unexpected.length) throw new Error('Working tree has uncommitted changes. Preserve and commit or resolve them before review.');
 }
-export type ReviewContext = {stamp: ReviewStamp; ticket: Ticket; plan: string; policy: string; checks: string[]; changedFiles: string[]; diff: string; risk: string[]};
+export type ReviewContext = {stamp: ReviewStamp; ticket: Ticket; plan: string; policy: string; checks: string[]; checkIds:string[]; changedFiles: string[]; diff: string; risk: string[]; requirements:ReturnType<typeof extractRequirements>};
 export function captureContext(ticket: Ticket, config: IterisConfig, cwd: string, plan = '', branch = ticketBranch(ticket)): ReviewContext {
 	assertClean(cwd);
 	const current = git(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD']).trim();
@@ -61,17 +63,21 @@ export function captureContext(ticket: Ticket, config: IterisConfig, cwd: string
 	const changedFiles = git(cwd, ['diff', '--name-only', '-z', '--no-renames', mergeBase, head]).split('\0').filter(Boolean);
 	if (!changedFiles.length) throw new Error('No committed changes to review against the configured base.');
 	const diff = git(cwd, ['diff', '--no-ext-diff', '--no-textconv', '--no-color', '--no-renames', '--unified=5', mergeBase, head]);
+	Object.assign(config,resolveTaskConfig(config,ticket,changedFiles));
 	let policy = '';
-	const policyExists = git(cwd, ['ls-tree', base, '--', 'REVIEW.md']).trim();
-	if (policyExists) {
-		if (!policyExists.startsWith('100644 ') && !policyExists.startsWith('100755 ')) throw new Error('REVIEW.md must be a regular tracked file on the base.');
-		policy = git(cwd, ['show', `${base}:REVIEW.md`]);
+	for (const file of [...new Set([...config.verification.policyFiles,...config.verification.contextFiles])]) {
+		if (file.includes('..') || path.isAbsolute(file)) throw new Error('Trusted context files must be repository-relative');
+		const policyExists = git(cwd, ['ls-tree', base, '--', file]).trim();
+		if (policyExists) {
+			if (!policyExists.startsWith('100644 ') && !policyExists.startsWith('100755 ')) throw new Error(`${file} must be a regular tracked file on the base.`);
+			policy += `\n## ${file}\n${git(cwd, ['show', `${base}:${file}`])}`;
+		}
 	}
-	if (policy.length > 40_000) throw new Error('REVIEW.md is too large (40,000 characters maximum).');
+	if (policy.length > config.verification.maxContextCharacters) throw new Error(`Trusted review context is too large (${config.verification.maxContextCharacters.toLocaleString('en-US')} characters maximum). Set verification.maxContextCharacters to accommodate the configured policy/context files.`);
 	const risk = changedFiles.filter(file => /auth|credential|secret|token|migrat|schema|harness|process|permission|concurr|(^|\/)types\./i.test(file));
-	const scope = digest({version: REVIEW_VERSION, base, branch, ticket, plan, policy, checks: config.qualityChecks, review: reviewSettings(config.review), harness: config.harness, settings: config.harnesses[config.harness], repo: config.repo, provider: config.provider});
+	const scope = digest({version: REVIEW_VERSION + 1, base, branch, ticket:{number:ticket.number,title:ticket.title,body:ticket.body,labels:ticket.labels,source:ticket.source,custom:ticket.custom?.fingerprint}, plan, policy, checks: [...config.qualityChecks,...(config._plannedChecks??[])], requirements:(config._requirements??extractRequirements(ticket,config)).map(r=>({id:r.id,text:r.text,stage:r.stage,method:r.method})), verification:config.verification, environment:config._execution?.identity, review: reviewSettings(config.review), harness: config.harness, settings: config.harnesses[config.harness], repo: config.repo, provider: config.provider});
 	const key = digest({scope, head, mergeBase});
-	return {stamp: {head, base, mergeBase, branch, scope, key}, ticket, plan, policy, checks: config.qualityChecks, changedFiles, diff, risk};
+	return {stamp: {head, base, mergeBase, branch, scope, key}, ticket, plan, policy, checks: [...new Set([...config.qualityChecks,...(config._plannedChecks??[])])], checkIds:applicableChecks(config,changedFiles).map(c=>c.id), changedFiles, diff, risk, requirements:config._requirements??extractRequirements(ticket,config)};
 }
 export function assertSnapshot(context: ReviewContext, config: IterisConfig, cwd: string): void {
 	const current = captureContext(context.ticket, config, cwd, context.plan, context.stamp.branch);

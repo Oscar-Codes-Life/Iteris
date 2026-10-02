@@ -37,7 +37,7 @@ export async function generateSummary(folder: string, config: IterisConfig, cwd:
 	const truncated = truncateLog(log);
 	const input = `${PROMPT}\n\n---\n\nSession log:\n\n${truncated}`;
 
-	const result = await runHarness({config, phase: 'summary', prompt: input, cwd, timeoutMs: SUMMARY_TIMEOUT, onProcess, signal});
+	const result = await runHarness({config, phase: 'summary', prompt: input, cwd, timeoutMs: Math.max(1,Math.min(SUMMARY_TIMEOUT,(config._deadline??Infinity)-Date.now())), onProcess, signal});
 	if (!result.success || !result.text) return null;
 	await writeSummary(folder, result.text);
 	return result.text;

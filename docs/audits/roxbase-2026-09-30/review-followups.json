@@ -1,0 +1,95 @@
+{
+  "retrieved": "2026-09-30",
+  "comments": [
+    {
+      "pr": 428,
+      "url": "https://github.com/ROXBASE-APP/roxbase/pull/428#discussion_r4102182568",
+      "body": "**P2 — Replica lag can incorrectly make a server-eligible week inaccessible.** `GET /me` reads an existing `user_settings` row from the regional read replica (`user_settings_api/preferences.ts:57-79` falls back to primary only if the row is absent); the skip-deload endpoint reads the authoritative saved timezone. If the primary has America/Los_Angeles but the replica still has UTC at 2026-09-14 00:30 UTC, the week of Sep 7 is current on the primary but classified `past` here. `convert()` also returns before the authoritative preflight at lines 204-211, leaving no way to convert until replication catches up. Please ensure a `past`/`future` decision that blocks conversion is checked against authoritative timezone (or move the eligibility check into a server endpoint), rather than relying solely on a potentially lagged settings read. The reverse lag also exposes an action the server rejects.",
+      "created_at": "2026-09-25T07:24:07Z"
+    },
+    {
+      "pr": 428,
+      "url": "https://github.com/ROXBASE-APP/roxbase/pull/428#discussion_r4102182579",
+      "body": "**P2 — Do not suppress real account changes during scope capture.** This guard ignores *all* account-change notifications while `generationAccountScope()` is pending, not just its own first-account initialization. With A's timezone cached, start preflight and hold the scope read, switch to B, then open B's deload sheet before the old scope resolves. No `accountEpoch` increment occurs, so the still-enabled settings query keeps A's cached timezone; reopening a sheet doesn't refetch. At 2026-09-13 22:30 UTC, Sep 7 is past in Zurich but eligible in Los Angeles, so B gets the wrong action/copy. The old scope eventually rejecting does not reset the query for B's newly opened sheet. Distinguish the initialization event from a real account switch using account identity/epoch rather than suppressing all notifications, and add a test for this interleaving.",
+      "created_at": "2026-09-25T07:24:07Z"
+    },
+    {
+      "pr": 428,
+      "url": "https://github.com/ROXBASE-APP/roxbase/pull/428#discussion_r4102182590",
+      "body": "**P3 — Normal loading is presented as a failure.** The hook sets `dateEligibility='unavailable'` while the initial or focus `GET /me` is merely pending, so a slow but healthy request shows 'eligibility is unavailable. Please try again' without a Retry action. Please render a distinct 'Checking eligibility…' state while fetching, and reserve this error copy/retry for an actual failure.",
+      "created_at": "2026-09-25T07:24:07Z"
+    },
+    {
+      "pr": 428,
+      "url": "https://github.com/ROXBASE-APP/roxbase/pull/428#pullrequestreview-5314799139",
+      "body": "Review of PR #428 at 182232d6. Two correctness concerns should be addressed before merge; one loading-state UX suggestion. Focused Jest suites (54 tests), TypeScript typecheck, and git diff --check passed locally. GitHub's quality and OTA checks are green. Posting as COMMENT because this PR is authored by the account performing the review.",
+      "created_at": "2026-09-25T07:24:07Z"
+    },
+    {
+      "pr": 428,
+      "url": "https://github.com/ROXBASE-APP/roxbase/pull/428#discussion_r4102375636",
+      "body": "Fixed in 0a4858f2. The sheet and conversion preflight now request GET /me?consistency=primary, so the saved timezone comes from the same primary database used by the mutation guard. A fresh query key for each sheet and account prevents an older cached decision; the primary-read client test covers the request.",
+      "created_at": "2026-09-25T07:48:19Z"
+    },
+    {
+      "pr": 428,
+      "url": "https://github.com/ROXBASE-APP/roxbase/pull/428#discussion_r4102376697",
+      "body": "Fixed in 0a4858f2. Account-change events now distinguish scope initialization from auth changes. The hook ignores only initialization and clears its sheet and settings key on a real switch. A regression test holds the old scope read while a new account opens the sheet.",
+      "created_at": "2026-09-25T07:48:26Z"
+    },
+    {
+      "pr": 428,
+      "url": "https://github.com/ROXBASE-APP/roxbase/pull/428#discussion_r4102377303",
+      "body": "Fixed in 0a4858f2. Initial loading now says Checking eligibility, while a focus refresh keeps eligible copy visible and shows loading on the conversion action. Failure copy and retry appear only after a failed check. Hook and sheet tests cover these states.",
+      "created_at": "2026-09-25T07:48:30Z"
+    },
+    {
+      "pr": 428,
+      "url": "https://github.com/ROXBASE-APP/roxbase/pull/428#issuecomment-5829342193",
+      "body": "Please replace the upward-relative imports and Jest mock paths in `app/src/api/__tests__/userSettingsPrimaryRead.test.ts` with the required `@/` aliases before merge:\n\n- Lines 4–5: use `@/api/userSettingsApi` and `@/api/userSettingsApi/shared`.\n- Lines 14 and 23: use `@/api/client` and `@/api/userSettingsApi/shared` in the mocks.\n\nThe repository’s AGENTS.md requires path aliases and forbids upward `../` traversal. Keep the import and mock paths aligned, then rerun the focused test. This is the remaining requested change from Joshua’s review; no behavior change is needed.\n",
+      "created_at": "2026-09-25T08:27:22Z"
+    },
+    {
+      "pr": 428,
+      "url": "https://github.com/ROXBASE-APP/roxbase/pull/428#issuecomment-5831242844",
+      "body": "@joshuagmu Addressed the remaining import-path request in 40f26bb3: both imports and both Jest mocks now use the matching `@/api/` aliases. The focused Jest test passes (1/1), as do TypeScript typecheck, ESLint, Prettier, and diff whitespace checks. CI is running on the new head.",
+      "created_at": "2026-09-25T10:56:18Z"
+    },
+    {
+      "pr": 430,
+      "url": "https://github.com/ROXBASE-APP/roxbase/pull/430#issuecomment-5833135955",
+      "body": "Review of `d800b491a24986cd8a603ce7855f951fe71bbeb4`: **changes needed before merge**.\n\n1. **A stale cached Timer Sounds value can overwrite a newer confirmed value.** In `app/src/store/timerSoundPreference.ts:27–35`, `setFromCache` accepts a value after a successful network read as long as the caller captured the current revision. `app/src/notifications/useRestCompletionCue.ts:74–81` does exactly that at rest start. If the persisted cache is still stale (for example, its best-effort write failed or an older refresh overwrote it), cached `false` replaces confirmed `true` and the completion chime is suppressed. A temporary regression using the actual store and root hook reproduced this: expected one chime, received zero. Please preserve data freshness across the shared store and persistent cache, publish fresh settings to the cue owner, and reject older cached values. Simply rejecting every later cache read indefinitely would also prevent legitimate updates; distinguish the freshness of the data from when its read started.\n\n2. **Foreground completion leaves a pending native alert that can sound again after backgrounding.** `app/src/notifications/useRestCompletionCue.ts:100–116` clears the rest and plays the foreground cue. However, `useRestEndNotification.ts:33–48` deliberately leaves the native request scheduled at natural expiry. If native delivery is delayed and the app backgrounds after the foreground chime, the remaining request is still allowed to play sound. A temporary test mounting both real hooks reproduced the surviving native request; the real presentation policy permits a second sound in the simulated delayed-background-delivery case. Please cancel the matching pending native alert when foreground completion takes ownership, while preserving native delivery for rests that expire in the background. Add a combined-hook regression and verify the transition on iOS and Android; physical duplicate audio was not tested in this review.\n\nVerification: all **43 existing focused tests passed**; both added review regressions failed. The checkout was left unchanged; regression tests ran in a temporary exported snapshot. CI is green but does not cover these two cases.\n\nIntegration: PR #431 conflicts with the timer code and tests moved by this PR. Preserve its Android late-chime protection in the root handler when reconciling them. PR #175 also overlaps the timer changes.\n\nDelivery: JavaScript-only and OTA-eligible for a compatible installed runtime; no migration, Edge deployment, or native rebuild required.\n",
+      "created_at": "2026-09-25T13:23:56Z"
+    },
+    {
+      "pr": 430,
+      "url": "https://github.com/ROXBASE-APP/roxbase/pull/430#issuecomment-5833697741",
+      "body": "@joshuagmu Addressed both review findings in bad3e475 (rebased onto current main). Confirmed network settings now publish to the shared Timer Sounds store with account/local-write and network-order guards; stale cache reads cannot downgrade the confirmed value. Foreground completion cancels the matching queued native rest alert before clearing the rest, while background expiry still leaves native delivery intact. Also guarded native rest-notification preferences against stale cache reads. Added iOS/Android combined-hook regressions plus preference/API/native-queue tests. Locally: 273 Jest suites / 2392 tests passed, typecheck/format passed, lint had 0 errors (7 pre-existing warnings). App CI quality, OTA guard, and Vercel are green. Physical-device duplicate audio remains untested; PR #431 reconciliation should preserve its Android late-chime protection.",
+      "created_at": "2026-09-25T14:02:37Z"
+    },
+    {
+      "pr": 436,
+      "url": "https://github.com/ROXBASE-APP/roxbase/pull/436#issuecomment-5888196675",
+      "body": "🟡 Review: one remaining Settings Restore fix before merge.\n\nOscar: in `app/src/app/(app)/subscription.tsx:198–200`, the failed Restore branch always shows `restore_failed`, discarding `result.storeError?.accountMismatch`. A classified Google Play ownership conflict therefore loses the original-account guidance and **Log In** action. Please map account mismatches to `ownership_conflict`, matching `usePaywallPurchase`, and add a regression test covering Restore from the Subscription settings screen. Rechecked at head `a0b6d5ac66a08e741c0cf7d4c13d2d8527565ce4`; the issue is still present.\n\nVerification on this head: 154 app tests, 276 billing/help tests, the disposable PostgreSQL recovery/concurrency test, and billing/feedback entrypoint typechecks passed. Live schema prerequisites matched. All executed CI checks passed; Supabase Preview was skipped. These test results precede the latest Main merges.\n\n**Updated rebase check:** fetched Main at `29506aae` after Joshua’s merges. This branch is 2 commits behind and 3 ahead, missing #439 (GRP-247 AMRAP completion) and #438 (GRP-511 signup email fallback). A read-only `git merge-tree --write-tree` check completed without conflicts, and GitHub reports MERGEABLE. There is no conflict-driven rebase blocker, but please rebase onto current Main before merging, as required by the repository rule for branches open more than a day, and rerun relevant checks/CI with the fix. GitHub’s BLOCKED merge state is separate from merge conflicts.\n\nRollout: apply `20260921100000_deleted_subscription_recovery.sql`, deploy `billing_api` and `feedback_api` from updated Main using the pinned Supabase CLI and import map, verify and explicitly schedule help retries, then deliver the app OTA. No native rebuild is required for this diff. Actual Apple/Google account journeys, iOS/Android dialog interaction, and hosted help-email delivery remain release acceptance checks.\n",
+      "created_at": "2026-09-29T10:16:46Z"
+    },
+    {
+      "pr": 440,
+      "url": "https://github.com/ROXBASE-APP/roxbase/pull/440#issuecomment-5888225221",
+      "body": "🟡 Review of `f3b711da`: one blocker before merge.\n\n**Moving a preserved workout again after early start can create a duplicate.**\n\nEarly start keeps an in-progress workout’s physical old ID but saves its reschedule under the new plan ID in [`early-start-reschedules.ts:64–70`](https://github.com/ROXBASE-APP/roxbase/blob/f3b711daa22ea28f83b870b5449f5aaf361d2d41/supabase/functions/training_engine_v2/early-start-reschedules.ts#L64). A later move still derives `sourceSessionId` from the physical old key in [`workout-lifecycle.ts:131–148`](https://github.com/ROXBASE-APP/roxbase/blob/f3b711daa22ea28f83b870b5449f5aaf361d2d41/supabase/functions/training_engine_v2/workout-lifecycle.ts#L131). The reschedule RPC updates only that ID, leaving the new-ID binding at the previous date.\n\nI reproduced this with the actual engine and a disposable local PostgreSQL database:\n\n1. Early start reanchors `week-1-2026-09-29-0` to `week-2-2026-09-29-0`, while preserving the in-progress workout’s old physical key and its October 4 date.\n2. Move the preserved workout to October 3.\n3. Saved state now contains both the new-ID binding to October 4 and the old-ID binding to October 3.\n4. Regeneration emits the new-ID counterpart on October 4. PostgreSQL accepts it alongside the in-progress workout on October 3.\n\nA SELECT-only check confirmed that the live `reschedule_engine_v2_workout` also has no `evidenceSessionAliases` resolution.\n\n**Requested fix:** resolve the retained physical ID to its canonical plan ID during subsequent reschedules, replacing the stale binding while preserving workout identity. Add a regression covering early start → move the preserved in-progress workout again → regenerate, asserting one workout and one canonical date binding.\n\nOther verification passed: all CI checks, 76 app tests, 122 Edge tests, 17 schema-checker tests, PostgreSQL integration tests, and typechecking of `training_engine_v2` and `training_api`. The migration matches the live schema and permissions and is not applied yet. This branch merges cleanly with current Main; observed conflicts with older open PRs already exist against Main.\n\nAfter the fix: apply the migration first, redeploy `training_engine_v2`, `training_api`, `auto_generate_weeks`, and `scheduled_generation_worker` from updated Main using the pinned Supabase CLI and `--import-map supabase/functions/deno.json`, then publish the app OTA. No native build is needed.\n",
+      "created_at": "2026-09-29T10:18:29Z"
+    },
+    {
+      "pr": 440,
+      "url": "https://github.com/ROXBASE-APP/roxbase/pull/440#issuecomment-5888604523",
+      "body": "Addressed the preserved-workout move blocker in c485db2b. The reschedule RPC now resolves the retained physical session ID through evidenceSessionAliases while holding the settings lock, replaces the canonical binding (and any stale physical binding), updates duration-adjustment dates, and keeps the workout row/ID unchanged. Regression: early start → preserve the in-progress old-key row on Oct 4 → move it to Oct 3 → run the actual plan engine and atomic replacement; asserts a single workout and one canonical Oct 3 binding. Confirmed red before the fix, green afterward in disposable PostgreSQL (11 steps); 37 focused Edge tests and Deno typechecks passed. CI is running on this head.",
+      "created_at": "2026-09-29T10:44:05Z"
+    },
+    {
+      "pr": 440,
+      "url": "https://github.com/ROXBASE-APP/roxbase/pull/440#issuecomment-5891565368",
+      "body": "🟡 Re-review of `c485db2b`: the duplicate-workout issue is fixed, but one migration blocker remains.\n\nThe original reproduction now leaves one workout and one canonical date binding. All CI checks, 66 focused Edge tests, and the PostgreSQL integration suite pass.\n\n**The replacement reschedule RPC removes the existing mutation-owner safeguard.**\n\nAt [migration line 138](https://github.com/ROXBASE-APP/roxbase/blob/c485db2bc7164a5446ef09d8b7226250ca3aebc3/supabase/migrations/20260925100000_grp506_reanchor_moved_session_keys.sql#L138), the new `reschedule_engine_v2_workout` body omits the live function’s `PERFORM public.assert_engine_v2_mutation_owner(p_user_id);` check.\n\nI compared the current production definition and the proposed replacement in a disposable local PostgreSQL database, with another owner holding an active account-wide mutation lease:\n\n- The current production function rejects the direct reschedule with `engine_v2_mutation_busy` and leaves the workout unchanged.\n- The proposed replacement accepts the identical direct call and changes the workout’s scheduled date.\n\nThe normal app-owned mutation wrapper still checks ownership, but direct/legacy RPC callers lose their existing protection. This is a regression in the database entrypoint, not a failure of the canonical-ID fix.\n\n**Requested fix:** restore `PERFORM public.assert_engine_v2_mutation_owner(p_user_id);` immediately after `BEGIN`, before any row locks. Add a PostgreSQL regression proving that a direct reschedule rejects another owner’s active lease and leaves both the workout and engine state unchanged. Keep the new canonical-ID handling and duplicate-workout regression.\n\nThe branch merges cleanly with current Main. After fixing: apply the migration first, redeploy the affected generation Edge functions from updated Main using the pinned Supabase CLI/import map, then publish the app OTA. No native build is needed.\n",
+      "created_at": "2026-09-29T13:45:10Z"
+    }
+  ]
+}

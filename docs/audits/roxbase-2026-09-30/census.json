@@ -1,0 +1,1509 @@
+{
+  "source": "/Users/oscargallo/programming/Roxbase/roxbaase-iteris",
+  "cohort": "2026-09-24/25 custom import; 14 tasks",
+  "summary": {
+    "tasks": 14,
+    "outcomes": {
+      "blocked": 2,
+      "incomplete": 10,
+      "passed": 2
+    },
+    "all_marked_done": true,
+    "stale_final_review_heads": 7,
+    "no_behavioral_tests_in_final_host_report": 8,
+    "mixed_blocker_recoveries": 8,
+    "discarded_commands": 17,
+    "review_minutes": 521.81,
+    "rounds": 45,
+    "repairs": 39
+  },
+  "tasks": [
+    {
+      "number": 1,
+      "title": "Refresh Add Saved Workout list after bookmark changes",
+      "branch": "iteris/grp-533-jrt",
+      "pr": 426,
+      "artifact_directory": "/Users/oscargallo/programming/Roxbase/roxbaase-iteris/.iteris/runs/custom-bc10404b4cd30f7527a4fd0b6900b10e8397cc36c4986eb0e25cc1cab7447ad5",
+      "queue_status": "done",
+      "review_outcome": "blocked",
+      "reason": "0 blocking findings, 0 missing requirements, 1 failed checks.",
+      "review_head": "3216583515edda5092afa1622f1d7fb9ec12c952",
+      "local_branch_head": "3216583515edda5092afa1622f1d7fb9ec12c952",
+      "final_local_head_reviewed": true,
+      "changed_files_at_review": 5,
+      "diff_characters": 15971,
+      "rounds": 3,
+      "repairs": 2,
+      "review_minutes": 20.79,
+      "review_mode": "standard",
+      "policy_characters": 0,
+      "gap_count": 0,
+      "behavioral_tests_in_final_host_report": true,
+      "failed_checks": [
+        "cd supabase/functions && deno -V | grep -Fxq 'deno 2.9.7' && deno check */index.ts"
+      ],
+      "checks": [
+        {
+          "command": "npm --prefix app run check:native-versions",
+          "exitCode": 0,
+          "durationMs": 159,
+          "head": "3216583515edda5092afa1622f1d7fb9ec12c952"
+        },
+        {
+          "command": "npm --prefix app run typecheck",
+          "exitCode": 0,
+          "durationMs": 5566,
+          "head": "3216583515edda5092afa1622f1d7fb9ec12c952"
+        },
+        {
+          "command": "npm --prefix app run lint",
+          "exitCode": 0,
+          "durationMs": 9158,
+          "head": "3216583515edda5092afa1622f1d7fb9ec12c952"
+        },
+        {
+          "command": "npm --prefix app run format:check",
+          "exitCode": 0,
+          "durationMs": 4584,
+          "head": "3216583515edda5092afa1622f1d7fb9ec12c952"
+        },
+        {
+          "command": "cd supabase/functions && deno -V | grep -Fxq 'deno 2.9.7' && deno check */index.ts",
+          "exitCode": 1,
+          "durationMs": 45,
+          "head": "3216583515edda5092afa1622f1d7fb9ec12c952"
+        },
+        {
+          "command": "npm --prefix app test -- --runInBand src/api/__tests__/savedWorkoutsCacheInvalidation.test.ts src/api/__tests__/deloadSkipRouting.test.ts src/api/__tests__/duplicateWorkout.test.ts",
+          "exitCode": 0,
+          "durationMs": 953,
+          "head": "3216583515edda5092afa1622f1d7fb9ec12c952"
+        },
+        {
+          "command": "npm --prefix app test -- --runInBand",
+          "exitCode": 0,
+          "durationMs": 22581,
+          "head": "3216583515edda5092afa1622f1d7fb9ec12c952"
+        },
+        {
+          "command": "cd supabase/functions && /tmp/iteris-grp-533-deno-2.9.7/deno -V | grep -Fxq 'deno 2.9.7' && /tmp/iteris-grp-533-deno-2.9.7/deno check */index.ts",
+          "exitCode": 0,
+          "durationMs": 185,
+          "head": "3216583515edda5092afa1622f1d7fb9ec12c952"
+        }
+      ],
+      "recovery_with_both_checks_and_blocker": 0,
+      "discarded_commands_from_blocked_recovery": [],
+      "findings": [
+        {
+          "id": "0c364cc67901404a",
+          "priority": "low",
+          "status": "confirmed",
+          "title": "Regression tests retain the module cache between cases",
+          "head": "a94c625de220906fd8bd22fec1da6939cf7e85ce",
+          "fixedAt": null,
+          "duplicateOf": null
+        },
+        {
+          "id": "9ca0d75360bf6019",
+          "priority": "low",
+          "status": "confirmed",
+          "title": "A failed persistent-cache deletion leaves the list stale",
+          "head": "42195ef0d59d5671f9103f8b83aadbfa2a3fe871",
+          "fixedAt": null,
+          "duplicateOf": null
+        },
+        {
+          "id": "f69e5a186df35592",
+          "priority": "low",
+          "status": "rejected",
+          "title": "A failed cache removal permanently disables persistent reads for the session",
+          "head": "ce38cf1cc0129b8675f11e3e71ce29df62a253a3",
+          "fixedAt": null,
+          "duplicateOf": null
+        },
+        {
+          "id": "8c18f0fed9059da4",
+          "priority": "medium",
+          "status": "rejected",
+          "title": "Keep the saved-workouts query key in one place",
+          "head": "3216583515edda5092afa1622f1d7fb9ec12c952",
+          "fixedAt": null,
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "number": 2,
+      "title": "Hide deload conversion actions outside the current and next week",
+      "branch": "iteris/grp-505-gfy",
+      "pr": 428,
+      "artifact_directory": "/Users/oscargallo/programming/Roxbase/roxbaase-iteris/.iteris/runs/custom-259f567741668bf732837764081ba8d62e2f04d940343a7decb58085a914c256",
+      "queue_status": "done",
+      "review_outcome": "blocked",
+      "reason": "0 blocking findings, 0 missing requirements, 1 failed checks.",
+      "review_head": "182232d6cfdaf8b7ddeff53395638c15f499f46c",
+      "local_branch_head": "182232d6cfdaf8b7ddeff53395638c15f499f46c",
+      "final_local_head_reviewed": true,
+      "changed_files_at_review": 10,
+      "diff_characters": 66592,
+      "rounds": 9,
+      "repairs": 8,
+      "review_minutes": 100.32,
+      "review_mode": "standard",
+      "policy_characters": 0,
+      "gap_count": 0,
+      "behavioral_tests_in_final_host_report": true,
+      "failed_checks": [
+        "cd supabase/functions && deno -V | grep -Fxq 'deno 2.9.7' && deno check */index.ts"
+      ],
+      "checks": [
+        {
+          "command": "npm --prefix app run check:native-versions",
+          "exitCode": 0,
+          "durationMs": 171,
+          "head": "182232d6cfdaf8b7ddeff53395638c15f499f46c"
+        },
+        {
+          "command": "npm --prefix app run typecheck",
+          "exitCode": 0,
+          "durationMs": 5953,
+          "head": "182232d6cfdaf8b7ddeff53395638c15f499f46c"
+        },
+        {
+          "command": "npm --prefix app run lint",
+          "exitCode": 0,
+          "durationMs": 9803,
+          "head": "182232d6cfdaf8b7ddeff53395638c15f499f46c"
+        },
+        {
+          "command": "npm --prefix app run format:check",
+          "exitCode": 0,
+          "durationMs": 4657,
+          "head": "182232d6cfdaf8b7ddeff53395638c15f499f46c"
+        },
+        {
+          "command": "cd supabase/functions && deno -V | grep -Fxq 'deno 2.9.7' && deno check */index.ts",
+          "exitCode": 1,
+          "durationMs": 50,
+          "head": "182232d6cfdaf8b7ddeff53395638c15f499f46c"
+        },
+        {
+          "command": "npm --prefix app test -- --runInBand --runTestsByPath src/features/workout-tab/__tests__/DeloadWeek.test.tsx src/features/workout-tab/__tests__/deloadWeekLogic.test.ts src/features/workout-tab/__tests__/useDeloadConversion.test.tsx",
+          "exitCode": 0,
+          "durationMs": 1683,
+          "head": "182232d6cfdaf8b7ddeff53395638c15f499f46c"
+        },
+        {
+          "command": "tmp_dir=$(mktemp -d /tmp/iteris-grp505-deno.XXXXXX) && curl -fsSL --max-time 120 -o \"$tmp_dir/deno.zip\" https://github.com/denoland/deno/releases/download/v2.9.7/deno-aarch64-apple-darwin.zip && unzip -q \"$tmp_dir/deno.zip\" -d \"$tmp_dir\" && \"$tmp_dir/deno\" -V | grep -Fxq 'deno 2.9.7' && (cd supabase/functions && DENO_DIR=\"$tmp_dir/cache\" \"$tmp_dir/deno\" check */index.ts)",
+          "exitCode": 0,
+          "durationMs": 14941,
+          "head": "182232d6cfdaf8b7ddeff53395638c15f499f46c"
+        },
+        {
+          "command": "npm --prefix app test -- --runInBand",
+          "exitCode": 0,
+          "durationMs": 24143,
+          "head": "182232d6cfdaf8b7ddeff53395638c15f499f46c"
+        },
+        {
+          "command": "npm --prefix app test -- --runInBand --runTestsByPath src/features/workout-tab/__tests__/WorkoutTabScreen.deloadNavigation.test.tsx src/features/workout-tab/__tests__/useDeloadConversion.test.tsx",
+          "exitCode": 0,
+          "durationMs": 1424,
+          "head": "182232d6cfdaf8b7ddeff53395638c15f499f46c"
+        }
+      ],
+      "recovery_with_both_checks_and_blocker": 0,
+      "discarded_commands_from_blocked_recovery": [],
+      "findings": [
+        {
+          "id": "3101c77e53cdc530",
+          "priority": "medium",
+          "status": "confirmed",
+          "title": "A routine settings refetch makes an eligible sheet appear unavailable",
+          "head": "85501c193dfa3df514ca7591e76b8b25e4cd57cd",
+          "fixedAt": null,
+          "duplicateOf": null
+        },
+        {
+          "id": "463e6da52461d41f",
+          "priority": "medium",
+          "status": "confirmed",
+          "title": "A settings fetch crossing Monday can leave the sheet on the wrong week",
+          "head": "3a3cf26e5cd07cd850325200a1b1d8de9ed62780",
+          "fixedAt": null,
+          "duplicateOf": null
+        },
+        {
+          "id": "ebbb28c45ed4576d",
+          "priority": "low",
+          "status": "confirmed",
+          "title": "A recovered eligibility check leaves its failure message in the sheet",
+          "head": "3a3cf26e5cd07cd850325200a1b1d8de9ed62780",
+          "fixedAt": null,
+          "duplicateOf": null
+        },
+        {
+          "id": "c551039982056ea3",
+          "priority": "medium",
+          "status": "confirmed",
+          "title": "Conversion preflight replaces eligible-week copy with an unavailable message",
+          "head": "48733ab3c21a23768918af8531f8e2619bbd952b",
+          "fixedAt": null,
+          "duplicateOf": null
+        },
+        {
+          "id": "9c8a4d7f4eaf8809",
+          "priority": "medium",
+          "status": "confirmed",
+          "title": "Normal preflight replaces eligible-week content with an unavailable error state",
+          "head": "48733ab3c21a23768918af8531f8e2619bbd952b",
+          "fixedAt": null,
+          "duplicateOf": "c551039982056ea3"
+        },
+        {
+          "id": "1360b280db7d5aab",
+          "priority": "low",
+          "status": "rejected",
+          "title": "Share the existing saved-settings query identity",
+          "head": "e3a78b1e57f186bed02f9b3e54df5735555095bd",
+          "fixedAt": null,
+          "duplicateOf": null
+        },
+        {
+          "id": "8b972e4d8469d551",
+          "priority": "medium",
+          "status": "rejected",
+          "title": "Large mock harness tests a synthetic tab switch",
+          "head": "182232d6cfdaf8b7ddeff53395638c15f499f46c",
+          "fixedAt": null,
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "number": 3,
+      "title": "Fix failed session revocation after changing a password",
+      "branch": "iteris/grp-523-loq",
+      "pr": 429,
+      "artifact_directory": "/Users/oscargallo/programming/Roxbase/roxbaase-iteris/.iteris/runs/custom-02094d361c4d9628b540b7074621c612d571a152655b5a3dedf6b24678a15862",
+      "queue_status": "done",
+      "review_outcome": "incomplete",
+      "reason": "Review recovery blocked: The implementing PR, merged source SHA, deployed function version and packaged source SHA, and post-deployment verification remain pending because this protocol prohibits push, publication, and deployment. Source changes are committed on iteris/grp-523-loq at 2bd4d523; the working tree is clean.",
+      "review_head": "55563ce159f8050ccc3c4b93db3a2da4c20309ee",
+      "local_branch_head": "2bd4d523adb5a7b1eee739a993034535e0bfd2ca",
+      "final_local_head_reviewed": false,
+      "changed_files_at_review": 7,
+      "diff_characters": 26155,
+      "rounds": 1,
+      "repairs": 1,
+      "review_minutes": 24.33,
+      "review_mode": "standard",
+      "policy_characters": 0,
+      "gap_count": 9,
+      "behavioral_tests_in_final_host_report": false,
+      "failed_checks": [
+        "cd supabase/functions && deno -V | grep -Fxq 'deno 2.9.7' && deno check */index.ts"
+      ],
+      "checks": [
+        {
+          "command": "npm --prefix app run check:native-versions",
+          "exitCode": 0,
+          "durationMs": 149,
+          "head": "55563ce159f8050ccc3c4b93db3a2da4c20309ee"
+        },
+        {
+          "command": "npm --prefix app run typecheck",
+          "exitCode": 0,
+          "durationMs": 5990,
+          "head": "55563ce159f8050ccc3c4b93db3a2da4c20309ee"
+        },
+        {
+          "command": "npm --prefix app run lint",
+          "exitCode": 0,
+          "durationMs": 9256,
+          "head": "55563ce159f8050ccc3c4b93db3a2da4c20309ee"
+        },
+        {
+          "command": "npm --prefix app run format:check",
+          "exitCode": 0,
+          "durationMs": 4807,
+          "head": "55563ce159f8050ccc3c4b93db3a2da4c20309ee"
+        },
+        {
+          "command": "cd supabase/functions && deno -V | grep -Fxq 'deno 2.9.7' && deno check */index.ts",
+          "exitCode": 1,
+          "durationMs": 45,
+          "head": "55563ce159f8050ccc3c4b93db3a2da4c20309ee"
+        }
+      ],
+      "recovery_with_both_checks_and_blocker": 1,
+      "discarded_commands_from_blocked_recovery": [
+        "cd /Users/oscargallo/programming/Roxbase/roxbaase-iteris/supabase/functions && PATH=/tmp/grp523-deno-2.9.7:$PATH deno test --allow-env --allow-read --allow-net _tests/password_session_test.ts _tests/password_change_failure_test.ts _tests/password_changed_email_test.ts",
+        "cd /Users/oscargallo/programming/Roxbase/roxbaase-iteris/supabase/functions && export PATH=/tmp/grp523-deno-2.9.7:$PATH && deno -V | grep -Fxq 'deno 2.9.7' && deno check */index.ts _tests/integration/user-settings/password_change_test.ts _tests/password_changed_email_test.ts",
+        "cd /Users/oscargallo/programming/Roxbase/roxbaase-iteris && PATH=/tmp/grp523-deno-2.9.7:$PATH python3 scripts/grp-523/check-local-password-integration.py",
+        "cd /Users/oscargallo/programming/Roxbase/roxbaase-iteris && npm --prefix app test -- --runInBand src/features/account-security/__tests__/state.test.ts src/features/account-security/__tests__/api.test.ts"
+      ],
+      "findings": []
+    },
+    {
+      "number": 4,
+      "title": "Play the rest timer completion chime on every Repz screen",
+      "branch": "iteris/grp-529-ssf",
+      "pr": 430,
+      "artifact_directory": "/Users/oscargallo/programming/Roxbase/roxbaase-iteris/.iteris/runs/custom-9c23065c08904dbff26276750ce01b17a37c5323f65489cb95f198f5ebd86264",
+      "queue_status": "done",
+      "review_outcome": "incomplete",
+      "reason": "Deduplication cannot downgrade a blocking finding.",
+      "review_head": "d800b491a24986cd8a603ce7855f951fe71bbeb4",
+      "local_branch_head": "d800b491a24986cd8a603ce7855f951fe71bbeb4",
+      "final_local_head_reviewed": true,
+      "changed_files_at_review": 11,
+      "diff_characters": 60637,
+      "rounds": 6,
+      "repairs": 5,
+      "review_minutes": 66.17,
+      "review_mode": "standard",
+      "policy_characters": 0,
+      "gap_count": 1,
+      "behavioral_tests_in_final_host_report": true,
+      "failed_checks": [],
+      "checks": [
+        {
+          "command": "npm --prefix app run check:native-versions",
+          "exitCode": 0,
+          "durationMs": 159,
+          "head": "d800b491a24986cd8a603ce7855f951fe71bbeb4"
+        },
+        {
+          "command": "npm --prefix app run typecheck",
+          "exitCode": 0,
+          "durationMs": 5855,
+          "head": "d800b491a24986cd8a603ce7855f951fe71bbeb4"
+        },
+        {
+          "command": "npm --prefix app run lint",
+          "exitCode": 0,
+          "durationMs": 9496,
+          "head": "d800b491a24986cd8a603ce7855f951fe71bbeb4"
+        },
+        {
+          "command": "npm --prefix app run format:check",
+          "exitCode": 0,
+          "durationMs": 4734,
+          "head": "d800b491a24986cd8a603ce7855f951fe71bbeb4"
+        },
+        {
+          "command": "cd supabase/functions && deno -V | grep -Fxq 'deno 2.9.7' && deno check */index.ts",
+          "exitCode": 0,
+          "durationMs": 178,
+          "head": "d800b491a24986cd8a603ce7855f951fe71bbeb4"
+        },
+        {
+          "command": "npm --prefix app test -- --runInBand --silent --runTestsByPath 'src/notifications/__tests__/useRestCompletionCue.test.tsx' 'src/app/training/workout/[id]/_hooks/__tests__/useWorkoutRestTimer.test.tsx' 'src/notifications/__tests__/useRestEndNotification.test.tsx' 'src/notifications/__tests__/notificationPresentation.test.ts' 'src/store/__tests__/restTimerSource.test.ts'",
+          "exitCode": 0,
+          "durationMs": 1206,
+          "head": "d800b491a24986cd8a603ce7855f951fe71bbeb4"
+        },
+        {
+          "command": "npm --prefix app test -- --runInBand --silent",
+          "exitCode": 0,
+          "durationMs": 23731,
+          "head": "d800b491a24986cd8a603ce7855f951fe71bbeb4"
+        },
+        {
+          "command": "cd supabase/functions && /tmp/repz-deno-VRjxkW/deno -V | grep -Fxq 'deno 2.9.7' && DENO_DIR=\"$(mktemp -d /tmp/repz-deno-cache-XXXXXX)\" /tmp/repz-deno-VRjxkW/deno check */index.ts",
+          "exitCode": 0,
+          "durationMs": 5435,
+          "head": "d800b491a24986cd8a603ce7855f951fe71bbeb4"
+        }
+      ],
+      "recovery_with_both_checks_and_blocker": 0,
+      "discarded_commands_from_blocked_recovery": [],
+      "findings": [
+        {
+          "id": "f701ec75c104486a",
+          "priority": "medium",
+          "status": "confirmed",
+          "title": "Cached settings can block the fresher network preference",
+          "head": "6d9f07213c2775c00893632f4c9574a167da56fd",
+          "fixedAt": null,
+          "duplicateOf": null
+        },
+        {
+          "id": "3eff0551b18f5364",
+          "priority": "medium",
+          "status": "confirmed",
+          "title": "A first settings read can produce an arbitrarily late chime",
+          "head": "6d9f07213c2775c00893632f4c9574a167da56fd",
+          "fixedAt": null,
+          "duplicateOf": null
+        },
+        {
+          "id": "b97cdfb98a6b6935",
+          "priority": "medium",
+          "status": "confirmed",
+          "title": "A delayed effect silently discards a foreground completion",
+          "head": "6d9f07213c2775c00893632f4c9574a167da56fd",
+          "fixedAt": null,
+          "duplicateOf": null
+        },
+        {
+          "id": "eac4796de8c8ca61",
+          "priority": "medium",
+          "status": "confirmed",
+          "title": "A cached settings read can block the fresher network preference",
+          "head": "6d9f07213c2775c00893632f4c9574a167da56fd",
+          "fixedAt": null,
+          "duplicateOf": "f701ec75c104486a"
+        },
+        {
+          "id": "f8201c995bfd8635",
+          "priority": "medium",
+          "status": "confirmed",
+          "title": "A slow first preference read drops an enabled chime",
+          "head": "f920d27ea426b0c2c6bd21b968b179ee8834e1ac",
+          "fixedAt": null,
+          "duplicateOf": null
+        },
+        {
+          "id": "d6c1fbbbb2eeefef",
+          "priority": "medium",
+          "status": "confirmed",
+          "title": "Existing persisted rests are discarded after updating",
+          "head": "f920d27ea426b0c2c6bd21b968b179ee8834e1ac",
+          "fixedAt": null,
+          "duplicateOf": null
+        },
+        {
+          "id": "03a1eb4a19281b9f",
+          "priority": "medium",
+          "status": "confirmed",
+          "title": "A slow first preference read silently loses a foreground chime",
+          "head": "f920d27ea426b0c2c6bd21b968b179ee8834e1ac",
+          "fixedAt": null,
+          "duplicateOf": "f8201c995bfd8635"
+        },
+        {
+          "id": "4ddd79c4ae3246bf",
+          "priority": "medium",
+          "status": "confirmed",
+          "title": "Account scoping discards active rests saved by older builds",
+          "head": "f920d27ea426b0c2c6bd21b968b179ee8834e1ac",
+          "fixedAt": null,
+          "duplicateOf": "d6c1fbbbb2eeefef"
+        },
+        {
+          "id": "e5f6fe4bb5916e53",
+          "priority": "medium",
+          "status": "confirmed",
+          "title": "A slow settings read can play the chime long after rest ends",
+          "head": "374ff845c3cf55a2929c290e2cdf5528d94bbcf5",
+          "fixedAt": null,
+          "duplicateOf": null
+        },
+        {
+          "id": "84e610982960863b",
+          "priority": "medium",
+          "status": "confirmed",
+          "title": "A resolved sound preference still waits for an obsolete read",
+          "head": "374ff845c3cf55a2929c290e2cdf5528d94bbcf5",
+          "fixedAt": null,
+          "duplicateOf": "e5f6fe4bb5916e53"
+        },
+        {
+          "id": "278641a6ca012d94",
+          "priority": "medium",
+          "status": "confirmed",
+          "title": "The Timer Sounds switch can disagree with the preference that controls the chime",
+          "head": "374ff845c3cf55a2929c290e2cdf5528d94bbcf5",
+          "fixedAt": null,
+          "duplicateOf": null
+        },
+        {
+          "id": "607309fb2ca1e799",
+          "priority": "medium",
+          "status": "confirmed",
+          "title": "Cold-start rehydration can miss the rest chime",
+          "head": "6f5e0584f4a87b8ac66c7967b37f4576f3421946",
+          "fixedAt": null,
+          "duplicateOf": null
+        },
+        {
+          "id": "4718a3007983d4e4",
+          "priority": "medium",
+          "status": "confirmed",
+          "title": "A clock correction can permanently disarm foreground completion",
+          "head": "6f5e0584f4a87b8ac66c7967b37f4576f3421946",
+          "fixedAt": null,
+          "duplicateOf": null
+        },
+        {
+          "id": "650c97a030f5df99",
+          "priority": "medium",
+          "status": "confirmed",
+          "title": "A network read permanently blocks later cached preference updates",
+          "head": "6f5e0584f4a87b8ac66c7967b37f4576f3421946",
+          "fixedAt": null,
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "number": 5,
+      "title": "Android: stop playing the rest chime when returning more than five seconds late",
+      "branch": "iteris/grp-512-iqr",
+      "pr": 431,
+      "artifact_directory": "/Users/oscargallo/programming/Roxbase/roxbaase-iteris/.iteris/runs/custom-dc4cefc57f1766d221f6535ad4acc86f344e1e8fd471c82bc11aeb8f1b0684ab",
+      "queue_status": "done",
+      "review_outcome": "passed",
+      "reason": "Required reviews and validation completed on the final commit.",
+      "review_head": "d5cccc8cfa9e33c782ef232e8cc976aeafe4120a",
+      "local_branch_head": "d5cccc8cfa9e33c782ef232e8cc976aeafe4120a",
+      "final_local_head_reviewed": true,
+      "changed_files_at_review": 2,
+      "diff_characters": 7198,
+      "rounds": 2,
+      "repairs": 1,
+      "review_minutes": 4.84,
+      "review_mode": "standard",
+      "policy_characters": 0,
+      "gap_count": 0,
+      "behavioral_tests_in_final_host_report": true,
+      "failed_checks": [],
+      "checks": [
+        {
+          "command": "npm --prefix app run check:native-versions",
+          "exitCode": 0,
+          "durationMs": 118,
+          "head": "d5cccc8cfa9e33c782ef232e8cc976aeafe4120a"
+        },
+        {
+          "command": "npm --prefix app run typecheck",
+          "exitCode": 0,
+          "durationMs": 6964,
+          "head": "d5cccc8cfa9e33c782ef232e8cc976aeafe4120a"
+        },
+        {
+          "command": "npm --prefix app run lint",
+          "exitCode": 0,
+          "durationMs": 10765,
+          "head": "d5cccc8cfa9e33c782ef232e8cc976aeafe4120a"
+        },
+        {
+          "command": "npm --prefix app run format:check",
+          "exitCode": 0,
+          "durationMs": 5351,
+          "head": "d5cccc8cfa9e33c782ef232e8cc976aeafe4120a"
+        },
+        {
+          "command": "cd supabase/functions && deno -V | grep -Fxq 'deno 2.9.7' && deno check */index.ts",
+          "exitCode": 0,
+          "durationMs": 207,
+          "head": "d5cccc8cfa9e33c782ef232e8cc976aeafe4120a"
+        },
+        {
+          "command": "npm --prefix app test -- --runInBand --runTestsByPath 'src/app/training/workout/[id]/_hooks/__tests__/useWorkoutRestTimer.test.tsx' 'src/notifications/__tests__/useRestEndNotification.test.tsx' 'src/notifications/__tests__/restEndNotification.test.ts' 'src/notifications/__tests__/notificationPresentation.test.ts'",
+          "exitCode": 0,
+          "durationMs": 1169,
+          "head": "d5cccc8cfa9e33c782ef232e8cc976aeafe4120a"
+        }
+      ],
+      "recovery_with_both_checks_and_blocker": 0,
+      "discarded_commands_from_blocked_recovery": [],
+      "findings": []
+    },
+    {
+      "number": 6,
+      "title": "Fix overlapping exercise metric labels and values on Samsung Fold",
+      "branch": "iteris/grp-531-ufe",
+      "pr": 432,
+      "artifact_directory": "/Users/oscargallo/programming/Roxbase/roxbaase-iteris/.iteris/runs/custom-2b82b7d6cfdcc387338ca66389293ee59357c11bede8e0176fc3ce1e4ac808ba",
+      "queue_status": "done",
+      "review_outcome": "incomplete",
+      "reason": "Review recovery blocked: The responsive input-remount defect is fixed and committed as 2cd56465; the working tree is clean. Matching-device verification remains open because the report provides no Samsung Fold model, fold state, or text/display settings, and no Farmer\u2019s Carry distance set was available locally. The iPhone visual check also remains open because the current simulator build fails in RevenueCat\u2019s PaywallColor.swift under the available Xcode 27 setup.",
+      "review_head": "c6de0c776b1120e3a2f64eca0696016a3c0e23a0",
+      "local_branch_head": "2cd5646510272b6333653775261179d9d9760e9c",
+      "final_local_head_reviewed": false,
+      "changed_files_at_review": 12,
+      "diff_characters": 17029,
+      "rounds": 1,
+      "repairs": 1,
+      "review_minutes": 7.37,
+      "review_mode": "standard",
+      "policy_characters": 0,
+      "gap_count": 7,
+      "behavioral_tests_in_final_host_report": false,
+      "failed_checks": [],
+      "checks": [
+        {
+          "command": "npm --prefix app run check:native-versions",
+          "exitCode": 0,
+          "durationMs": 147,
+          "head": "c6de0c776b1120e3a2f64eca0696016a3c0e23a0"
+        },
+        {
+          "command": "npm --prefix app run typecheck",
+          "exitCode": 0,
+          "durationMs": 6206,
+          "head": "c6de0c776b1120e3a2f64eca0696016a3c0e23a0"
+        },
+        {
+          "command": "npm --prefix app run lint",
+          "exitCode": 0,
+          "durationMs": 10880,
+          "head": "c6de0c776b1120e3a2f64eca0696016a3c0e23a0"
+        },
+        {
+          "command": "npm --prefix app run format:check",
+          "exitCode": 0,
+          "durationMs": 5139,
+          "head": "c6de0c776b1120e3a2f64eca0696016a3c0e23a0"
+        },
+        {
+          "command": "cd supabase/functions && deno -V | grep -Fxq 'deno 2.9.7' && deno check */index.ts",
+          "exitCode": 0,
+          "durationMs": 177,
+          "head": "c6de0c776b1120e3a2f64eca0696016a3c0e23a0"
+        }
+      ],
+      "recovery_with_both_checks_and_blocker": 1,
+      "discarded_commands_from_blocked_recovery": [
+        "npm --prefix app test -- --runInBand --watchman=false --runTestsByPath 'src/app/training/workout/[id]/_components/__tests__/InsetLabelField.test.tsx' 'src/app/training/workout/[id]/_components/SetRowRedesigned/__tests__/MetricFieldGrid.test.tsx'"
+      ],
+      "findings": []
+    },
+    {
+      "number": 7,
+      "title": "Android: investigate rest notifications arriving 5\u201310 seconds late",
+      "branch": "iteris/grp-513-rgg",
+      "pr": 433,
+      "artifact_directory": "/Users/oscargallo/programming/Roxbase/roxbaase-iteris/.iteris/runs/custom-7d33d77303d483ebb48c19160f4390d01b1dbda2429cd384cd9773baeb47002b",
+      "queue_status": "done",
+      "review_outcome": "incomplete",
+      "reason": "Review recovery blocked: No Galaxy A14 is connected. The reporting phone's initial Alarms & reminders access and battery state, pending alarm type, deadline-to-post and deadline-to-cue measurements, and exact-access repeats in all three scenarios still require physical-device testing. App dependencies must be installed for the local commands. The working tree is clean; no source defect was confirmed.",
+      "review_head": "e555185a59a371dcdf10a744c3d34dfe6c9e50b8",
+      "local_branch_head": "e555185a59a371dcdf10a744c3d34dfe6c9e50b8",
+      "final_local_head_reviewed": true,
+      "changed_files_at_review": 3,
+      "diff_characters": 10733,
+      "rounds": 1,
+      "repairs": 1,
+      "review_minutes": 4.14,
+      "review_mode": "deep",
+      "policy_characters": 0,
+      "gap_count": 6,
+      "behavioral_tests_in_final_host_report": false,
+      "failed_checks": [],
+      "checks": [
+        {
+          "command": "npm --prefix app run check:native-versions",
+          "exitCode": 0,
+          "durationMs": 112,
+          "head": "e555185a59a371dcdf10a744c3d34dfe6c9e50b8"
+        },
+        {
+          "command": "npm --prefix app run typecheck",
+          "exitCode": 0,
+          "durationMs": 5138,
+          "head": "e555185a59a371dcdf10a744c3d34dfe6c9e50b8"
+        },
+        {
+          "command": "npm --prefix app run lint",
+          "exitCode": 0,
+          "durationMs": 9926,
+          "head": "e555185a59a371dcdf10a744c3d34dfe6c9e50b8"
+        },
+        {
+          "command": "npm --prefix app run format:check",
+          "exitCode": 0,
+          "durationMs": 4356,
+          "head": "e555185a59a371dcdf10a744c3d34dfe6c9e50b8"
+        },
+        {
+          "command": "cd supabase/functions && deno -V | grep -Fxq 'deno 2.9.7' && deno check */index.ts",
+          "exitCode": 0,
+          "durationMs": 104,
+          "head": "e555185a59a371dcdf10a744c3d34dfe6c9e50b8"
+        }
+      ],
+      "recovery_with_both_checks_and_blocker": 1,
+      "discarded_commands_from_blocked_recovery": [
+        "npm --prefix app test -- --runInBand --watchman=false --no-cache --runTestsByPath src/notifications/__tests__/RestAlarmPermissionNotice.test.tsx src/notifications/__tests__/restEndNotification.test.ts src/notifications/__tests__/useRestEndNotification.test.tsx modules/notification-access/__tests__/notificationAccess.test.ts",
+        "node -p \"require('./app/node_modules/expo-notifications/package.json').version\" && sed -n '102,123p' app/node_modules/expo-notifications/android/src/main/java/expo/modules/notifications/service/delegates/ExpoSchedulingDelegate.kt"
+      ],
+      "findings": []
+    },
+    {
+      "number": 8,
+      "title": "Prevent temporary login-check failures from showing paying users the paywall",
+      "branch": "iteris/grp-516-rzf",
+      "pr": 434,
+      "artifact_directory": "/Users/oscargallo/programming/Roxbase/roxbaase-iteris/.iteris/runs/custom-8e32f23cde5075ba941a46bb9215ec7bec58115af3a691e9f741440a40bc29d4",
+      "queue_status": "done",
+      "review_outcome": "passed",
+      "reason": "Required reviews and validation completed on the final commit.",
+      "review_head": "73719cc64c04d134048da9f53d19dbba6377e0e7",
+      "local_branch_head": "73719cc64c04d134048da9f53d19dbba6377e0e7",
+      "final_local_head_reviewed": true,
+      "changed_files_at_review": 11,
+      "diff_characters": 76262,
+      "rounds": 10,
+      "repairs": 9,
+      "review_minutes": 102.66,
+      "review_mode": "deep",
+      "policy_characters": 0,
+      "gap_count": 0,
+      "behavioral_tests_in_final_host_report": true,
+      "failed_checks": [],
+      "checks": [
+        {
+          "command": "npm --prefix app run check:native-versions",
+          "exitCode": 0,
+          "durationMs": 110,
+          "head": "73719cc64c04d134048da9f53d19dbba6377e0e7"
+        },
+        {
+          "command": "npm --prefix app run typecheck",
+          "exitCode": 0,
+          "durationMs": 4981,
+          "head": "73719cc64c04d134048da9f53d19dbba6377e0e7"
+        },
+        {
+          "command": "npm --prefix app run lint",
+          "exitCode": 0,
+          "durationMs": 9121,
+          "head": "73719cc64c04d134048da9f53d19dbba6377e0e7"
+        },
+        {
+          "command": "npm --prefix app run format:check",
+          "exitCode": 0,
+          "durationMs": 4521,
+          "head": "73719cc64c04d134048da9f53d19dbba6377e0e7"
+        },
+        {
+          "command": "cd supabase/functions && deno -V | grep -Fxq 'deno 2.9.7' && deno check */index.ts",
+          "exitCode": 0,
+          "durationMs": 41,
+          "head": "73719cc64c04d134048da9f53d19dbba6377e0e7"
+        },
+        {
+          "command": "npm --prefix app test -- --runInBand --watchman=false --no-cache src/api/__tests__/clientGetSessionSafe.test.ts src/store/__tests__/access.test.ts src/utils/__tests__/entitlements.test.ts src/utils/__tests__/entitlementsSuspendedTimeout.test.ts src/features/paywall/__tests__/accessSync.test.ts",
+          "exitCode": 0,
+          "durationMs": 9700,
+          "head": "73719cc64c04d134048da9f53d19dbba6377e0e7"
+        },
+        {
+          "command": "npm --prefix app test -- --runInBand --watchman=false --no-cache src/features/paywall/__tests__/rootGate.test.tsx",
+          "exitCode": 0,
+          "durationMs": 8567,
+          "head": "73719cc64c04d134048da9f53d19dbba6377e0e7"
+        }
+      ],
+      "recovery_with_both_checks_and_blocker": 0,
+      "discarded_commands_from_blocked_recovery": [],
+      "findings": [
+        {
+          "id": "063d67e2a4b2f167",
+          "priority": "high",
+          "status": "fixed",
+          "title": "A failed final session read discards a confirmed entitlement result",
+          "head": "5678b748624efe8386d001d95784251b7ac1485e",
+          "fixedAt": "2ec38ba80611e6c6e31d20b5197f90bf35f46a68",
+          "duplicateOf": null
+        },
+        {
+          "id": "5cacba766bb0d4c2",
+          "priority": "medium",
+          "status": "rejected",
+          "title": "Give the entitlement resolver sole ownership of the identity fence",
+          "head": "5678b748624efe8386d001d95784251b7ac1485e",
+          "fixedAt": null,
+          "duplicateOf": null
+        },
+        {
+          "id": "bb8e6f392eb51a79",
+          "priority": "medium",
+          "status": "confirmed",
+          "title": "Same-account session replacement can discard confirmed access",
+          "head": "5678b748624efe8386d001d95784251b7ac1485e",
+          "fixedAt": null,
+          "duplicateOf": null
+        },
+        {
+          "id": "c27d01a9b8f2b609",
+          "priority": "medium",
+          "status": "confirmed",
+          "title": "A confirmed expiry can be lost before the new final identity check",
+          "head": "2ec38ba80611e6c6e31d20b5197f90bf35f46a68",
+          "fixedAt": null,
+          "duplicateOf": null
+        },
+        {
+          "id": "6ba6a8f961558604",
+          "priority": "high",
+          "status": "fixed",
+          "title": "A failed session read hides a previously confirmed paywall",
+          "head": "2ec38ba80611e6c6e31d20b5197f90bf35f46a68",
+          "fixedAt": "df7f11076366d32ab4e9b0dfe86eb552ac58b0de",
+          "duplicateOf": null
+        },
+        {
+          "id": "98d199addb7d3219",
+          "priority": "high",
+          "status": "fixed",
+          "title": "A recovered session read can restore stale Premium after confirmed expiry",
+          "head": "df7f11076366d32ab4e9b0dfe86eb552ac58b0de",
+          "fixedAt": "17beb2b793f509d132da4943e61c7af15ed9e860",
+          "duplicateOf": null
+        },
+        {
+          "id": "88cefdb56115b2c7",
+          "priority": "medium",
+          "status": "rejected",
+          "title": "Consolidate account ownership into one auth snapshot",
+          "head": "df7f11076366d32ab4e9b0dfe86eb552ac58b0de",
+          "fixedAt": null,
+          "duplicateOf": null
+        },
+        {
+          "id": "c381490f0f5cb612",
+          "priority": "medium",
+          "status": "confirmed",
+          "title": "A successful expiry response is discarded if the final session read fails before an auth event",
+          "head": "17beb2b793f509d132da4943e61c7af15ed9e860",
+          "fixedAt": null,
+          "duplicateOf": null
+        },
+        {
+          "id": "c198f2f73bb64bc3",
+          "priority": "medium",
+          "status": "rejected",
+          "title": "Keep account ownership in one typed model",
+          "head": "17beb2b793f509d132da4943e61c7af15ed9e860",
+          "fixedAt": null,
+          "duplicateOf": null
+        },
+        {
+          "id": "8d67f681c8a79792",
+          "priority": "high",
+          "status": "fixed",
+          "title": "A confirmed missing session can be replaced by cached Premium",
+          "head": "e3aa6c04cf8e7d4003c59e9b2993e67490c1a0b6",
+          "fixedAt": "3ededae09446aedfd4b97e75b34a954fc576f1fa",
+          "duplicateOf": null
+        },
+        {
+          "id": "52479ebca5a6f0a5",
+          "priority": "high",
+          "status": "fixed",
+          "title": "A cache fallback can still replace confirmed Premium with free",
+          "head": "e3aa6c04cf8e7d4003c59e9b2993e67490c1a0b6",
+          "fixedAt": "3ededae09446aedfd4b97e75b34a954fc576f1fa",
+          "duplicateOf": null
+        },
+        {
+          "id": "26a7877c6a3b0cad",
+          "priority": "medium",
+          "status": "rejected",
+          "title": "Identity ownership is duplicated across the resolver and access store",
+          "head": "e3aa6c04cf8e7d4003c59e9b2993e67490c1a0b6",
+          "fixedAt": null,
+          "duplicateOf": null
+        },
+        {
+          "id": "3a4e109cfc7f7ccb",
+          "priority": "medium",
+          "status": "confirmed",
+          "title": "A confirmed missing session can be undone by a later read failure",
+          "head": "e3aa6c04cf8e7d4003c59e9b2993e67490c1a0b6",
+          "fixedAt": null,
+          "duplicateOf": "8d67f681c8a79792"
+        },
+        {
+          "id": "ee1439f99635dbaa",
+          "priority": "medium",
+          "status": "confirmed",
+          "title": "Retry keeps the first account's identity anchors",
+          "head": "3ededae09446aedfd4b97e75b34a954fc576f1fa",
+          "fixedAt": null,
+          "duplicateOf": null
+        },
+        {
+          "id": "ba2e82e3cf0de8a2",
+          "priority": "medium",
+          "status": "confirmed",
+          "title": "A returning account can join a superseded entitlement flight",
+          "head": "3ededae09446aedfd4b97e75b34a954fc576f1fa",
+          "fixedAt": null,
+          "duplicateOf": null
+        },
+        {
+          "id": "32ebac11093e5ebb",
+          "priority": "medium",
+          "status": "confirmed",
+          "title": "A later failed read can hide a confirmed-free paywall",
+          "head": "3ededae09446aedfd4b97e75b34a954fc576f1fa",
+          "fixedAt": null,
+          "duplicateOf": null
+        },
+        {
+          "id": "a62c3a1cabd57dad",
+          "priority": "high",
+          "status": "rejected",
+          "title": "Definitive auth rejection retains Premium access",
+          "head": "5446bd599bc24667765b97b53efed9cde496cc5d",
+          "fixedAt": null,
+          "duplicateOf": null
+        },
+        {
+          "id": "eb9f0d70fdf7c194",
+          "priority": "high",
+          "status": "fixed",
+          "title": "Confirmed expiry can leave the paywall hidden",
+          "head": "5446bd599bc24667765b97b53efed9cde496cc5d",
+          "fixedAt": "73719cc64c04d134048da9f53d19dbba6377e0e7",
+          "duplicateOf": null
+        },
+        {
+          "id": "afc26f976b98020e",
+          "priority": "medium",
+          "status": "rejected",
+          "title": "Keep account ownership recovery in one layer",
+          "head": "73719cc64c04d134048da9f53d19dbba6377e0e7",
+          "fixedAt": null,
+          "duplicateOf": null
+        },
+        {
+          "id": "96b4f90a91ee8255",
+          "priority": "medium",
+          "status": "confirmed",
+          "title": "Terminal session errors retain previously confirmed Premium access",
+          "head": "73719cc64c04d134048da9f53d19dbba6377e0e7",
+          "fixedAt": null,
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "number": 9,
+      "title": "Recover stale workout screens after plan changes (GRP-470 follow-up)",
+      "branch": "iteris/grp-499-gng",
+      "pr": 435,
+      "artifact_directory": "/Users/oscargallo/programming/Roxbase/roxbaase-iteris/.iteris/runs/custom-6be871a7cc615686bba0a70e561ee8ce6e0d8e1ddc7da1351726f740c1de8f29",
+      "queue_status": "done",
+      "review_outcome": "incomplete",
+      "reason": "Review recovery blocked: Post-publication evidence remains pending: the implementing PR and merge, production app and Edge delivery receipts, a device run on the delivered client, and seven days of fixed-client Sentry review. These are not prerequisites for opening the PR.",
+      "review_head": "5e4cacda25b199913528f9bc7a3ea92ae0840947",
+      "local_branch_head": "0cfc45d626b7c22a4f396706b89c5f02c0471a90",
+      "final_local_head_reviewed": false,
+      "changed_files_at_review": 36,
+      "diff_characters": 152043,
+      "rounds": 1,
+      "repairs": 1,
+      "review_minutes": 16.74,
+      "review_mode": "deep",
+      "policy_characters": 0,
+      "gap_count": 9,
+      "behavioral_tests_in_final_host_report": false,
+      "failed_checks": [],
+      "checks": [
+        {
+          "command": "npm --prefix app run check:native-versions",
+          "exitCode": 0,
+          "durationMs": 126,
+          "head": "5e4cacda25b199913528f9bc7a3ea92ae0840947"
+        },
+        {
+          "command": "npm --prefix app run typecheck",
+          "exitCode": 0,
+          "durationMs": 5080,
+          "head": "5e4cacda25b199913528f9bc7a3ea92ae0840947"
+        },
+        {
+          "command": "npm --prefix app run lint",
+          "exitCode": 0,
+          "durationMs": 9585,
+          "head": "5e4cacda25b199913528f9bc7a3ea92ae0840947"
+        },
+        {
+          "command": "npm --prefix app run format:check",
+          "exitCode": 0,
+          "durationMs": 4436,
+          "head": "5e4cacda25b199913528f9bc7a3ea92ae0840947"
+        },
+        {
+          "command": "cd supabase/functions && deno -V | grep -Fxq 'deno 2.9.7' && deno check */index.ts",
+          "exitCode": 0,
+          "durationMs": 157,
+          "head": "5e4cacda25b199913528f9bc7a3ea92ae0840947"
+        }
+      ],
+      "recovery_with_both_checks_and_blocker": 1,
+      "discarded_commands_from_blocked_recovery": [
+        "npm --prefix app run test -- --runInBand",
+        "cd supabase/functions && deno task test:unit"
+      ],
+      "findings": []
+    },
+    {
+      "number": 10,
+      "title": "Recover subscriptions after account deletion during login and restore, including three-account journeys",
+      "branch": "iteris/grp-492-rwt",
+      "pr": 436,
+      "artifact_directory": "/Users/oscargallo/programming/Roxbase/roxbaase-iteris/.iteris/runs/custom-06661e849e34115bbaf25b153089e0eaaf45507070064860ebcad0a77ef5e124",
+      "queue_status": "done",
+      "review_outcome": "incomplete",
+      "reason": "Review recovery blocked: The fixes are committed on iteris/grp-492-rwt and the working tree is clean. Approved dialog copy is unavailable for comparison. Production verification still requires a current RevenueCat restore-policy check, real Apple and Google test purchases with mobile access and ownership checked together, Android dialog review, hosted help delivery, separate backend and mobile delivery receipts, and Joshua\u2019s phone timing assessment. Isolated local checks cannot supply that evidence.",
+      "review_head": "2c160310dc580fe4dbcf60c0f46bbb8a05968499",
+      "local_branch_head": "cdc041fb7480ee65a09f7ad58bd0d469c4ad0dac",
+      "final_local_head_reviewed": false,
+      "changed_files_at_review": 55,
+      "diff_characters": 299646,
+      "rounds": 1,
+      "repairs": 1,
+      "review_minutes": 23.55,
+      "review_mode": "deep",
+      "policy_characters": 0,
+      "gap_count": 13,
+      "behavioral_tests_in_final_host_report": false,
+      "failed_checks": [],
+      "checks": [
+        {
+          "command": "npm --prefix app run check:native-versions",
+          "exitCode": 0,
+          "durationMs": 114,
+          "head": "2c160310dc580fe4dbcf60c0f46bbb8a05968499"
+        },
+        {
+          "command": "npm --prefix app run typecheck",
+          "exitCode": 0,
+          "durationMs": 5153,
+          "head": "2c160310dc580fe4dbcf60c0f46bbb8a05968499"
+        },
+        {
+          "command": "npm --prefix app run lint",
+          "exitCode": 0,
+          "durationMs": 9563,
+          "head": "2c160310dc580fe4dbcf60c0f46bbb8a05968499"
+        },
+        {
+          "command": "npm --prefix app run format:check",
+          "exitCode": 0,
+          "durationMs": 4384,
+          "head": "2c160310dc580fe4dbcf60c0f46bbb8a05968499"
+        },
+        {
+          "command": "cd supabase/functions && deno -V | grep -Fxq 'deno 2.9.7' && deno check */index.ts",
+          "exitCode": 0,
+          "durationMs": 45,
+          "head": "2c160310dc580fe4dbcf60c0f46bbb8a05968499"
+        }
+      ],
+      "recovery_with_both_checks_and_blocker": 1,
+      "discarded_commands_from_blocked_recovery": [
+        "npm --prefix app test -- --runInBand --silent",
+        "cd supabase/functions && deno task test:unit",
+        "cd supabase/functions && command -v psql >/dev/null && command -v initdb >/dev/null && command -v pg_ctl >/dev/null && deno test --allow-run --allow-read --allow-write --allow-env _tests/local-postgres/deleted_subscription_recovery_test.ts"
+      ],
+      "findings": []
+    },
+    {
+      "number": 11,
+      "title": "Route Time Trial Replace through the existing benchmark replacement flow",
+      "branch": "iteris/grp-494-tcr",
+      "pr": 437,
+      "artifact_directory": "/Users/oscargallo/programming/Roxbase/roxbaase-iteris/.iteris/runs/custom-4571bd0edd4772c2fbc73931dc8c6aad6f104bf39720c698603391caa8c728d4",
+      "queue_status": "done",
+      "review_outcome": "incomplete",
+      "reason": "Review recovery blocked: Committed the confirmed client fixes as abd71275; the working tree is clean. Client build identity, live backend deployment identity, and post-delivery counts for the exact Sentry rejection remain unavailable until release. The Sentry issue was inaccessible, and this recovery protocol forbids publishing.",
+      "review_head": "0a8caccb82dc5aa35e7eee4c208bba16ac7d5f1c",
+      "local_branch_head": "abd7127551c91682e0d3bf6d0a824f123981d269",
+      "final_local_head_reviewed": false,
+      "changed_files_at_review": 15,
+      "diff_characters": 31923,
+      "rounds": 1,
+      "repairs": 1,
+      "review_minutes": 10.98,
+      "review_mode": "deep",
+      "policy_characters": 0,
+      "gap_count": 8,
+      "behavioral_tests_in_final_host_report": false,
+      "failed_checks": [],
+      "checks": [
+        {
+          "command": "npm --prefix app run check:native-versions",
+          "exitCode": 0,
+          "durationMs": 115,
+          "head": "0a8caccb82dc5aa35e7eee4c208bba16ac7d5f1c"
+        },
+        {
+          "command": "npm --prefix app run typecheck",
+          "exitCode": 0,
+          "durationMs": 5124,
+          "head": "0a8caccb82dc5aa35e7eee4c208bba16ac7d5f1c"
+        },
+        {
+          "command": "npm --prefix app run lint",
+          "exitCode": 0,
+          "durationMs": 9578,
+          "head": "0a8caccb82dc5aa35e7eee4c208bba16ac7d5f1c"
+        },
+        {
+          "command": "npm --prefix app run format:check",
+          "exitCode": 0,
+          "durationMs": 4272,
+          "head": "0a8caccb82dc5aa35e7eee4c208bba16ac7d5f1c"
+        },
+        {
+          "command": "cd supabase/functions && deno -V | grep -Fxq 'deno 2.9.7' && deno check */index.ts",
+          "exitCode": 0,
+          "durationMs": 73,
+          "head": "0a8caccb82dc5aa35e7eee4c208bba16ac7d5f1c"
+        }
+      ],
+      "recovery_with_both_checks_and_blocker": 1,
+      "discarded_commands_from_blocked_recovery": [
+        "npm --prefix app test -- --runInBand --watchman=false --silent",
+        "cd supabase/functions && deno -V | grep -Fxq 'deno 2.9.7' && deno test --cached-only --allow-read _tests/engine_v2_benchmark_contract_test.ts _tests/engine_v2_domain/training-plan/hyrox-benchmark-decline.test.ts _tests/engine_v2_domain/training-plan/threshold-benchmark-cadence.test.ts"
+      ],
+      "findings": []
+    },
+    {
+      "number": 12,
+      "title": "Activate and verify server-side signup email fallback protection",
+      "branch": "iteris/grp-511-aus",
+      "pr": 438,
+      "artifact_directory": "/Users/oscargallo/programming/Roxbase/roxbaase-iteris/.iteris/runs/custom-64ced05c359cb5eeb175886f231c6be946b3d15b8fd40f98b59af217e4d7e567",
+      "queue_status": "done",
+      "review_outcome": "incomplete",
+      "reason": "Review recovery blocked: Committed the confirmed ambiguous-send retry fix as 18ebc385; the working tree is clean. Hosted acceptance remains unverified: the new migration and handler are not deployed, and production handler receipts, controlled signup and email outcomes, isolated rejection recovery, and GRP ticket evidence require hosted Supabase, Repz Resend, test inbox, and ticket access.",
+      "review_head": "cf8bb1b94a4082471e3a9e25930efb39c3dd3bc5",
+      "local_branch_head": "18ebc385f162053b1709ac5336aadcb30b7c6d9b",
+      "final_local_head_reviewed": false,
+      "changed_files_at_review": 6,
+      "diff_characters": 29550,
+      "rounds": 1,
+      "repairs": 1,
+      "review_minutes": 10.88,
+      "review_mode": "deep",
+      "policy_characters": 0,
+      "gap_count": 14,
+      "behavioral_tests_in_final_host_report": false,
+      "failed_checks": [],
+      "checks": [
+        {
+          "command": "npm --prefix app run check:native-versions",
+          "exitCode": 0,
+          "durationMs": 144,
+          "head": "cf8bb1b94a4082471e3a9e25930efb39c3dd3bc5"
+        },
+        {
+          "command": "npm --prefix app run typecheck",
+          "exitCode": 0,
+          "durationMs": 5576,
+          "head": "cf8bb1b94a4082471e3a9e25930efb39c3dd3bc5"
+        },
+        {
+          "command": "npm --prefix app run lint",
+          "exitCode": 0,
+          "durationMs": 10323,
+          "head": "cf8bb1b94a4082471e3a9e25930efb39c3dd3bc5"
+        },
+        {
+          "command": "npm --prefix app run format:check",
+          "exitCode": 0,
+          "durationMs": 5708,
+          "head": "cf8bb1b94a4082471e3a9e25930efb39c3dd3bc5"
+        },
+        {
+          "command": "cd supabase/functions && deno -V | grep -Fxq 'deno 2.9.7' && deno check */index.ts",
+          "exitCode": 0,
+          "durationMs": 206,
+          "head": "cf8bb1b94a4082471e3a9e25930efb39c3dd3bc5"
+        }
+      ],
+      "recovery_with_both_checks_and_blocker": 1,
+      "discarded_commands_from_blocked_recovery": [
+        "cd supabase/functions && deno test --allow-env --allow-read --allow-net _tests/signup_lifecycle_outbox_migration_test.ts _tests/signup_lifecycle_fallback_test.ts _tests/lifecycle_resend_retry_test.ts",
+        "cd supabase/functions && deno test --allow-run --allow-read --allow-write --allow-env _tests/local-postgres/signup_lifecycle_outbox_test.ts"
+      ],
+      "findings": []
+    },
+    {
+      "number": 13,
+      "title": "AMRAP - exclude auto-created round from Complete-Workout undone count",
+      "branch": "iteris/grp-247-jdq",
+      "pr": 439,
+      "artifact_directory": "/Users/oscargallo/programming/Roxbase/roxbaase-iteris/.iteris/runs/custom-c7fdfc6cfdd1e0498793ebcc0b852bd743caae7f8d5fbb1108898acc87225df4",
+      "queue_status": "done",
+      "review_outcome": "incomplete",
+      "reason": "Review recovery blocked: Post-fix Complete Workout sheet inspection remains pending on iOS and Android. No device is running or seeded with the required AMRAP fixture, and the installed Supabase CLI (2.98.2) cannot parse this repository\u2019s local stack configuration. Source fixes were committed as d6fb2d54; the working tree is clean.",
+      "review_head": "28b6399a4da964d28a11a14c22fba9336dd33810",
+      "local_branch_head": "d6fb2d54beddbaa717cebde98e7ccf26d8320655",
+      "final_local_head_reviewed": false,
+      "changed_files_at_review": 7,
+      "diff_characters": 19006,
+      "rounds": 1,
+      "repairs": 1,
+      "review_minutes": 9.04,
+      "review_mode": "standard",
+      "policy_characters": 0,
+      "gap_count": 4,
+      "behavioral_tests_in_final_host_report": false,
+      "failed_checks": [],
+      "checks": [
+        {
+          "command": "npm --prefix app run check:native-versions",
+          "exitCode": 0,
+          "durationMs": 147,
+          "head": "28b6399a4da964d28a11a14c22fba9336dd33810"
+        },
+        {
+          "command": "npm --prefix app run typecheck",
+          "exitCode": 0,
+          "durationMs": 5831,
+          "head": "28b6399a4da964d28a11a14c22fba9336dd33810"
+        },
+        {
+          "command": "npm --prefix app run lint",
+          "exitCode": 0,
+          "durationMs": 10509,
+          "head": "28b6399a4da964d28a11a14c22fba9336dd33810"
+        },
+        {
+          "command": "npm --prefix app run format:check",
+          "exitCode": 0,
+          "durationMs": 4534,
+          "head": "28b6399a4da964d28a11a14c22fba9336dd33810"
+        },
+        {
+          "command": "cd supabase/functions && deno -V | grep -Fxq 'deno 2.9.7' && deno check */index.ts",
+          "exitCode": 0,
+          "durationMs": 170,
+          "head": "28b6399a4da964d28a11a14c22fba9336dd33810"
+        }
+      ],
+      "recovery_with_both_checks_and_blocker": 1,
+      "discarded_commands_from_blocked_recovery": [
+        "npm --prefix app test -- --runInBand --watch=false --watchman=false --no-cache --runTestsByPath 'src/app/training/workout/[id]/_helpers/__tests__/countWorkoutSets.test.ts' 'src/app/training/workout/[id]/_helpers/__tests__/workoutCompletionEligibility.test.ts'"
+      ],
+      "findings": []
+    },
+    {
+      "number": 14,
+      "title": "Allow explicit generation of the current week before the scheduled training start",
+      "branch": "iteris/grp-506-zat",
+      "pr": 440,
+      "artifact_directory": "/Users/oscargallo/programming/Roxbase/roxbaase-iteris/.iteris/runs/custom-7dddbdaed1336a0933773fd9e09a7feabbf6c30f83707680b299ab1548910a2e",
+      "queue_status": "done",
+      "review_outcome": "incomplete",
+      "reason": "correctness: Process timed out",
+      "review_head": "7f151750172f2ea89af06f38d3beb047d950c8fc",
+      "local_branch_head": "7f151750172f2ea89af06f38d3beb047d950c8fc",
+      "final_local_head_reviewed": true,
+      "changed_files_at_review": 27,
+      "diff_characters": 136418,
+      "rounds": 7,
+      "repairs": 6,
+      "review_minutes": 120.0,
+      "review_mode": "deep",
+      "policy_characters": 0,
+      "gap_count": 1,
+      "behavioral_tests_in_final_host_report": true,
+      "failed_checks": [],
+      "checks": [
+        {
+          "command": "npm --prefix app run check:native-versions",
+          "exitCode": 0,
+          "durationMs": 156,
+          "head": "7f151750172f2ea89af06f38d3beb047d950c8fc"
+        },
+        {
+          "command": "npm --prefix app run typecheck",
+          "exitCode": 0,
+          "durationMs": 6127,
+          "head": "7f151750172f2ea89af06f38d3beb047d950c8fc"
+        },
+        {
+          "command": "npm --prefix app run lint",
+          "exitCode": 0,
+          "durationMs": 10998,
+          "head": "7f151750172f2ea89af06f38d3beb047d950c8fc"
+        },
+        {
+          "command": "npm --prefix app run format:check",
+          "exitCode": 0,
+          "durationMs": 4738,
+          "head": "7f151750172f2ea89af06f38d3beb047d950c8fc"
+        },
+        {
+          "command": "cd supabase/functions && deno -V | grep -Fxq 'deno 2.9.7' && deno check */index.ts",
+          "exitCode": 0,
+          "durationMs": 161,
+          "head": "7f151750172f2ea89af06f38d3beb047d950c8fc"
+        },
+        {
+          "command": "npm --prefix app run test -- --runInBand src/features/workout-tab/__tests__/GenerateWeekDialog.test.tsx src/features/workout-tab/__tests__/manualGeneration.test.ts src/features/engine-generation/__tests__/runtime.test.ts",
+          "exitCode": 0,
+          "durationMs": 1731,
+          "head": "7f151750172f2ea89af06f38d3beb047d950c8fc"
+        },
+        {
+          "command": "cd supabase/functions && deno test --allow-env --allow-read --allow-net _tests/engine_v2_generate_week_replan_test.ts _tests/engine_v2_atomic_persistence_state_test.ts _tests/engine_v2_deload_preservation_test.ts",
+          "exitCode": 0,
+          "durationMs": 2098,
+          "head": "7f151750172f2ea89af06f38d3beb047d950c8fc"
+        },
+        {
+          "command": "cd supabase/functions && deno test --allow-run --allow-read --allow-write --allow-env _tests/local-postgres/v1_supersession_test.ts",
+          "exitCode": 0,
+          "durationMs": 4353,
+          "head": "7f151750172f2ea89af06f38d3beb047d950c8fc"
+        },
+        {
+          "command": "npm --prefix app run test -- --runInBand --silent",
+          "exitCode": 0,
+          "durationMs": 22815,
+          "head": "7f151750172f2ea89af06f38d3beb047d950c8fc"
+        },
+        {
+          "command": "cd supabase/functions && deno test --allow-env --allow-read --allow-net=127.0.0.1 _tests/engine_v2_generate_week_replan_test.ts _tests/plan_generation_test.ts _tests/unit/assignable_training_days_test.ts",
+          "exitCode": 0,
+          "durationMs": 2864,
+          "head": "7f151750172f2ea89af06f38d3beb047d950c8fc"
+        },
+        {
+          "command": "deno test --config=supabase/functions/deno.json --allow-read scripts/check_engine_v2_rpc_contract_test.ts",
+          "exitCode": 0,
+          "durationMs": 42,
+          "head": "7f151750172f2ea89af06f38d3beb047d950c8fc"
+        },
+        {
+          "command": "npm --prefix app run test -- --runInBand src/features/workout-tab/__tests__/manualGeneration.test.ts",
+          "exitCode": 0,
+          "durationMs": 848,
+          "head": "7f151750172f2ea89af06f38d3beb047d950c8fc"
+        },
+        {
+          "command": "cd supabase/functions && deno test --allow-env --allow-read --allow-net=127.0.0.1 _tests/engine_v2_generate_week_replan_test.ts _tests/engine_v2_atomic_persistence_state_test.ts _tests/plan_generation_test.ts",
+          "exitCode": 0,
+          "durationMs": 2321,
+          "head": "7f151750172f2ea89af06f38d3beb047d950c8fc"
+        }
+      ],
+      "recovery_with_both_checks_and_blocker": 0,
+      "discarded_commands_from_blocked_recovery": [],
+      "findings": [
+        {
+          "id": "d80808cd0f0570f2",
+          "priority": "high",
+          "status": "fixed",
+          "title": "Early start loses future workout removals and duration edits",
+          "head": "58900744b6c3225373fbe80056ce4f9a1dfec6d4",
+          "fixedAt": "073988d61eac2ccea73f3d64b721725e6ba2b8a9",
+          "duplicateOf": null
+        },
+        {
+          "id": "0f1c06a02dc82bff",
+          "priority": "medium",
+          "status": "confirmed",
+          "title": "A protected moved workout blocks the early start",
+          "head": "58900744b6c3225373fbe80056ce4f9a1dfec6d4",
+          "fixedAt": null,
+          "duplicateOf": null
+        },
+        {
+          "id": "a0ea4e778fea7c4c",
+          "priority": "medium",
+          "status": "confirmed",
+          "title": "Rollback can report a partially persisted week as successful",
+          "head": "58900744b6c3225373fbe80056ce4f9a1dfec6d4",
+          "fixedAt": null,
+          "duplicateOf": null
+        },
+        {
+          "id": "ee1881dc66c3b19f",
+          "priority": "medium",
+          "status": "confirmed",
+          "title": "Early start loses future session choices other than date moves",
+          "head": "58900744b6c3225373fbe80056ce4f9a1dfec6d4",
+          "fixedAt": null,
+          "duplicateOf": "d80808cd0f0570f2"
+        },
+        {
+          "id": "2f441a1d54507067",
+          "priority": "high",
+          "status": "confirmed",
+          "title": "Early start can restore a workout deleted from next week",
+          "head": "58900744b6c3225373fbe80056ce4f9a1dfec6d4",
+          "fixedAt": null,
+          "duplicateOf": "d80808cd0f0570f2"
+        },
+        {
+          "id": "49b403b63ad226f6",
+          "priority": "medium",
+          "status": "confirmed",
+          "title": "A previously moved completed workout can block early start",
+          "head": "073988d61eac2ccea73f3d64b721725e6ba2b8a9",
+          "fixedAt": null,
+          "duplicateOf": null
+        },
+        {
+          "id": "148bf9ecae77ebc6",
+          "priority": "medium",
+          "status": "confirmed",
+          "title": "Early start can duplicate a future workout moved into the requested week",
+          "head": "073988d61eac2ccea73f3d64b721725e6ba2b8a9",
+          "fixedAt": null,
+          "duplicateOf": null
+        },
+        {
+          "id": "a342ec3303dec819",
+          "priority": "medium",
+          "status": "confirmed",
+          "title": "A workout moved out of the requested week causes false failure after persistence",
+          "head": "3dcd7b8065102900e441c34ffcbce9e51653e060",
+          "fixedAt": null,
+          "duplicateOf": null
+        },
+        {
+          "id": "411f7567ae56fd26",
+          "priority": "low",
+          "status": "confirmed",
+          "title": "Reload the profile only when the training start moved",
+          "head": "3dcd7b8065102900e441c34ffcbce9e51653e060",
+          "fixedAt": null,
+          "duplicateOf": null
+        },
+        {
+          "id": "11a81f41010bbfc7",
+          "priority": "low",
+          "status": "rejected",
+          "title": "Use the final payload as the server's requested-week guard",
+          "head": "3dcd7b8065102900e441c34ffcbce9e51653e060",
+          "fixedAt": null,
+          "duplicateOf": null
+        },
+        {
+          "id": "97f26db2784327d5",
+          "priority": "medium",
+          "status": "rejected",
+          "title": "A partially persisted requested week can still succeed",
+          "head": "3dcd7b8065102900e441c34ffcbce9e51653e060",
+          "fixedAt": null,
+          "duplicateOf": null
+        },
+        {
+          "id": "e5840f0aceef34ea",
+          "priority": "medium",
+          "status": "confirmed",
+          "title": "Device date can skip a training day that is still today for the saved plan",
+          "head": "3dcd7b8065102900e441c34ffcbce9e51653e060",
+          "fixedAt": null,
+          "duplicateOf": null
+        }
+      ]
+    }
+  ]
+}

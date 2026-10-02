@@ -1,3 +1,4 @@
+import {completionServices} from './helpers.mjs';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
@@ -45,18 +46,18 @@ test('mixed identities support id/key, zero, numeric strings, custom paths and f
 test('custom branch names use a readable identifier and a stable three-letter suffix',()=>{
  const ticket={number:1,title:'Fix navigation',body:'',slug:'custom-hash',labels:[],htmlUrl:'',custom:{identifier:' GRP-493 ',identity:'stable-identity',fingerprint:'first',taskFile:'/task.md'}};
  const branch=ticketBranch(ticket);
- assert.match(branch,/^iteris\/grp-493-[a-z]{3}$/);
+ assert.match(branch,/^iteris\/grp-493-[a-f0-9]{16}$/);
  assert.equal(ticketBranch({...ticket,title:'Edited title',custom:{...ticket.custom,fingerprint:'second'}}),branch);
  assert.notEqual(ticketBranch({...ticket,custom:{...ticket.custom,identity:'different-identity'}}),branch);
- assert.match(ticketBranch({...ticket,custom:{...ticket.custom,identifier:'../A@{x}/foo.lock'}}),/^iteris\/a-x-foo-lock-[a-z]{3}$/);
- assert.match(ticketBranch({...ticket,custom:{...ticket.custom,identifier:undefined}}),/^iteris\/fix-navigation-[a-z]{3}$/);
+ assert.match(ticketBranch({...ticket,custom:{...ticket.custom,identifier:'../A@{x}/foo.lock'}}),/^iteris\/a-x-foo-lock-[a-f0-9]{16}$/);
+ assert.match(ticketBranch({...ticket,custom:{...ticket.custom,identifier:undefined}}),/^iteris\/fix-navigation-[a-f0-9]{16}$/);
  assert.equal(ticketBranch({...ticket,custom:undefined,slug:'navigation'}),'iteris/1-navigation');
 });
 test('saved queues keep legacy custom branches while new queues persist readable names',async t=>{
  const cwd=await temporary(t);const c=cfg();const ticket={number:1,title:'Fix navigation',body:'',slug:'custom-hash',labels:[],htmlUrl:'',custom:{identifier:'NAV-123',identity:'stable-identity',fingerprint:'first',taskFile:'/task.md'}};
  await savePendingQueue(cwd,c,[ticket]);
  const current=await loadPendingQueue(cwd,c);
- assert.match(ticketBranch(current[0]),/^iteris\/nav-123-[a-z]{3}$/);
+ assert.match(ticketBranch(current[0]),/^iteris\/nav-123-[a-f0-9]{16}$/);
  const queueFile=path.join(cwd,'.iteris','pending-queue.json');
  const legacy=JSON.parse(await readFile(queueFile,'utf8'));delete legacy.tickets[0].custom.branch;
  await writeFile(queueFile,JSON.stringify(legacy));
@@ -143,7 +144,7 @@ test('an ID-based task without a display identifier retains its branch after a t
  const services=title=>({fetcher:async()=>Response.json([{id:1,title}]),harness:async()=>ok({...draft,title})});
  const first=await importCustom(cfg(),cwd,services('Old title'));
  const changed=await importCustom(cfg(),cwd,services('New title'));
- assert.match(ticketBranch(first.tickets[0]),/^iteris\/old-title-[a-z]{3}$/);
+ assert.match(ticketBranch(first.tickets[0]),/^iteris\/old-title-[a-f0-9]{16}$/);
  assert.equal(ticketBranch(changed.tickets[0]),ticketBranch(first.tickets[0]));
 });
 test('an unfinished custom ticket keeps its saved plan when the queue resumes',async t=>{
@@ -168,7 +169,7 @@ test('custom full lifecycle creates a custom PR reference without issue actions'
  await reviewRepository(t,cwd);await executable(cwd,'codex',fakeAgent);environment(t,{PATH:`${cwd}:${process.env.PATH}`,FAKE_IMPLEMENT:'1',FAKE_MODE:undefined,CAPTURE:path.join(cwd,'calls.jsonl')});
  const c=cfg();c.planMode=false;c.pr.addLabelOnOpen='review';await atomicWriteConfig(c,cwd);
  let body='';let title='';
- await runAllTickets(imported.tickets,c,cwd,{onStatusChange(){},onLogLine(){},onComplete(){},onFailure:async(_,s)=>assert.fail(s.failureReason)},undefined,{findPr:async()=>undefined,createPr:async(_config,input)=>{body=input.body;title=input.title;return {url:'https://example.com/pr',number:1};},addLabel:async()=>assert.fail('No issue labels'),moveCard:async()=>assert.fail('No Trello completion')});
+ await runAllTickets(imported.tickets,c,cwd,{onStatusChange(){},onLogLine(){},onComplete(){},onFailure:async(_,s)=>assert.fail(s.failureReason)},undefined,{...completionServices,findPr:async()=>undefined,createPr:async(_config,input)=>{body=input.body;title=input.title;return {url:'https://example.com/pr',number:1};},addLabel:async()=>assert.fail('No issue labels'),moveCard:async()=>assert.fail('No Trello completion')});
  const calls=(await readFile(path.join(cwd,'calls.jsonl'),'utf8')).trim().split('\n').map(JSON.parse);
  assert.equal(title,'NAV-123: Fix navigation');assert.match(body,/Implements custom task:/);assert.ok(!body.includes('Closes #'));assert.ok(calls.some(c=>c.prompt.startsWith('Write a high-value pull request description')));
  assert.equal((await customStatuses(cwd,imported.tickets)).get(imported.tickets[0].number),'done');
@@ -195,7 +196,7 @@ test('reimport instructions reuse the stable custom branch',async()=>{
  const {expandPrompt}=await import('../dist/agent/prompt.js');
  const ticket={number:1,title:'A',body:'B',labels:[],slug:'a',htmlUrl:'',custom:{identity:'stable',fingerprint:'f',taskFile:'/task.md'}};
  assert.match(expandPrompt(ticket,cfg(),''),/already exists locally or on origin/);
- assert.match(expandPrompt(ticket,cfg(),''),/iteris\/a-[a-z]{3}/);
+ assert.match(expandPrompt(ticket,cfg(),''),/iteris\/a-[a-f0-9]{16}/);
 });
 test('streamed bytes count against the import budget even on oversized failures',async()=>{
  let bytes=0;
