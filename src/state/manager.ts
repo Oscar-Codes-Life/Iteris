@@ -1,15 +1,16 @@
+import {stateRoot} from './workspace.js';
 import {mkdir, writeFile, appendFile, readdir, readFile, copyFile, unlink} from 'node:fs/promises';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import type {Ticket, TicketState, TicketStatus, IterisConfig} from '../types.js';
-import {taskKey} from '../lifecycle/state.js';
+import {taskKey, atomicJson} from '../lifecycle/state.js';
 
 function runFolder(cwd: string, ticket: Ticket): string {
-	return path.join(cwd, '.iteris', 'runs', ticket.custom ? `custom-${ticket.custom.identity}` : `${ticket.number}-${ticket.slug}`);
+	return path.join(stateRoot(cwd), '.iteris', 'runs', ticket.custom ? `custom-${ticket.custom.identity}` : `${ticket.number}-${ticket.slug}`);
 }
 
 export async function createRunFolder(cwd: string, ticket: Ticket, config?: IterisConfig): Promise<string> {
-	const folder = config ? path.join(cwd,'.iteris','tasks',taskKey(ticket,config),'artifacts') : runFolder(cwd, ticket);
+	const folder = config ? path.join(stateRoot(cwd),'.iteris','tasks',taskKey(ticket,config),'artifacts') : runFolder(cwd, ticket);
 	await mkdir(folder, {recursive: true});
 	if (config) return folder;
 	if (ticket.custom) {
@@ -32,6 +33,7 @@ export async function createRunFolder(cwd: string, ticket: Ticket, config?: Iter
 }
 
 export async function writeStatus(folder: string, state: TicketState): Promise<void> {
+	await atomicJson(path.join(folder, 'instance.json'), {...state, logLines: []});
 	if (state.ticket.custom) await writeFile(path.join(folder, 'custom.json'), JSON.stringify({identity: state.ticket.custom.identity, fingerprint: state.ticket.custom.fingerprint, status: state.status}));
 	const lines = [
 		`# Ticket #${state.ticket.number} — ${state.ticket.title}`,
@@ -79,7 +81,7 @@ export async function readLog(folder: string): Promise<string> {
 }
 
 export async function getCompletedTicketNumbers(cwd: string): Promise<Set<number>> {
-	const runsDir = path.join(cwd, '.iteris', 'runs');
+	const runsDir = path.join(stateRoot(cwd), '.iteris', 'runs');
 	const completed = new Set<number>();
 
 	try {
@@ -100,7 +102,7 @@ export async function getCompletedTicketNumbers(cwd: string): Promise<Set<number
 }
 
 export async function getTicketStatuses(cwd: string): Promise<Map<number, TicketStatus>> {
-	const runsDir = path.join(cwd, '.iteris', 'runs');
+	const runsDir = path.join(stateRoot(cwd), '.iteris', 'runs');
 	const statuses = new Map<number, TicketStatus>();
 
 	try {

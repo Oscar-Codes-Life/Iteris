@@ -1,7 +1,8 @@
+import {stateRoot} from '../state/workspace.js';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { atomicJson } from './state.js';
-const filename = (cwd: string, key: string) => path.join(cwd, '.iteris', 'tasks', key, 'cancel.json');
+const filename = (cwd: string, key: string) => path.join(stateRoot(cwd), '.iteris', 'tasks', key, 'cancel.json');
 export async function requestCancellation(cwd: string, key: string): Promise<void> {
     if (!/^[a-f0-9]{64}$/.test(key))
         throw new Error('Invalid task key');

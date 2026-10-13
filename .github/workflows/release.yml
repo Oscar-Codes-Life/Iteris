@@ -1,0 +1,60 @@
+name: Prepare release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    uses: ./.github/workflows/ci.yml
+
+  draft:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build and verify the tag
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          pnpm run build
+          pnpm run release:check --tag "$RELEASE_TAG"
+      - name: Package and checksum
+        run: |
+          mkdir -p release-dist
+          npm pack --pack-destination release-dist
+          cd release-dist
+          sha256sum iteris-*.tgz > SHA256SUMS
+      - name: Create or update the release draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          notes="docs/releases/$RELEASE_TAG.md"
+          if draft=$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft 2>/dev/null); then
+            if [ "$draft" != true ]; then
+              echo 'This release is already published; refusing to change its assets.' >&2
+              exit 1
+            fi
+            gh release edit "$RELEASE_TAG" --draft --title "Iteris $RELEASE_TAG" --notes-file "$notes"
+          else
+            gh release create "$RELEASE_TAG" --draft --verify-tag --title "Iteris $RELEASE_TAG" --notes-file "$notes"
+          fi
+          gh release upload "$RELEASE_TAG" release-dist/*.tgz release-dist/SHA256SUMS --clobber

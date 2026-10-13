@@ -1,3 +1,4 @@
+import {stateRoot, activeTaskKey} from '../state/workspace.js';
 import { readFile, readdir, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { atomicJson, hash } from './state.js';
@@ -11,6 +12,8 @@ catch (error) {
 } }
 async function stateFiles(cwd: string): Promise<string[]> {
     try {
+        const key = activeTaskKey();
+        if (key) return [path.join(stateRoot(cwd), '.iteris/tasks', key, 'run.json')];
         return (await readdir(path.join(cwd, '.iteris/tasks'))).filter(key => /^[a-f0-9]{64}$/.test(key)).map(key => path.join(cwd, '.iteris/tasks', key, 'run.json'));
     }
     catch (error) {
@@ -25,6 +28,7 @@ const policy = (config: unknown) => {
     const copy = { ...config } as Record<string, unknown>;
     // These are the only live CLI selections accepted while a task executes.
     delete copy['harness'];
+    delete copy['workspace'];
     if (copy['harnesses'] && typeof copy['harnesses'] === 'object') {
         copy['harnesses'] = Object.fromEntries(Object.entries(copy['harnesses']).map(([name, settings]) => {
             const policy = { ...settings as Record<string, unknown> };
@@ -36,7 +40,7 @@ const policy = (config: unknown) => {
 };
 /** Restore host authority before any model-modified policy can reach an adapter. */
 export async function protectHostAuthority(cwd: string): Promise<() => Promise<void>> {
-    const configuration = path.join(cwd, '.iteris.json'), original = await json(configuration);
+    const configuration = path.join(stateRoot(cwd), '.iteris.json'), original = await json(configuration);
     const records = new Map<string, unknown>();
     for (const file of await stateFiles(cwd))
         records.set(file, await json(file));
@@ -55,6 +59,7 @@ export async function protectHostAuthority(cwd: string): Promise<() => Promise<v
             else {
                 const preferences = current && typeof current === 'object' && !Array.isArray(current) ? current as Record<string, unknown> : {};
                 const restored = { ...original as Record<string, unknown> };
+                if (preferences['workspace'] !== undefined) restored['workspace'] = preferences['workspace'];
                 if (preferences['harness'] !== undefined) restored['harness'] = preferences['harness'];
                 if (restored['harnesses'] && typeof preferences['harnesses'] === 'object') {
                     restored['harnesses'] = Object.fromEntries(Object.entries(restored['harnesses'] as Record<string, Record<string, unknown>>).map(([name, settings]) => {

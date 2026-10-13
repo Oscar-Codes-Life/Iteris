@@ -22,12 +22,12 @@ export async function setHarness(harness: Harness, cwd = process.cwd()): Promise
 		applyModel(config, model);
 	}, cwd);
 }
-export async function setModel(id: string, cwd = process.cwd()): Promise<IterisConfig> {
+export async function setModel(id: string, cwd = process.cwd(), env: NodeJS.ProcessEnv = process.env): Promise<IterisConfig> {
 	// Resolve the catalog, then verify that selection has not changed before
 	// committing the serialized configuration transaction.
 	const {loadConfig} = await import('../config.js');
 	const current = await loadConfig(cwd);
-	const models = await listModels(current.harness);
+	const models = await listModels(current.harness, env);
 	const model = models.find(entry => entry.id === id);
 	if (!model) throw new Error(`Model ${id} is unavailable for ${current.harness}.`);
 	return updateConfig(config => {

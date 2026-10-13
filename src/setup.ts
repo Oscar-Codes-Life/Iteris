@@ -11,18 +11,17 @@ const harnessOptions = [{value: 'claude', label: 'Claude Code'}, {value: 'codex'
 export async function prepareHarness(config: IterisConfig, picker: Picker = choose, cwd = process.cwd(), selection = true): Promise<IterisConfig> {
 	let skipUpdate = false;
 	for (;;) {
-		const originalPath=process.env['PATH'];
 		try {
 			const manifest=await prepareEnvironment(config,cwd);
-			process.env['PATH']=manifest.path;
-			await ensureHarness(config.harness, {skipUpdate});
+			const env = {...process.env, PATH: manifest.path};
+			await ensureHarness(config.harness, {skipUpdate, env});
 			if (!selection) return config;
-			const models = await listModels(config.harness);
+			const models = await listModels(config.harness, env);
 			if (!config.harnesses[config.harness].model || !models.some(model => model.id === config.harnesses[config.harness].model)) {
 				const id = await picker('Which model?', models.map(model => ({value: model.id, label: model.label})), models.find(model => model.isDefault)?.id);
-				config = await setModel(id, cwd);
+				config = await setModel(id, cwd, env);
 			}
-			await validateSelection(config);
+			await validateSelection(config, env);
 			return config;
 		} catch (error) {
 			const choice = await picker(error instanceof Error ? error.message : String(error), [
@@ -35,7 +34,7 @@ export async function prepareHarness(config: IterisConfig, picker: Picker = choo
 				config = await updateConfig(current => {current.harness = harness;}, cwd);
 				skipUpdate = false;
 			} else {skipUpdate = choice === 'continue'; config = await loadConfig(cwd);}
-		}finally{process.env['PATH']=originalPath;}
+		}
 	}
 }
 export async function configure(command: string, argument?: string, options: {picker?: Picker; cwd?: string; active?: boolean} = {}): Promise<IterisConfig> {
@@ -43,6 +42,19 @@ export async function configure(command: string, argument?: string, options: {pi
 	const cwd = options.cwd ?? process.cwd();
 	const active = options.active || await hasActiveRun(cwd);
 	let config = await loadConfig(cwd);
+	if (command === 'workspace') {
+		const mode = argument ?? await picker('Default workspace?', [
+			{value: 'worktree', label: 'Worktree · isolated branches, parallel tasks'},
+			{value: 'local', label: 'Local · one task at a time in this checkout'},
+		], config.workspace.mode);
+		if (mode !== 'local' && mode !== 'worktree') throw new Error('Workspace must be local or worktree.');
+		return updateConfig(current => {current.workspace.mode = mode;}, cwd);
+	}
+	if (command === 'parallel') {
+		const value = argument ?? await picker('Maximum parallel tasks?', [1, 2, 3, 4, 6, 8].map(count => ({value: String(count), label: `${count} task${count === 1 ? '' : 's'}`})), String(config.workspace.concurrency));
+		if (!/^[1-8]$/.test(value)) throw new Error('Parallel tasks must be a whole number from 1 to 8.');
+		return updateConfig(current => {current.workspace.concurrency = Number(value);}, cwd);
+	}
 	if (command === 'harness') {
 		const harness = argument ?? await picker('Which harness?', harnessOptions, config.harness);
 		if (harness !== 'claude' && harness !== 'codex') throw new Error('Harness must be claude or codex.');
@@ -95,6 +107,8 @@ export async function setupHarness(cwd = process.cwd(), picker: Picker = choose)
 	config = await prepareHarness(config, picker, cwd, false);
 	config = await configure('model', undefined, {cwd, picker});
 	config = await configure('effort', undefined, {cwd, picker});
+	config = await configure('workspace', undefined, {cwd, picker});
+	if (config.workspace.mode === 'worktree') config = await configure('parallel', undefined, {cwd, picker});
 	console.log(selectionLabel(config));
 	return config;
 }

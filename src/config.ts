@@ -15,6 +15,7 @@ const settings = z.object({
 }).passthrough();
 export const configSchema = z.object({
 	...lifecycleShape,
+	workspace: z.object({mode: z.enum(['local', 'worktree']).default('local'), concurrency: z.number().int().min(1).max(8).default(3)}).default({}),
 	version: z.union([z.literal(2), z.literal(3)]).transform(() => 3 as const),
 	harness: z.enum(['claude', 'codex']).default('claude'),
 	harnesses: z.object({

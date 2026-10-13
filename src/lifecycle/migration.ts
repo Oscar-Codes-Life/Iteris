@@ -1,3 +1,4 @@
+import {stateRoot} from '../state/workspace.js';
 import { readFile, readdir, cp, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import type { IterisConfig, Ticket } from '../types.js';
@@ -7,7 +8,7 @@ import { git } from '../review/context.js';
 export async function importLegacyArtifacts(cwd: string, ticket: Ticket, config: IterisConfig, destination: string): Promise<TaskRun | undefined> {
     if (await readRun(cwd, taskKey(ticket, config)))
         return;
-    const legacy = path.join(cwd, '.iteris', 'runs', ticket.custom ? `custom-${ticket.custom.identity}` : `${ticket.number}-${ticket.slug}`);
+    const legacy = path.join(stateRoot(cwd), '.iteris', 'runs', ticket.custom ? `custom-${ticket.custom.identity}` : `${ticket.number}-${ticket.slug}`);
     let context: {
         ticket: Ticket;
         stamp?: {
@@ -64,7 +65,7 @@ export async function importLegacyArtifacts(cwd: string, ticket: Ticket, config:
 export async function migrateLegacyRuns(cwd: string, config: IterisConfig): Promise<void> {
     let directories;
     try {
-        directories = await readdir(path.join(cwd, '.iteris', 'runs'), { withFileTypes: true });
+        directories = await readdir(path.join(stateRoot(cwd), '.iteris', 'runs'), { withFileTypes: true });
     }
     catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT')
@@ -74,7 +75,7 @@ export async function migrateLegacyRuns(cwd: string, config: IterisConfig): Prom
     for (const directory of directories.filter(d => d.isDirectory())) {
         let ticket: Ticket;
         try {
-            const context = JSON.parse(await readFile(path.join(cwd, '.iteris', 'runs', directory.name, 'review', 'context.json'), 'utf8'));
+            const context = JSON.parse(await readFile(path.join(stateRoot(cwd), '.iteris', 'runs', directory.name, 'review', 'context.json'), 'utf8'));
             ticket = context.ticket;
         }
         catch {
@@ -83,6 +84,6 @@ export async function migrateLegacyRuns(cwd: string, config: IterisConfig): Prom
         const provider = ticket.custom ? 'custom' : ticket.htmlUrl?.includes('trello.com/') ? 'trello' : ticket.htmlUrl?.includes('github.com/') ? 'github' : undefined;
         if (!provider || provider !== config.provider)
             continue;
-        await importLegacyArtifacts(cwd, ticket, { ...config, provider }, path.join(cwd, '.iteris', 'tasks', taskKey(ticket, { ...config, provider }), 'artifacts'));
+        await importLegacyArtifacts(cwd, ticket, { ...config, provider }, path.join(stateRoot(cwd), '.iteris', 'tasks', taskKey(ticket, { ...config, provider }), 'artifacts'));
     }
 }

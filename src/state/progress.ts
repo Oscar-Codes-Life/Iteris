@@ -1,7 +1,8 @@
+import {stateRoot} from './workspace.js';
 import {readFile, appendFile, mkdir} from 'node:fs/promises';
 import path from 'node:path';
 
-const iterisDir = (cwd: string) => path.join(cwd, '.iteris');
+const iterisDir = (cwd: string) => path.join(stateRoot(cwd), '.iteris');
 const progressPath = (cwd: string) => path.join(iterisDir(cwd), 'progress.md');
 
 export async function readProgress(cwd: string): Promise<string> {

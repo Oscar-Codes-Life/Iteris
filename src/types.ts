@@ -1,6 +1,6 @@
 import {createHash} from 'node:crypto';
 
-export type TicketStatus = 'pending' | 'planning' | 'summarizing' | 'running' | 'reviewing' | 'recovering' | 'creating-pr' | 'done' | 'stale' | 'failed' | 'blocked' | 'incomplete' | 'waiting' | 'cancelled';
+export type TicketStatus = 'pending' | 'preparing' | 'planning' | 'summarizing' | 'running' | 'reviewing' | 'recovering' | 'creating-pr' | 'done' | 'stale' | 'failed' | 'blocked' | 'incomplete' | 'waiting' | 'cancelled';
 
 export type Ticket = {
 	branch?: string;
@@ -18,7 +18,10 @@ export type Harness = 'claude' | 'codex';
 export type HarnessSettings = {model?: string; effort?: string; flags: string[]};
 export type ExecutionSelection = {harness: Harness; model?: string; effort?: string};
 
+export type WorkspaceSettings = {mode: 'local' | 'worktree'; concurrency: number};
+
 export type TicketState = {
+	workspace?: {mode: 'local' | 'worktree'; path: string};
 	runKey?: string;
 	remaining?: string[];
 	selection?: ExecutionSelection;
@@ -41,6 +44,7 @@ export type {TrelloConfig} from './trello/types.js';
 import type {TrelloConfig} from './trello/types.js';
 
 export type IterisConfig = {
+	workspace: WorkspaceSettings;
 	version: 3;
 	workflow: import('./lifecycle/config.js').LifecycleConfig['workflow'];
 	verification: import('./lifecycle/config.js').LifecycleConfig['verification'];

@@ -1,3 +1,5 @@
+import {Instances, activeStatuses} from './Instances.js';
+import {readInstances} from './InstanceMonitor.js';
 import {ticketBranch} from '../types.js';
 import {useState, useEffect, useRef} from 'react';
 import {Box, Text, useApp, useInput} from 'ink';
@@ -13,10 +15,12 @@ import {taskKey} from '../lifecycle/state.js';
 import {runWorker} from '../lifecycle/worker.js';
 
 type Dialog = {title: string; options: ChoiceOption[]; initial?: string; resolve: (value: string) => void; reject: (error: Error) => void};
-const activeStatuses = new Set(['planning', 'running', 'reviewing', 'recovering', 'creating-pr', 'summarizing']);
-export function App({config, tickets, cwd}: {config: IterisConfig; tickets: Ticket[]; cwd: string}) {
+export function App({config, tickets, cwd, resume = false}: {config: IterisConfig; tickets: Ticket[]; cwd: string; resume?: boolean}) {
 	const {exit} = useApp();
 	const [states, setStates] = useState<Map<string, TicketState>>(() => new Map(tickets.map(ticket => [taskKey(ticket,config), {ticket, status: 'pending', branch: ticketBranch(ticket), logLines: [], elapsedMs: 0}])));
+	const [view, setView] = useState<'queue' | 'instances'>(config.workspace.mode === 'worktree' ? 'instances' : 'queue');
+	const [selected, setSelected] = useState(0);
+	const dialogGate = useRef<Promise<unknown>>(Promise.resolve());
 	const [finished, setFinished] = useState(false);
 	const [error, setError] = useState('');
 	const [pending, setPending] = useState(config);
@@ -26,10 +30,14 @@ export function App({config, tickets, cwd}: {config: IterisConfig; tickets: Tick
 	const dialogRef = useRef<Dialog | null>(null);
 	const gate = useRef<Promise<void>>(Promise.resolve());
 	const controller = useRef(new AbortController());
-	const pick: Picker = (title, options, initial) => new Promise((resolve, reject) => {
+	const pick: Picker = (title, options, initial) => {
+		const request = dialogGate.current.then(() => new Promise<string>((resolve, reject) => {
 		if (controller.current.signal.aborted) {reject(new Error('Cancelled')); return;}
 		const next: Dialog = {title, options, initial, resolve, reject}; dialogRef.current = next; setDialog(next);
-	});
+		}));
+		dialogGate.current = request.catch(() => {});
+		return request;
+	};
 	function closeDialog(value?: string) {
 		const current = dialogRef.current; dialogRef.current = null; setDialog(null);
 		if (value === undefined) current?.reject(new Error('Cancelled')); else current?.resolve(value);
@@ -55,7 +63,17 @@ export function App({config, tickets, cwd}: {config: IterisConfig; tickets: Tick
 				}
 			},
 		};
-		void runAllTickets(tickets, config, cwd, callbacks, controller.current.signal).then(async()=>{if(config.continuation.watch)await runWorker({config,cwd,callbacks,signal:controller.current.signal});}).then(() => setFinished(true), failure => {setError(String(failure)); setFinished(true);});
+		const run = async () => {
+			if (resume) {
+				const saved = await readInstances(cwd, config);
+				setStates(new Map(saved.map(state => [state.runKey!, state])));
+				await runWorker({config, cwd, callbacks, signal: controller.current.signal, force: true, once: !config.continuation.watch});
+			} else {
+				await runAllTickets(tickets, config, cwd, callbacks, controller.current.signal);
+				if (config.continuation.watch) await runWorker({config, cwd, callbacks, signal: controller.current.signal});
+			}
+		};
+		void run().then(() => setFinished(true), failure => {setError(String(failure)); setFinished(true);});
 		return () => {controller.current.abort(); dialogRef.current?.reject(new Error('Cancelled'));};
 	}, []);
 	useEffect(() => {
@@ -64,7 +82,7 @@ export function App({config, tickets, cwd}: {config: IterisConfig; tickets: Tick
 	}, []);
 	function submit(text: string) {
 		const parts = text.trim().replace(/^\//, '').split(/\s+/);
-		if (parts.length > 2 || !['harness', 'model', 'effort'].includes(parts[0]!)) {setError('Commands: /harness [claude|codex], /model [id], /effort [level]'); return;}
+		if (parts.length > 2 || !['harness', 'model', 'effort', 'workspace', 'parallel'].includes(parts[0]!)) {setError('Commands: /harness, /model, /effort, /workspace [local|worktree], /parallel [1–8]'); return;}
 		setBusy(true); setError('');
 		gate.current = configure(parts[0]!, parts[1], {picker: pick, cwd, active: true}).then(next => {setPending(next);}, failure => {setError(failure instanceof Error ? failure.message : String(failure));}).finally(() => setBusy(false));
 	}
@@ -75,22 +93,29 @@ export function App({config, tickets, cwd}: {config: IterisConfig; tickets: Tick
 			else if (key.return) {setCommandText(null); submit(commandText);}
 			else if (key.backspace || key.delete) setCommandText(value => value?.slice(0, -1) ?? '');
 			else if (!key.ctrl && !key.meta) setCommandText(value => (value ?? '') + input);
-		} else if (input === '/') setCommandText('/');
+		} else if (key.tab || input === 'i') setView(value => value === 'instances' ? 'queue' : 'instances');
+		else if (view === 'instances' && (key.upArrow || input === 'k')) setSelected(value => Math.max(0, value - 1));
+		else if (view === 'instances' && (key.downArrow || input === 'j')) setSelected(value => Math.min(states.size - 1, value + 1));
+		else if (input === '/') setCommandText('/');
 		else if (input === 'q' && (finished || ![...states.values()].some(state=>activeStatuses.has(state.status)))) {controller.current.abort();exit();}
 	});
 	const active = [...states.values()].find(state => activeStatuses.has(state.status));
 	const hasFailures = [...states.values()].some(state => ['failed', 'stale', 'blocked', 'incomplete', 'waiting','cancelled'].includes(state.status));
-	return <Box flexDirection="column" padding={1}>
+	return <Box flexDirection="column" paddingX={1}>
 		<Text bold color="magenta">Iteris · {config.repo}</Text>
-		<Text dimColor>Saved settings for the next ticket: {selectionLabel(pending)}</Text>
+		<Text dimColor wrap="truncate">Saved settings for the next ticket: {selectionLabel(pending)}</Text>
+		<Box gap={2}><Text bold color={view === 'instances' ? 'magenta' : 'gray'}>Instances</Text><Text bold color={view === 'queue' ? 'magenta' : 'gray'}>Queue</Text><Text dimColor>Tab switch</Text></Box>
+		{view === 'instances' ? <Instances states={[...states.values()]} selected={selected} workspace={config.workspace} /> : <Box flexDirection="column">
 		{active && <Box flexDirection="column" marginY={1}><Text bold>Working on #{active.ticket.number}: {active.ticket.title} · {active.status}</Text><Text>{active.selection?.harness} · {active.selection?.model} · effort: {active.selection?.effort ?? 'Not supported'}</Text></Box>}
 		{[...states.values()].map(state => <TicketRow key={state.runKey??taskKey(state.ticket,config)} state={state} />)}
 		{active && <LiveLog lines={active.logLines} harness={active.selection?.harness ?? config.harness} />}
+		</Box>}
 		{error && <Text color="red">{error}</Text>}
 		{dialog && <Choice key={dialog.title} {...dialog} onSelect={value => closeDialog(value)} onCancel={() => closeDialog()} />}
-		{commandText !== null && <Text color="cyan">{commandText}▌</Text>}
+		{commandText !== null && <Box flexDirection="column"><Text dimColor wrap="truncate">/harness · /model · /effort · /workspace · /parallel</Text><Text color="cyan">{commandText}▌</Text></Box>}
+		{(pending.workspace.mode !== config.workspace.mode || pending.workspace.concurrency !== config.workspace.concurrency) && <Text dimColor>Next queue: {pending.workspace.mode} · {pending.workspace.concurrency} parallel slots</Text>}
 		{busy && !dialog && <Text dimColor>Checking settings…</Text>}
 		{finished && <Text color={hasFailures || error ? 'yellow' : 'green'}>{hasFailures || error ? 'Queue contains unfinished tasks. Run iteris status for next actions.' : 'All tickets complete.'} Press q to exit.</Text>}
-		{!dialog && !busy && <Text dimColor>/harness · /model · /effort (changes apply to the next ticket)</Text>}
+		{!dialog && !busy && <Text dimColor>↑/↓ select · / settings · q exit when idle</Text>}
 	</Box>;
 }

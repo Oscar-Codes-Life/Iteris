@@ -4,15 +4,25 @@
 
 Iteris pulls tickets from **GitHub Issues, GitHub Projects, Trello, custom imports, or configured command adapters**, implements them with **Claude Code or Codex**, reviews the changes, and opens pull requests. It runs locally with a live terminal UI.
 
+**v1.1.0 · Parallel worktrees** — Run up to eight tasks in isolated checkouts, carry over local environment files, and follow every task in the new Instances view.
+
+[Release notes](docs/releases/v1.1.0.md) · [Changelog](CHANGELOG.md) · [Upgrade](#upgrading) · [Release process](docs/releasing.md)
+
+![Instances view with three sample tasks running in parallel](assets/instances-preview.png)
+
+*The actual terminal component rendered with sample tasks: planning, implementation, and review running side by side.*
+
 > Iteris uses project-local harness permissions, host-owned Git operations, and independent committed-snapshot review. Completion requires current-commit evidence; unfinished publication remains a draft. See [Configurable completion and recovery](docs/lifecycle.md).
 
 ## Installation
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Oscar-Codes-Life/Iteris/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Oscar-Codes-Life/Iteris/v1.1.0/install.sh | bash
 ```
 
-Requires macOS/Linux, Node.js 22+, Git, and [GitHub CLI](https://cli.github.com/). The installer clones Iteris into `~/.iteris`, builds it, and links `iteris` globally. Rerun the installer to update Iteris.
+Requires macOS/Linux, Node.js 22+, Git, and [GitHub CLI](https://cli.github.com/). The installer checks out the **v1.1.0 tag** in `~/.iteris`, builds it, and links `iteris` globally. It prefers pnpm with the committed lockfile and falls back to npm. Run `iteris --version` to check your installation.
+
+For a user-owned installation, create a directory on your `PATH` and set `ITERIS_BIN_DIR` to it. `ITERIS_INSTALL_DIR` overrides the checkout location. The default symlink location, `/usr/local/bin`, may require sudo.
 
 Choose either harness:
 
@@ -35,13 +45,34 @@ First run follows this order:
 1. Choose **Claude Code** or **Codex**; wait for prerequisite checks and login.
 2. Choose a model.
 3. Choose a supported effort level. Models without configurable effort show **Not supported**.
-4. Authenticate with GitHub, if needed.
-5. Choose GitHub, Trello, or a Custom REST endpoint, then the project, board/list, or endpoint settings as needed. If no GitHub Projects are visible, Iteris shows open repository issues instead.
-6. Select tickets and watch the active ticket, phase, harness, model, effort, and logs.
+4. Choose the default workspace: **Worktree** for parallel tasks or **Local** for one task at a time. Worktree mode also asks for the parallel task limit.
+5. Authenticate with GitHub, if needed.
+6. Choose GitHub, Trello, or a Custom REST endpoint, then the project, board/list, or endpoint settings as needed. If no GitHub Projects are visible, Iteris shows open repository issues instead.
+7. Select tickets and watch the active ticket, phase, harness, model, effort, and logs.
 
 Subsequent launches reuse project settings and proceed to ticket selection after prerequisite checks. To revisit your harness, model, effort, or ticket source, run `iteris setup`; it repeats setup, checks authentication, and exits without running tickets. Project/board and ticket selection happen when you next run `iteris`.
 
 Missing or incompatible harnesses produce actionable setup information. Configure project-local prerequisites or select another compatible harness; Iteris does not automatically install or update global tools.
+
+## Upgrading
+
+Let active queues finish before updating. Install the current tagged release with the [installation command](#installation), or use the installer on `master` to select the latest version recorded there:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Oscar-Codes-Life/Iteris/master/install.sh | bash
+iteris --version
+```
+
+The installer preserves local source edits by refusing to overwrite them. Project settings, task history, and worktrees live in your project and remain in place. Configuration format stays at version 3; existing projects continue in local mode until you opt in:
+
+```bash
+cd your-repository
+iteris workspace worktree
+iteris parallel 3
+iteris
+```
+
+Use `iteris workspace local` to make future queues serial again. Already-started tasks keep their original checkout. Worktrees are retained after completion; see [Parallel worktrees](#parallel-worktrees) for environment-file copying and cleanup.
 
 ## Command reference
 
@@ -58,9 +89,13 @@ Run these from the root of the target Git repository. Iteris reads `.iteris.json
 | `iteris harness [claude\|codex]` | Switch harness; omit the argument for a picker. |
 | `iteris model [model-id]` | Switch model; omit the argument for a picker. |
 | `iteris effort [level]` | Switch reasoning effort; omit the argument for a picker. |
+| `iteris workspace [local\|worktree]` | Save the default workspace for future queues; omit the argument for a picker. |
+| `iteris parallel [1-8]` | Save the maximum parallel worktree tasks (default: 3). Local tasks remain serial. |
+| `iteris instances` | Open a live project-wide instance monitor in another terminal. |
 | `iteris refresh` | Fetch and reconvert tasks from a **Custom REST endpoint**, then open the ticket picker. Other ticket sources fetch normally. |
 | `iteris review [standard\|deep\|audit]` | Review the current branch and run configured checks without implementation, pushing, or opening a PR. Omit the mode to use the configured review mode. |
 | `iteris --help` | Print the command synopsis. `-h` also works. |
+| `iteris --version` | Print the installed release version without loading project settings. `-V` also works. |
 
 For standalone review, `standard` uses the normal review pass, `deep` always includes a risk specialist, and `audit` adds structural proposals. Blocked or incomplete reviews exit with status 1; see [Code review](#code-review).
 
@@ -82,6 +117,33 @@ For [GPT-6 Sol](https://developers.openai.com/api/docs/models/gpt-6-sol), use th
 
 Changes are saved immediately and apply to the **next ticket**. An active ticket uses the same selection through planning, implementation, review, PR description, summary, and retries. A switch to a missing Codex installation is saved for setup at the next ticket boundary. External harness/model/effort commands also defer installation and updates while a queue is running in the same repository. Externally edited execution settings are read at each boundary; invalid settings pause the queue. Correct the JSON and retry, or cancel the queue and use the terminal commands to repair selections.
 
+### Parallel worktrees
+
+```sh
+iteris workspace worktree    # Save worktrees as this project's default
+iteris parallel 3            # Run up to three tasks at once
+iteris                      # Select tickets and open the Instances view
+iteris instances            # Monitor the same project from another terminal
+```
+
+Each task gets its own branch and checkout under `.iteris/worktrees/<task-key>`. Iteris leaves the main checkout alone, keeps task state and logs centrally under `.iteris/tasks`, and reuses the same worktree for retries, cancellation recovery, and `iteris resume`. Existing configurations default to `local`; choose **Worktree** in `iteris setup` or use the command above. The settings are `"workspace": {"mode": "worktree", "concurrency": 3}` in `.iteris.json`.
+
+Both [Codex](https://learn.chatgpt.com/docs/environments/git-worktrees#copy-ignored-local-files-into-managed-worktrees) and [Claude Code](https://code.claude.com/docs/en/worktrees#copy-gitignored-files-into-worktrees) currently use a root `.worktreeinclude` file. Iteris reads it for either harness and copies matching **Git-ignored files** into the task checkout before starting. The file supports Git-ignore patterns, comments, directories, and negations:
+
+```gitignore
+# Local files needed by every task
+.env
+.env.*
+config/local/
+!.env.backup
+```
+
+Missing files or a missing include file do not stop the task. Iteris copies the files it can, preserves permissions, and skips symlinks and existing destination files, so retries preserve worktree-local changes. Tracked files come from Git. Git metadata and Iteris's own state are excluded. Codex also receives an ignored `AGENTS.override.md` when present. Copy counts and skipped paths are reported without file contents. Dependencies still need to be included or installed through your configured project setup.
+
+The **Instances** view shows concurrent activity, queued tasks, completion, and tasks needing attention. Use ↑/↓ or `j`/`k` to focus a task and see its harness, branch, checkout path, elapsed time, PR, and output. **Tab** switches between Instances and Queue. `iteris instances` refreshes the same persisted state without starting work; `q` closes only that monitor.
+
+Live `/workspace` and `/parallel` commands save defaults for the next queue. An already-started task keeps its checkout even if the default changes. Worktrees are retained after completion so local files and changes remain available; inspect them with `git worktree list` and remove them with Git when no longer needed. One scheduler owns the project at a time, and runs the configured number of isolated tasks within that queue.
+
 ### Terminal controls
 
 | Screen | Keys |
@@ -89,7 +151,7 @@ Changes are saved immediately and apply to the **next ticket**. An active ticket
 | Ticket picker | ↑/↓ or `j`/`k` to move, Space to toggle one ticket, `a` to select or clear all, Enter to start the selected tickets. |
 | Ticket source, Project, board, and list pickers | ↑/↓ or `j`/`k` to move, Enter to select. |
 | Harness, model, effort, and retry dialogs | ↑/↓ to move, Enter to confirm, Escape or `q` to cancel. |
-| Running queue | `/` to enter a harness/model/effort command; `q` exits after the queue finishes. Failed tickets offer **Retry with same settings** or **Skip ticket**. |
+| Running queue | Tab switches Queue/Instances; ↑/↓ focuses an instance; `/` enters a harness/model/effort/workspace/parallel command; `q` exits after the queue finishes. Failed tickets offer **Retry with same settings** or **Skip ticket**. |
 
 ## Configuration and migration
 
@@ -116,6 +178,7 @@ Iteris creates `.iteris.json` in the project root, inferring `repo` from a GitHu
   "baseBranch": "main",
   "timeout": 7200,
   "planMode": true,
+  "workspace": {"mode": "local", "concurrency": 3},
   "qualityChecks": ["npm run typecheck", "npm test"],
   "review": {"mode": "standard", "maxRepairCycles": 2, "allowNoChecks": false},
   "pr": {"draft": false, "addLabelOnOpen": "in-review"}
@@ -126,6 +189,7 @@ The most useful settings to edit directly are:
 
 | `.iteris.json` key | Use |
 | --- | --- |
+| `workspace.mode`, `workspace.concurrency` | `local` (default) or `worktree`; maximum parallel worktree tasks, 1–8 (default 3). |
 | `repo`, `baseBranch` | GitHub `owner/repo` and the branch used as the review/PR base. Iteris tries to detect both from Git. |
 | `provider` | `github`, `trello`, `custom`, or `command`. Run `iteris setup` to change sources through the wizard. |
 | `githubSource` | `auto` (discover Projects, fall back to issues), `issues`, or `projects`. |
@@ -270,7 +334,7 @@ npm run eval:review -- --case zero-default --harness codex
 | A queue reports an active or stale lock | Confirm the previous Iteris process has stopped, then remove `.iteris/active.json` if the lock is stale. |
 | A ticket has a blocked or incomplete review | Read the review report in the PR and the task artifacts directory; use `iteris status` and `iteris resume --once` to reconcile the remaining dependencies. |
 
-Rerun the [installer](#installation) to update Iteris itself. `iteris setup` checks for Codex updates but does not update Iteris.
+Follow [Upgrading](#upgrading) to update Iteris itself. `iteris setup` checks harness prerequisites and authentication; it does not update global tools.
 
 ## Development
 
@@ -284,10 +348,12 @@ npm test
 
 Tests build the application and use isolated fake CLI executables for discovery, update/login behavior, subprocess failures, configuration migration, setup, switching, and complete ticket lifecycles. They do not need real model calls or create real PRs.
 
+Releases use semantic versions and annotated `vX.Y.Z` tags. CI validates Linux/macOS builds and the release workflow prepares a **draft GitHub release** with a package and SHA-256 checksum. See [the release checklist](docs/releasing.md).
+
 ## Uninstall
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Oscar-Codes-Life/Iteris/main/install.sh | bash -s -- --uninstall
+curl -fsSL https://raw.githubusercontent.com/Oscar-Codes-Life/Iteris/v1.1.0/install.sh | bash -s -- --uninstall
 ```
 
 ## License

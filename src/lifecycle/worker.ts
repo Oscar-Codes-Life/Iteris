@@ -1,3 +1,6 @@
+import {inTaskWorkspace} from '../state/workspace.js';
+import {runPool} from '../state/pool.js';
+import {prepareTaskWorkspace} from './worktree.js';
 import type { IterisConfig, Ticket } from '../types.js';
 import { runAllTickets, type RunnerCallbacks, type RunnerServices } from '../agent/runner.js';
 import { loadConfig } from '../config.js';
@@ -12,7 +15,7 @@ import path from 'node:path';
 import { recoverFailedTicket } from '../agent/failure-recovery.js';
 import { classifyFailure } from './failures.js';
 import { loadPendingQueue } from '../state/queue.js';
-import { createRunFolder } from '../state/manager.js';
+import { createRunFolder, appendLog } from '../state/manager.js';
 import { ensureRun, taskKey, readRun, clearVerifiedLocalDependencies } from './state.js';
 import { ticketBranch } from '../types.js';
 import { importLegacyArtifacts } from './migration.js';
@@ -58,124 +61,128 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
     }
     do {
         const config = options.services ? options.config : await loadConfig(cwd);
-        const runs = await listRuns(cwd, config.repo);
-        for (const run of runs.filter(r => !['complete', 'cancelled'].includes(r.state)))
-            if (await cancellationRequested(cwd, run.key)) {
-                const release = await acquireRun(cwd);
-                try {
+        const release = await acquireRun(cwd);
+        try {
+            const runs = await listRuns(cwd, config.repo);
+            for (const run of runs.filter(r => !['complete', 'cancelled'].includes(r.state)))
+                if (await cancellationRequested(cwd, run.key)) {
                     run.state = 'cancelled';
                     run.phase = 'cancelled';
                     run.reason = 'Cancelled explicitly';
                     await saveRun(cwd, run);
                 }
-                finally {
-                    await release();
-                }
-            }
-        for (const run of schedulingOrder(runs, now(), force)) {
-            if (signal?.aborted)
-                return;
-            const cancellation = await cancellationScope(cwd, run.key, signal), taskSignal = cancellation.signal;
-            const snapshot = { ...config, provider: run.source.provider, _requirements: run.requirements, _plannedChecks: run.planning?.checks.map(check => check.command) ?? [] };
-            let release: (() => Promise<void>) | undefined;
-            try {
-                const adapter = options.adapter?.(snapshot) ?? sourceAdapter(snapshot, cwd);
-                const ticket = { ...await adapter.refresh({ ...run.ticket, source: run.source }), branch: run.branch };
-                release = await acquireRun(cwd);
-                await rebindLegacyIdentity(cwd, run, ticket, snapshot);
-                if (taskFingerprint(ticket) !== run.fingerprint) {
-                    run.state = 'queued';
-                    run.reason = 'Task content changed';
-                    await saveRun(cwd, run);
-                }
-                let branchExists = false;
+            const resumeRun = async (run: TaskRun) => {
+                if (signal?.aborted)
+                    return;
+                const cancellation = await cancellationScope(cwd, run.key, signal), taskSignal = cancellation.signal;
+                const snapshot = { ...config, provider: run.source.provider, _requirements: run.requirements, _plannedChecks: run.planning?.checks.map(check => check.command) ?? [] };
+                const root = cwd;
                 try {
-                    git(cwd, ['rev-parse', '--verify', `refs/heads/${run.branch}`]);
-                    branchExists = true;
-                }
-                catch { /* implementation may not have created the branch yet */ }
-                if (branchExists && run.branch !== git(cwd, ['branch', '--show-current']).trim()) {
-                    assertClean(cwd);
-                    git(cwd, ['checkout', run.branch]);
-                }
-                if (run.phase === 'reconciliation') {
-                    git(cwd, ['fetch', 'origin', snapshot.baseBranch]);
-                    if (run.publication) {
-                        assertClean(cwd);
-                        git(cwd, ['fetch', 'origin', run.branch]);
-                        git(cwd, ['merge', '--ff-only', 'FETCH_HEAD']);
-                        run.implementation = { head: git(cwd, ['rev-parse', 'HEAD']).trim(), fingerprint: run.fingerprint };
+                    const adapter = options.adapter?.(snapshot) ?? sourceAdapter(snapshot, cwd);
+                    const ticket = { ...await adapter.refresh({ ...run.ticket, source: run.source }), branch: run.branch };
+                    await rebindLegacyIdentity(cwd, run, ticket, snapshot);
+                    if (taskFingerprint(ticket) !== run.fingerprint) {
+                        run.state = 'queued';
+                        run.reason = 'Task content changed';
                         await saveRun(cwd, run);
                     }
+                    const workspaceLogs: string[] = [];
+                    const taskCwd = await prepareTaskWorkspace(root, run, snapshot, message => {workspaceLogs.push(message); callbacks.onLogLine(ticket.number, message);});
+                    if (workspaceLogs.length) await appendLog(run.artifacts, workspaceLogs.join('\n') + '\n');
+                    await inTaskWorkspace(root, run.key, async () => {
+                        const cwd = taskCwd;
+                        let branchExists = false;
+                        try {
+                            git(cwd, ['rev-parse', '--verify', `refs/heads/${run.branch}`]);
+                            branchExists = true;
+                        }
+                        catch { /* implementation may not have created the branch yet */ }
+                        if (branchExists && run.branch !== git(cwd, ['branch', '--show-current']).trim()) {
+                            assertClean(cwd);
+                            git(cwd, ['checkout', run.branch]);
+                        }
+                        if (run.phase === 'reconciliation') {
+                            git(cwd, ['fetch', 'origin', snapshot.baseBranch]);
+                            if (run.publication) {
+                                assertClean(cwd);
+                                git(cwd, ['fetch', 'origin', run.branch]);
+                                git(cwd, ['merge', '--ff-only', 'FETCH_HEAD']);
+                                run.implementation = { head: git(cwd, ['rev-parse', 'HEAD']).trim(), fingerprint: run.fingerprint };
+                                await saveRun(cwd, run);
+                            }
+                        }
+                        // A successful review may be reused only with the same environment,
+                        // current HEAD, base, task content and configured verification policy.
+                        snapshot._execution = await prepareEnvironment(snapshot, cwd, taskSignal, message => callbacks.onLogLine(ticket.number, message), setupBudget(cwd, run, snapshot));
+                        run.dependencies = run.dependencies.filter(d => d.id !== 'continuation' && d.id !== 'preflight' && d.kind !== 'environment');
+                        await saveRun(cwd, run);
+                        const failedCi = run.dependencies.find(d => d.kind === 'test');
+                        if (failedCi) {
+                            const head = git(cwd, ['rev-parse', 'HEAD']).trim();
+                            if (!recordFailure(run, snapshot, 'test', { stage: failedCi.id, checks: snapshot.verification.requiredCiChecks ?? 'discovered' }, head, 'CI invariant remains failed')) {
+                                run.state = 'blocked';
+                                run.reason = 'CI repair budget exhausted';
+                                await saveRun(cwd, run);
+                                return;
+                            }
+                            snapshot._deadline = now() + snapshot.timeout * 1000;
+                            await saveRun(cwd, run);
+                            const repaired = await recoverFailedTicket({ ticket, config: snapshot, cwd, state: { ticket, status: 'blocked', branch: run.branch, logLines: [], elapsedMs: 0, failureReason: failedCi.description }, plan: run.plan ?? '', signal: taskSignal, onLogLine: line => callbacks.onLogLine(ticket.number, line) });
+                            if (!repaired) {
+                                run.state = 'blocked';
+                                run.reason = 'CI repair produced no new verified commit';
+                                await saveRun(cwd, run);
+                                return;
+                            }
+                            run.implementation = { head: git(cwd, ['rev-parse', 'HEAD']).trim(), fingerprint: run.fingerprint };
+                            run.dependencies = run.dependencies.filter(d => d.id !== failedCi.id);
+                            await saveRun(cwd, run);
+                        }
+                        let passed = false;
+                        if (run.publication && run.fingerprint === taskFingerprint(ticket)) {
+                            const context = captureContext(ticket, snapshot, cwd, run.plan ?? await import('../review/context.js').then(m => m.savedPlan(run.artifacts)), run.branch);
+                            passed = !!await loadPassedReview(path.join(run.artifacts, 'review'), context);
+                        }
+                        if (passed && !run.dependencies.some(d => d.kind === 'test')) {
+                            clearVerifiedLocalDependencies(run);
+                            await advanceCompletion(snapshot, run, cwd, options.services, taskSignal);
+                            const state = { ticket, status: run.state === 'complete' ? 'done' as const : run.state === 'queued' ? 'pending' as const : 'waiting' as const, branch: run.branch, prUrl: run.publication?.url, prNumber: run.publication?.number, logLines: [], elapsedMs: 0, runKey: run.key, remaining: run.requirements.filter(r => r.status !== 'verified').map(r => r.text), failureReason: run.reason };
+                            callbacks.onStatusChange(ticket.number, {...state, workspace: run.workspace});
+                            if (run.state === 'complete')
+                                callbacks.onComplete(ticket.number, {...state, workspace: run.workspace});
+                        }
+                        else {
+                            // Refresh the base before obtaining new independent evidence.
+                            git(cwd, ['fetch', 'origin', snapshot.baseBranch]);
+                            await runAllTickets([ticket], snapshot, cwd, callbacks, taskSignal, options.services, true);
+                        }
+                    });
                 }
-                // A successful review may be reused only with the same environment,
-                // current HEAD, base, task content and configured verification policy.
-                snapshot._execution = await prepareEnvironment(snapshot, cwd, taskSignal, message => callbacks.onLogLine(ticket.number, message), setupBudget(cwd, run, snapshot));
-                run.dependencies = run.dependencies.filter(d => d.id !== 'continuation' && d.id !== 'preflight' && d.kind !== 'environment');
-                await saveRun(cwd, run);
-                const failedCi = run.dependencies.find(d => d.kind === 'test');
-                if (failedCi) {
-                    const head = git(cwd, ['rev-parse', 'HEAD']).trim();
-                    if (!recordFailure(run, snapshot, 'test', { stage: failedCi.id, checks: snapshot.verification.requiredCiChecks ?? 'discovered' }, head, 'CI invariant remains failed')) {
+                catch (error) {
+                    const failure = classifyFailure(error, run.phase);
+                    waitFor(run, snapshot, 'continuation', failure.kind, error instanceof Error ? error.message : String(error), failure.nextAction);
+                    if (error instanceof SetupBudgetExhausted)
                         run.state = 'blocked';
-                        run.reason = 'CI repair budget exhausted';
-                        await saveRun(cwd, run);
-                        continue;
-                    }
-                    snapshot._deadline = now() + snapshot.timeout * 1000;
                     await saveRun(cwd, run);
-                    const repaired = await recoverFailedTicket({ ticket, config: snapshot, cwd, state: { ticket, status: 'blocked', branch: run.branch, logLines: [], elapsedMs: 0, failureReason: failedCi.description }, plan: run.plan ?? '', signal: taskSignal, onLogLine: line => callbacks.onLogLine(ticket.number, line) });
-                    if (!repaired) {
-                        run.state = 'blocked';
-                        run.reason = 'CI repair produced no new verified commit';
-                        await saveRun(cwd, run);
-                        continue;
+                    callbacks.onLogLine(run.ticket.number, `[continuation] ${run.reason}`);
+                    callbacks.onStatusChange(run.ticket.number, {ticket: run.ticket, runKey: run.key, status: run.state === 'blocked' ? 'blocked' : 'waiting', branch: run.branch, workspace: run.workspace, failureReason: run.reason, logLines: [], elapsedMs: 0});
+                }
+                finally {
+                    if (cancellation.cancelled()) {
+                        const current = await readRun(cwd, run.key) ?? run;
+                        current.state = 'cancelled';
+                        current.phase = 'cancelled';
+                        current.reason = 'Cancelled explicitly';
+                        await saveRun(cwd, current);
                     }
-                    run.implementation = { head: git(cwd, ['rev-parse', 'HEAD']).trim(), fingerprint: run.fingerprint };
-                    run.dependencies = run.dependencies.filter(d => d.id !== failedCi.id);
-                    await saveRun(cwd, run);
+                    cancellation.dispose();
                 }
-                let passed = false;
-                if (run.publication && run.fingerprint === taskFingerprint(ticket)) {
-                    const context = captureContext(ticket, snapshot, cwd, run.plan ?? await import('../review/context.js').then(m => m.savedPlan(run.artifacts)), run.branch);
-                    passed = !!await loadPassedReview(path.join(run.artifacts, 'review'), context);
-                }
-                if (passed && !run.dependencies.some(d => d.kind === 'test')) {
-                    clearVerifiedLocalDependencies(run);
-                    await advanceCompletion(snapshot, run, cwd, options.services, taskSignal);
-                    const state = { ticket, status: run.state === 'complete' ? 'done' as const : run.state === 'queued' ? 'pending' as const : 'waiting' as const, branch: run.branch, prUrl: run.publication?.url, prNumber: run.publication?.number, logLines: [], elapsedMs: 0, runKey: run.key, remaining: run.requirements.filter(r => r.status !== 'verified').map(r => r.text), failureReason: run.reason };
-                    callbacks.onStatusChange(ticket.number, state);
-                    if (run.state === 'complete')
-                        callbacks.onComplete(ticket.number, state);
-                }
-                else {
-                    // Refresh the base before obtaining new independent evidence.
-                    git(cwd, ['fetch', 'origin', snapshot.baseBranch]);
-                    await runAllTickets([ticket], snapshot, cwd, callbacks, taskSignal, options.services, true);
-                }
-            }
-            catch (error) {
-                if (/An Iteris queue is already running/.test(String(error)))
-                    continue;
-                const failure = classifyFailure(error, run.phase);
-                waitFor(run, snapshot, 'continuation', failure.kind, error instanceof Error ? error.message : String(error), failure.nextAction);
-                if (error instanceof SetupBudgetExhausted)
-                    run.state = 'blocked';
-                await saveRun(cwd, run);
-                callbacks.onLogLine(run.ticket.number, `[continuation] ${run.reason}`);
-            }
-            finally {
-                if (cancellation.cancelled()) {
-                    const current = await readRun(cwd, run.key) ?? run;
-                    current.state = 'cancelled';
-                    current.phase = 'cancelled';
-                    current.reason = 'Cancelled explicitly';
-                    await saveRun(cwd, current);
-                }
-                cancellation.dispose();
-                await release?.();
-            }
-        }
+            };
+            const eligible = schedulingOrder(runs, now(), force).filter(run => run.state !== 'cancelled');
+            const local = eligible.filter(run => (run.workspace?.mode ?? config.workspace.mode) === 'local');
+            await runPool(local, 1, resumeRun, signal);
+            await runPool(eligible.filter(run => !local.includes(run)), config.workspace.concurrency, resumeRun, signal);
+        } finally {await release();}
         force = false;
         if (options.once || !config.continuation.watch || signal?.aborted)
             return;

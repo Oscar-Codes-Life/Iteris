@@ -1,6 +1,7 @@
 import {spawn} from 'node:child_process';
 import {createInterface} from 'node:readline';
 import type {Harness, IterisConfig} from '../types.js';
+import {VERSION} from '../version.js';
 
 export type ModelInfo = {id: string; label: string; efforts: string[]; defaultEffort?: string; isDefault?: boolean};
 // https://code.claude.com/docs/en/model-config (2026-09-07).
@@ -14,10 +15,10 @@ export const claudeModels: ModelInfo[] = [
 	{id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5 (pinned)', efforts: []},
 ];
 
-export async function listModels(harness: Harness): Promise<ModelInfo[]> {
+export async function listModels(harness: Harness, env: NodeJS.ProcessEnv = process.env): Promise<ModelInfo[]> {
 	if (harness === 'claude') return structuredClone(claudeModels);
 	return new Promise((resolve, reject) => {
-		const proc = spawn('codex', ['app-server'], {stdio: ['pipe', 'pipe', 'pipe']});
+		const proc = spawn('codex', ['app-server'], {env, stdio: ['pipe', 'pipe', 'pipe']});
 		let settled = false; let id = 0; let stage = 'initialize'; const models: ModelInfo[] = [];
 		const cursors = new Set<string>();
 		const finish = (error?: Error) => {
@@ -57,14 +58,14 @@ export async function listModels(harness: Harness): Promise<ModelInfo[]> {
 		proc.stdin.on('error', error => finish(error));
 		proc.on('error', error => finish(error));
 		proc.on('close', () => {if (!settled) finish(new Error('Codex model discovery exited early'));});
-		send('initialize', {clientInfo: {name: 'iteris', version: '2.0.0'}, capabilities: {}});
+		send('initialize', {clientInfo: {name: 'iteris', version: VERSION}, capabilities: {}});
 	});
 }
 
-export async function validateSelection(config: IterisConfig): Promise<void> {
+export async function validateSelection(config: IterisConfig, env: NodeJS.ProcessEnv = process.env): Promise<void> {
 	const settings = config.harnesses[config.harness];
 	if (!settings.model) throw new Error('Choose a model with iteris model or iteris setup.');
-	const models = await listModels(config.harness);
+	const models = await listModels(config.harness, env);
 	const model = models.find(entry => entry.id === settings.model);
 	if (!model) throw new Error(`Model ${settings.model} is unavailable for ${config.harness}. Run iteris model.`);
 	if (settings.effort && !model.efforts.includes(settings.effort)) throw new Error(`Effort ${settings.effort} is unsupported by ${settings.model}. Run iteris effort.`);

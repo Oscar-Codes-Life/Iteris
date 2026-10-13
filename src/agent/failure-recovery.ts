@@ -1,3 +1,4 @@
+import {stateRoot} from '../state/workspace.js';
 import path from 'node:path';
 import type {IterisConfig, Ticket, TicketState} from '../types.js';
 import {ticketBranch} from '../types.js';
@@ -28,7 +29,7 @@ Plan:
 ${plan}
 Failure status: ${state.status}
 Failure reason: ${state.failureReason}
-Saved log: ${path.join(cwd, '.iteris', 'tasks', taskKey(ticket,config), 'artifacts', 'log.txt')}
+Saved log: ${path.join(stateRoot(cwd), '.iteris', 'tasks', taskKey(ticket,config), 'artifacts', 'log.txt')}
 The host prepared this branch and will commit your source changes. If the existing committed implementation is already complete, verify it and continue without an empty commit. If the issue cannot be repaired locally, explain why and stop. Print exactly <task>done</task> on its own line only after the source changes are ready for independent review.`;
 	const result = await runHarness({config, phase: 'repair', prompt: redact(prompt), cwd, timeoutMs: Math.max(1,Math.min(config.timeout*1000,(config._deadline??Date.now()+config.timeout*1000)-Date.now()-config.timeout*1000*config.recovery.finalVerificationReserve)), signal,
 		onLine: line => onLogLine(`[self-heal] ${line}`)});

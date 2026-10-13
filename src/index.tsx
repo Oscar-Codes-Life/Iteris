@@ -1,3 +1,5 @@
+import {InstanceMonitor} from './ui/InstanceMonitor.js';
+import {VERSION} from './version.js';
 import {reviewBranch} from './review/cli.js';
 import {setupCustom} from './custom/setup.js';
 import {customStatuses} from './custom/import.js';
@@ -127,20 +129,39 @@ async function main() {
 	const once=process.argv.includes('--once');
 	const args=process.argv.slice(2).filter(arg=>arg!=='--once');
 	const [command, argument, ...extra] = args;
+	if (command === '--version' || command === '-V') {
+		console.log(VERSION);
+		return;
+	}
 	if (command === '--help' || command === '-h') {
-		console.log('iteris [--once] [setup | refresh | resume | status [task-key] | doctor | evidence <task-key> <receipt.json> | cancel <task-key> | review [standard|deep|audit] | harness [claude|codex] | model [id] | effort [level]]');
+		console.log('iteris [--version | --help] [--once] [setup | refresh | resume | status [task-key] | doctor | evidence <task-key> <receipt.json> | cancel <task-key> | review [standard|deep|audit] | harness [claude|codex] | model [id] | effort [level] | workspace [local|worktree] | parallel [1-8] | instances]');
 		return;
 	}
 	let config = await loadConfig();
 	await migrateLegacyRuns(process.cwd(),config);
 	if(once)config.continuation.watch=false;
+	if (command === 'instances') {
+		if (argument) throw new Error('Usage: iteris instances');
+		const instance = render(<InstanceMonitor config={config} cwd={process.cwd()} />);
+		await instance.waitUntilExit(); return;
+	}
+	if ((command === 'resume' && !argument) || (!command && (await unfinishedTickets(process.cwd(), config)).length)) {
+		if (await hasActiveRun()) {
+			const monitor = render(<InstanceMonitor config={config} cwd={process.cwd()} />);
+			await monitor.waitUntilExit(); return;
+		}
+		if (process.stdin.isTTY) {
+			const app = render(<App config={config} cwd={process.cwd()} tickets={await unfinishedTickets(process.cwd(), config)} resume />);
+			await app.waitUntilExit(); return;
+		}
+	}
 	if(command && await lifecycleCommand(command,[...args.slice(1),...(once?['--once']:[])],config,process.cwd()))return;
 	if(!command && (await unfinishedTickets(process.cwd(),config)).length){await lifecycleCommand('resume',once?['--once']:[],config,process.cwd());return;}
-	if (extra.length || ((command === 'setup' || command === 'refresh') && argument) || (command && !['setup', 'refresh', 'review', 'harness', 'model', 'effort'].includes(command))) throw new Error('Unknown command. Run iteris --help.');
+	if (extra.length || ((command === 'setup' || command === 'refresh') && argument) || (command && !['setup', 'refresh', 'review', 'harness', 'model', 'effort', 'workspace', 'parallel'].includes(command))) throw new Error('Unknown command. Run iteris --help.');
 	await printBranding();
 	if (command && command !== 'setup' && command !== 'refresh' && command !== 'review') {
 		config = await configure(command, argument);
-		console.log(`Saved: ${selectionLabel(config)}`);
+		console.log(`Saved: ${selectionLabel(config)} · ${config.workspace.mode} · ${config.workspace.concurrency} parallel slots`);
 		return;
 	}
 	if (await hasActiveRun()) throw new Error('An Iteris queue is already running here. Use iteris harness/model/effort to change pending settings.');

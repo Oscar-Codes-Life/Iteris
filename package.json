@@ -1,19 +1,30 @@
 {
   "name": "iteris",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Autonomous ticket shipper powered by Claude Code and Codex",
   "license": "MIT",
   "type": "module",
+  "homepage": "https://github.com/Oscar-Codes-Life/Iteris#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Oscar-Codes-Life/Iteris.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Oscar-Codes-Life/Iteris/issues"
+  },
+  "packageManager": "pnpm@10.28.0",
+  "files": ["dist", "assets/iteris-icon.png", "assets/Iteris-cover.png", "assets/instances-preview.png", "CHANGELOG.md", "docs/lifecycle.md", "docs/examples", "docs/releases", "docs/releasing.md"],
   "bin": {
     "iteris": "./dist/index.js"
   },
   "scripts": {
-    "build": "tsc",
-    "postbuild": "echo '#!/usr/bin/env node' | cat - dist/index.js > dist/index.tmp && mv dist/index.tmp dist/index.js && chmod +x dist/index.js",
+    "build": "node scripts/build.mjs",
     "dev": "tsc --watch",
     "typecheck": "tsc --noEmit",
     "test": "npm run build && node --test --test-concurrency=4 tests/*.test.mjs",
-    "eval:review": "npm run build && node eval/review/run.mjs"
+    "eval:review": "npm run build && node eval/review/run.mjs",
+    "release:check": "node scripts/check-release.mjs",
+    "prepack": "npm run build && npm run release:check"
   },
   "engines": {
     "node": ">=22"

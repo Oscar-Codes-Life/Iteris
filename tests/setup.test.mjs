@@ -11,8 +11,8 @@ import {temporary,environment,executable,config} from './helpers.mjs';
 test('first setup follows harness/model/effort order and saves selections',async t=>{
  const cwd=await temporary(t);environment(t,{PATH:cwd});await executable(cwd,'claude','process.exitCode=0');resetReadiness();
  const cfg=config();cfg.setupComplete=false;await atomicWriteConfig(cfg,cwd);const questions=[];
- const result=await setupHarness(cwd,async(title,options)=>{questions.push(title);return title==='Which harness?'?'claude':title==='Which model?'?'sonnet':'medium';});
- assert.deepEqual(questions,['Which harness?','Which model?','Which effort level?']);assert.equal(result.harnesses.claude.model,'sonnet');assert.equal(result.harnesses.claude.effort,'medium');
+ const result=await setupHarness(cwd,async(title,options)=>{questions.push(title);return title==='Which harness?'?'claude':title==='Which model?'?'sonnet':title==='Default workspace?'?'local':'medium';});
+ assert.deepEqual(questions,['Which harness?','Which model?','Which effort level?','Default workspace?']);assert.equal(result.harnesses.claude.model,'sonnet');assert.equal(result.harnesses.claude.effort,'medium');
 });
 test('returning user needs no picker; direct model command can repair unavailable saved model',async t=>{
  const cwd=await temporary(t);environment(t,{PATH:cwd});await executable(cwd,'claude','process.exitCode=0');resetReadiness();await atomicWriteConfig(config(),cwd);
@@ -53,4 +53,12 @@ test('a dead queue lock is reclaimed once while a live queue remains exclusive',
  assert.equal(await hasActiveRun(cwd),true);
  await attempts.find(result=>result.status==='fulfilled').value();
  assert.equal(await hasActiveRun(cwd),false);
+});
+
+test('project-local prerequisite checks never change process-wide PATH',async t=>{
+ const cwd=await temporary(t),bin=path.join(cwd,'.iteris/tools/bin');await mkdir(bin,{recursive:true});
+ environment(t,{PATH:'/usr/bin:/bin'});await executable(bin,'claude','process.exitCode=0');resetReadiness();
+ const cfg=config();delete cfg.harnesses.claude.model;await atomicWriteConfig(cfg,cwd);const original=process.env.PATH;let asked=false;
+ await prepareHarness(cfg,async()=>{asked=true;assert.equal(process.env.PATH,original);return 'opus';},cwd);
+ assert.equal(asked,true);assert.equal(process.env.PATH,original);
 });

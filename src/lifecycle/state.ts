@@ -1,3 +1,4 @@
+import {stateRoot} from '../state/workspace.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile, rename, unlink, readdir } from 'node:fs/promises';
 import path from 'node:path';
@@ -52,6 +53,7 @@ export type ExternalAction = {
     commit: string;
 };
 export type TaskRun = {
+    workspace?: {mode: 'local' | 'worktree'; path: string};
     version: 1;
     key: string;
     repository: string;
@@ -113,7 +115,7 @@ export function sourceIdentity(ticket: Ticket, config: IterisConfig): NonNullabl
 const canonicalIdentity = (repository: string, source: NonNullable<Ticket['source']>) => [repository, source.provider, source.namespace, source.id];
 export const taskKey = (ticket: Ticket, config: IterisConfig) => hash(canonicalIdentity(config.repo, sourceIdentity(ticket, config)));
 export const taskFingerprint = (ticket: Ticket) => ticket.custom ? hash(ticket.custom.fingerprint) : hash([ticket.title, ticket.body, [...ticket.labels].sort()]);
-export const runPath = (cwd: string, key: string) => path.join(cwd, '.iteris', 'tasks', key, 'run.json');
+export const runPath = (cwd: string, key: string) => path.join(stateRoot(cwd), '.iteris', 'tasks', key, 'run.json');
 export async function atomicJson(file: string, value: unknown): Promise<void> {
     await mkdir(path.dirname(file), { recursive: true });
     const temporary = `${file}.${randomUUID()}.tmp`;
@@ -127,7 +129,7 @@ export async function atomicJson(file: string, value: unknown): Promise<void> {
 }
 // Validate identity-bearing fields on read. Never accept arbitrary run paths or outbox targets.
 const sourceSchema = z.object({ provider: z.enum(['github', 'trello', 'custom', 'command']), namespace: z.string().min(1), id: z.string().min(1), issueId: z.string().optional(), projectItemId: z.string().optional(), repository: z.string().optional() });
-const storedSchema = z.object({ version: z.literal(1), key: z.string().regex(/^[a-f0-9]{64}$/), repository: z.string(), source: sourceSchema, fingerprint: z.string(), ticket: z.object({ number: z.number(), title: z.string(), body: z.string(), labels: z.array(z.string()), slug: z.string(), htmlUrl: z.string() }).passthrough(), branch: z.string(), state: z.enum(['queued', 'active', 'waiting', 'blocked', 'complete', 'cancelled']), phase: z.string(), requirements: z.array(z.object({ id: z.string(), stage: z.string() }).passthrough()), evidence: z.array(z.object({ id: z.string(), commit: z.string(), success: z.boolean() }).passthrough()), dependencies: z.array(z.object({ id: z.string(), nextRetryAt: z.string() }).passthrough()), retries: z.array(z.unknown()), actions: z.array(z.object({ target: sourceSchema }).passthrough()), artifacts: z.string(), createdAt: z.string(), updatedAt: z.string() }).passthrough();
+const storedSchema = z.object({ workspace: z.object({mode: z.enum(['local', 'worktree']), path: z.string()}).optional(), version: z.literal(1), key: z.string().regex(/^[a-f0-9]{64}$/), repository: z.string(), source: sourceSchema, fingerprint: z.string(), ticket: z.object({ number: z.number(), title: z.string(), body: z.string(), labels: z.array(z.string()), slug: z.string(), htmlUrl: z.string() }).passthrough(), branch: z.string(), state: z.enum(['queued', 'active', 'waiting', 'blocked', 'complete', 'cancelled']), phase: z.string(), requirements: z.array(z.object({ id: z.string(), stage: z.string() }).passthrough()), evidence: z.array(z.object({ id: z.string(), commit: z.string(), success: z.boolean() }).passthrough()), dependencies: z.array(z.object({ id: z.string(), nextRetryAt: z.string() }).passthrough()), retries: z.array(z.unknown()), actions: z.array(z.object({ target: sourceSchema }).passthrough()), artifacts: z.string(), createdAt: z.string(), updatedAt: z.string() }).passthrough();
 export async function readRun(cwd: string, key: string): Promise<TaskRun | undefined> {
     if (!/^[a-f0-9]{64}$/.test(key))
         throw new Error('Invalid task key');
@@ -135,8 +137,12 @@ export async function readRun(cwd: string, key: string): Promise<TaskRun | undef
         const parsed = storedSchema.parse(JSON.parse(await readFile(runPath(cwd, key), 'utf8'))) as unknown as TaskRun;
         if (parsed.key !== key || hash(canonicalIdentity(parsed.repository, parsed.source)) !== key || parsed.actions.some(a => JSON.stringify(a.target) !== JSON.stringify(parsed.source)))
             throw new Error('Task identity or outbox target mismatch');
-        if (!path.resolve(parsed.artifacts).startsWith(path.resolve(cwd, '.iteris') + path.sep))
+        if (!path.resolve(parsed.artifacts).startsWith(path.resolve(stateRoot(cwd), '.iteris') + path.sep))
             throw new Error('Run artifacts escape project state directory');
+        // Runs from before worktree support were implemented in the launching
+        // checkout. Changing the default must not relocate their active branch.
+        if (!parsed.workspace && (parsed.implementation || parsed.publication || parsed.plan))
+            parsed.workspace = {mode: 'local', path: stateRoot(cwd)};
         return parsed;
     }
     catch (error) {
@@ -155,7 +161,7 @@ export async function saveRun(cwd: string, run: TaskRun): Promise<void> {
 export async function listRuns(cwd: string, repository?: string): Promise<TaskRun[]> {
     let entries: string[];
     try {
-        entries = await readdir(path.join(cwd, '.iteris', 'tasks'));
+        entries = await readdir(path.join(stateRoot(cwd), '.iteris', 'tasks'));
     }
     catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT')
