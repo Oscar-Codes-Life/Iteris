@@ -55,6 +55,13 @@ for(const columns of [50,80,120]) test(`instances render long titles and paths w
  stdout.columns=columns===120?50:120;stdout.emit('resize');await wait(80);assert.ok(frames.length>=2);
 });
 
+test('worktree queues open the Instances view with the configured parallel limit',async t=>{
+ const cwd=await temporary(t),cfg=config();cfg.workspace={mode:'worktree',concurrency:4};await atomicWriteConfig(cfg,cwd);
+ const ui=terminal(t,React.createElement(App,{config:await loadConfig(cwd),tickets:[],cwd}));await wait(100);
+ assert.match(ui.output(),/Worktrees · up to 4 parallel tasks/);
+ assert.match(ui.output(),/No instances yet/);
+});
+
 test('live view switches tabs and saves a worktree default for the next queue',async t=>{
  const cwd=await temporary(t),cfg=config();await atomicWriteConfig(cfg,cwd);
  const ui=terminal(t,React.createElement(App,{config:cfg,tickets:[],cwd}));await wait(100);
