@@ -15,6 +15,8 @@ const statusIcons: Record<string, string> = {
   blocked: "!",
   incomplete: "?",
   waiting: "◷",
+  retrying: "↻",
+  recovering: "↻",
   cancelled: "−",
 };
 
@@ -32,6 +34,8 @@ const statusColors: Record<string, string> = {
   blocked: "red",
   incomplete: "yellow",
   waiting: "yellow",
+  retrying: "yellow",
+  recovering: "cyan",
   cancelled: "gray",
 };
 
@@ -71,8 +75,11 @@ export function TicketRow({ state }: TicketRowProps) {
       {state.prNumber && <Text color="cyan">PR #{state.prNumber}</Text>}
       {state.reviewPending && <Text color="yellow">({state.reviewPending})</Text>}
       {state.remaining?.length && <Text dimColor>{state.remaining.length} requirements remaining</Text>}
-      {state.failureReason && (["failed", "stale", "blocked", "incomplete", "waiting"].includes(state.status)) && (
+      {state.failureReason && (["failed", "stale", "blocked", "incomplete", "waiting", "retrying"].includes(state.status)) && (
         <Text dimColor>({state.failureReason})</Text>
+      )}
+      {state.status === "retrying" && state.attempt?.nextRetryAt && (
+        <Text dimColor>fresh instance after {new Date(state.attempt.nextRetryAt).toLocaleTimeString()}</Text>
       )}
     </Box>
   );

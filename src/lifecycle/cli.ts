@@ -36,7 +36,7 @@ export async function lifecycleCommand(command: string, args: string[], config: 
         process.on('SIGINT', abort);
         process.on('SIGTERM', abort);
         try {
-            await runWorker({ config, cwd, once: args.includes('--once'), force: true, signal: controller.signal, callbacks: { onStatusChange(_, state) { console.log(`${state.ticket.title}: ${state.status}${state.failureReason ? ` — ${state.failureReason}` : ''}`); }, onLogLine(_, line) { console.log(line); }, onComplete() { }, onFailure: async () => 'skip' } });
+            await runWorker({ config, cwd, once: args.includes('--once'), force: true, signal: controller.signal, callbacks: { onStatusChange(_, state) { console.log(`${state.ticket.title}: ${state.status}${state.failureReason ? ` — ${state.failureReason}` : ''}`); }, onLogLine(_, line) { console.log(line); }, onComplete() { } } });
         }
         finally {
             process.off('SIGINT', abort);

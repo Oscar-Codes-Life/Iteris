@@ -59,6 +59,8 @@ export function decodeEvent(harness: 'claude' | 'codex', line: string): Normaliz
 export async function runHarness(options: {
 	config: IterisConfig; phase: Phase; prompt: string; cwd: string; timeoutMs: number;
 	images?: string[];
+	/** Overrides recovery.idleTimeout (milliseconds); 0 disables stall detection. */
+	idleTimeoutMs?: number;
 	onLine?: (line: string) => void; onProcess?: (process: ChildProcess) => void; signal?: AbortSignal;
 }): Promise<ProcessResult> {
 	const {command, args, env} = invocation(options.config, options.phase, options.images);
@@ -76,9 +78,20 @@ export async function runHarness(options: {
 		const abort = () => {error = 'Cancelled'; stop();};
 		options.signal?.addEventListener('abort', abort, {once: true});
 		const timer = setTimeout(() => {timedOut = true; error = 'Process timed out'; stop();}, options.timeoutMs);
+		// A stalled instance is killed early instead of consuming the whole task allowance.
+		// The failure is journaled and a fresh instance continues from the preserved state.
+		const idleMs = (options.idleTimeoutMs ?? (options.config.recovery?.idleTimeout ?? 0) * 1000);
+		let idleTimer: NodeJS.Timeout | undefined;
+		const touch = () => {
+			if (!(idleMs > 0) || idleMs >= options.timeoutMs) return;
+			clearTimeout(idleTimer);
+			idleTimer = setTimeout(() => {timedOut = true; error = `Process stalled: no output for ${Math.round(idleMs / 1000)}s`; stop();}, idleMs);
+		};
+		touch();
 		const stdout = createInterface({input: proc.stdout});
 		const stderr = createInterface({input: proc.stderr});
 		stdout.on('line', line => {
+			touch();
 			const event = decodeEvent(options.config.harness, redact(line));
 			if (event.failed) error = event.failed;
 			if (event.log) options.onLine?.(event.log);
@@ -89,12 +102,12 @@ export async function runHarness(options: {
 				options.onLine?.(event.assistant);
 			}
 		});
-		stderr.on('line', line => {const safe=redact(line);options.onLine?.(`[stderr] ${safe}`);if(/sandbox/i.test(safe)&&/unavailable|not supported|missing|cannot initialize|required.*fail|operation not permitted/i.test(safe))error=`Local permission capability unavailable: ${safe}`;});
+		stderr.on('line', line => {touch();const safe=redact(line);options.onLine?.(`[stderr] ${safe}`);if(/sandbox/i.test(safe)&&/unavailable|not supported|missing|cannot initialize|required.*fail|operation not permitted/i.test(safe))error=`Local permission capability unavailable: ${safe}`;});
 		proc.stdin.on('error', err => {if ((err as NodeJS.ErrnoException).code !== 'EPIPE') error = err.message;});
 		proc.on('error', err => {error = err.message;});
 		// close occurs after stdout/stderr drain, including a final unterminated line.
 		proc.on('close', async (code, signal) => {
-			clearTimeout(timer); clearTimeout(killTimer);
+			clearTimeout(timer); clearTimeout(killTimer); clearTimeout(idleTimer);
 			options.signal?.removeEventListener('abort', abort);
 			try{await verifyAuthority();}catch(failure){error=failure instanceof Error?failure.message:String(failure);}
 			const success = code === 0 && !signal && !error && !timedOut;

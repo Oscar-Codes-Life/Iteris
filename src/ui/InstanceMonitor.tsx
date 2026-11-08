@@ -4,6 +4,7 @@ import {open, readFile} from 'node:fs/promises';
 import path from 'node:path';
 import type {IterisConfig, TicketState} from '../types.js';
 import {listRuns} from '../lifecycle/state.js';
+import {retryScheduled} from '../lifecycle/attempts.js';
 import {hasActiveRun} from '../state/active.js';
 import {Instances} from './Instances.js';
 
@@ -18,7 +19,7 @@ export async function readInstances(cwd: string, config: IterisConfig): Promise<
 			const file = await open(path.join(run.artifacts, 'log.txt'), 'r');
 			try {const {size} = await file.stat(); const buffer = Buffer.alloc(Math.min(size, 8192)); await file.read(buffer, 0, buffer.length, Math.max(0, size - buffer.length)); logLines = buffer.toString('utf8').trimEnd().split('\n').slice(-50);} finally {await file.close();}
 		} catch { /* no output yet */ }
-		const status: TicketState['status'] = run.state === 'complete' ? 'done' : run.state === 'queued' ? 'pending' : run.state === 'active' ? active ? saved.status ?? 'running' : 'waiting' : run.state;
+		const status: TicketState['status'] = run.state === 'complete' ? 'done' : run.state === 'queued' ? 'pending' : run.state === 'active' ? active ? saved.status ?? 'running' : 'waiting' : retryScheduled(run) ? 'retrying' : run.state;
 		return {...saved, ticket: run.ticket, runKey: run.key, branch: run.branch, workspace: run.workspace, status, logLines,
 			startedAt: saved.startedAt ? new Date(saved.startedAt) : undefined,
 			elapsedMs: run.state === 'active' && active && saved.startedAt ? Date.now() - new Date(saved.startedAt).getTime() : saved.elapsedMs ?? 0,

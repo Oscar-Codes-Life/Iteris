@@ -42,7 +42,8 @@ async function fixture(t) {
   else if (args.join(' ') !== 'api user --silent') process.exitCode = 1;
  `);
  // Use only fixture credentials and binaries; no real login or API calls.
- const env = {...process.env, PATH: `${tools}${path.delimiter}${process.env.PATH}`, GH_TOKEN: '', GITHUB_TOKEN: '', NO_COLOR: '1', FORCE_COLOR: '0'};
+ // CI=false: under CI=true (GitHub Actions) Ink renders only the final frame, hiding interactive prompts.
+ const env = {...process.env, PATH: `${tools}${path.delimiter}${process.env.PATH}`, GH_TOKEN: '', GITHUB_TOKEN: '', NO_COLOR: '1', FORCE_COLOR: '0', CI: 'false'};
  return {cwd, tools, env};
 }
 

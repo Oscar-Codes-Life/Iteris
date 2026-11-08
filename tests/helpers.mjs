@@ -47,11 +47,43 @@ if (args[0] === 'app-server') {
   if (delay) await new Promise(resolve=>setTimeout(resolve,delay));
   const mode=process.env.FAKE_MODE;
   if(mode==='hang') {setInterval(()=>{},1000); return;}
-  if (process.env.FAKE_IMPLEMENT === '1' && prompt.startsWith('You are an autonomous') && mode !== 'fail') {
+  // CHAOS_DIR: deterministic fault injection per ticket and attempt for backlog soak tests.
+  let chaos='';
+  if (process.env.CHAOS_DIR && (prompt.startsWith('You are an autonomous') || prompt.startsWith('ITERIS_FAILURE_RECOVER'))) {
+   const recovering=prompt.startsWith('ITERIS_FAILURE_RECOVER');
+   const number=Number((prompt.match(/Ticket: #(\\d+)/)||[])[1]);
+   const counter=path.join(process.env.CHAOS_DIR,number+(recovering?'-recover':'-implement'));
+   const count=(fs.existsSync(counter)?Number(fs.readFileSync(counter,'utf8')):0)+1;
+   fs.writeFileSync(counter,String(count));
+   const faults=['crash','stall','dirty','broken','ratelimit'];
+   if (!recovering) chaos=count<=number%5?faults[(number+count)%faults.length]:'';
+   else chaos=number%3===0&&count===1?'crash':'repair';
+   fs.appendFileSync(path.join(process.env.CHAOS_DIR,'events.jsonl'),JSON.stringify({number,phase:recovering?'recover':'implement',count,fault:chaos||'none'})+'\\n');
+  }
+  if (chaos==='stall') {setInterval(()=>{},1000); return;}
+  if (chaos==='dirty') {
    const git=(...args)=>require('node:child_process').execFileSync('git',args,{stdio:'pipe'});
    const branch=prompt.match(/otherwise create it: \`([^\`]+)\`/)[1];
    try {git('checkout',branch);} catch {git('checkout','-b',branch,'main');}
-   fs.writeFileSync('feature.txt','implemented '+branch+'\\n');git('add','feature.txt');
+   fs.writeFileSync('feature.txt','partial work\\n');
+  }
+  if (chaos==='repair') {
+   const git=(...args)=>require('node:child_process').execFileSync('git',args,{stdio:'pipe'});
+   const branch=prompt.match(/Ticket branch: (\\S+)/)[1];
+   if (require('node:child_process').execFileSync('git',['branch','--show-current'],{encoding:'utf8'}).trim()!==branch) git('checkout',branch);
+   fs.writeFileSync('feature.txt','fixed by recovery '+Date.now()+'\\n');git('add','feature.txt');git('commit','-qm','recover');
+  }
+  if (process.env.FAKE_DIRTY === '1' && prompt.startsWith('You are an autonomous')) {
+   const git=(...args)=>require('node:child_process').execFileSync('git',args,{stdio:'pipe'});
+   const branch=prompt.match(/otherwise create it: \`([^\`]+)\`/)[1];
+   try {git('checkout',branch);} catch {git('checkout','-b',branch,'main');}
+   fs.writeFileSync('feature.txt','partial work\\n');
+  }
+  if (process.env.FAKE_IMPLEMENT === '1' && prompt.startsWith('You are an autonomous') && mode !== 'fail' && !['crash','dirty','ratelimit'].includes(chaos)) {
+   const git=(...args)=>require('node:child_process').execFileSync('git',args,{stdio:'pipe'});
+   const branch=prompt.match(/otherwise create it: \`([^\`]+)\`/)[1];
+   try {git('checkout',branch);} catch {git('checkout','-b',branch,'main');}
+   fs.writeFileSync('feature.txt',(chaos==='broken'?'broken':process.env.FAKE_FEATURE||'implemented '+branch)+'\\n');git('add','feature.txt');
    git('commit','--allow-empty','-qm','implement');
   }
   let text=prompt.startsWith('Inspect this task')?'Implementation plan':prompt.startsWith('Write a high-value pull request description')?'## Summary\\n- Adds useful behavior.\\n\\n## Changes\\n- Updates the implementation.':prompt.startsWith('You are summarizing')?'Session summary':'<task>done</task>';
@@ -110,10 +142,11 @@ if (args[0] === 'app-server') {
    fs.writeFileSync('feature.txt','recovered\\n');git('add','feature.txt');git('commit','-qm','recover failed ticket');
   }
   let event=harness==='codex'?{type:'item.completed',item:{type:'agent_message',text}}:{type:'assistant',message:{content:[{type:'text',text}]}};
+  if (chaos==='ratelimit') event=harness==='codex'?{type:'error',message:'rate limit exceeded (429)'}:{type:'result',is_error:true,result:'rate limit exceeded (429)'};
   if(mode==='tool') event=harness==='codex'?{type:'item.completed',item:{type:'command_execution',aggregated_output:'<task>done</task>'}}:{type:'user',message:{content:[{type:'tool_result',content:'<task>done</task>'}]}};
   const output=mode==='malformed'?'not json':JSON.stringify(event);
   process.stdout.write(output.slice(0,7));
-  setTimeout(()=>{process.stdout.write(output.slice(7)); if((mode==='fail' && !(prompt.startsWith('ITERIS_FAILURE_RECOVER') && process.env.REVIEW_SCENARIO==='recover-ticket-failure')) || process.env.REVIEW_FAIL_PHASE === reviewPhase)process.exitCode=2;},5);
+  setTimeout(()=>{process.stdout.write(output.slice(7)); if((mode==='fail' && !(prompt.startsWith('ITERIS_FAILURE_RECOVER') && process.env.REVIEW_SCENARIO==='recover-ticket-failure')) || process.env.REVIEW_FAIL_PHASE === reviewPhase || ['crash','dirty','ratelimit'].includes(chaos))process.exitCode=2;},5);
  });
 }
 `;

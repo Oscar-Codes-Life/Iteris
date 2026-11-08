@@ -6,9 +6,25 @@
 
 ## Overview
 
-Iteris sits between a simple agent loop (Ralph, Brandon's loop) and a full platform (OpenClaw). It is not a general-purpose assistant. It does one thing: take GitHub issues in `Todo`, work them autonomously via Claude Code, and land them as reviewed PRs — with full state tracking and a clean CLI UI powered by Ink.
+Iteris sits between a simple agent loop (Ralph, Brandon's loop) and a full platform (OpenClaw). It is not a general-purpose assistant. It does one thing: take a backlog of small, well-defined tickets, work them autonomously via Claude Code or Codex, and land them as reviewed PRs — with full state tracking and a clean CLI UI powered by Ink.
 
-No GitHub Actions. No YAML pipelines. Just a local process you run.
+No GitHub Actions. No YAML pipelines. Just a local process you run, for hours or days, until the backlog is done.
+
+---
+
+## Goal and Persistence Contract
+
+**Iteris finishes the backlog.** Given a queue of tickets, it keeps working until every ticket is verified complete, explicitly cancelled, or stopped by a limit the operator configured. A failure is information, never a reason to abandon a ticket.
+
+For every attempt that fails — a crash, timeout, stalled process, failed check, blocked review, failed CI, or host error — Iteris:
+
+1. **Writes down what happened** in the ticket's attempt journal (`.iteris/tasks/<key>/attempts.md`): phase, cause, commit, review findings or failed checks, and the instance's last output.
+2. **Kills the instance.** Crashed and timed-out processes are stopped, and an instance that produces no output for `recovery.idleTimeout` seconds is killed as stalled instead of consuming the whole allowance.
+3. **Keeps the ticket's state.** The branch, commits, plan, published draft PR and evidence stay. Uncommitted partial work is committed as a checkpoint so the next attempt never starts from a dirty tree.
+4. **Starts a fresh instance** with the ticket and the journal of earlier failures in its prompt, so it can address the recorded cause instead of repeating it. If review blocked a commit, a repair instance fixes that commit before review runs again.
+5. **Moves on in the meantime.** The failed ticket is rescheduled with backoff (`continuation.initialSeconds`, doubling to `continuation.maxSeconds`), so one stubborn ticket never stalls the rest of the queue.
+
+Nothing in this loop waits for a person. Retries are unlimited by default; set `recovery.maxTaskAttempts` to stop a ticket after that many failed attempts. A stopped ticket keeps its journal, and `iteris resume` grants it a fresh budget. Waiting on genuinely external evidence (hosted CI, deployments, device checks, provider outages) is probed with the same backoff and never counts against the budget.
 
 ---
 
@@ -77,7 +93,13 @@ Iteris will exit with a clear error message on startup if `GITHUB_TOKEN` is not 
 A GitHub Issue in the configured repository with a label matching the configured `todoLabel` (default: `Todo`). Each ticket maps to one Claude Code instance, one branch, and one PR.
 
 ### Instance
-A spawned Claude Code child process assigned to a single ticket. Each instance gets a fresh context. Iteris manages its lifecycle: spawn, watch, kill on completion signal.
+A spawned Claude Code or Codex child process assigned to a single ticket. Each instance gets a fresh context. Iteris manages its lifecycle: spawn, watch, kill on completion signal, timeout, stall, or cancellation.
+
+### Attempt
+One pass of an instance over a ticket. A ticket may need many attempts; each failed attempt is journaled and followed by a fresh instance. The ticket's branch, commits, plan and evidence carry over between attempts.
+
+### Attempt Journal
+The ticket's memory of why earlier attempts failed, stored in `run.json` and rendered to `attempts.md`. The most recent entries are included in every new instance's prompt. Identical consecutive failures are folded into one entry, and older entries drop their output so the journal stays bounded across days of retries.
 
 ### State Folder
 For every ticket processed, Iteris creates a folder at `.iteris/runs/<ticket-id>-<slug>/` containing:
@@ -122,13 +144,17 @@ GitHub Issue (Todo)
    kill Claude Code process
         │
         ▼
-   update status.md (status: done)
+   independent review → publish → required CI → acceptance stages
+        │
+        ├── verified ──────────────► update status (complete) → next ticket
+        │
+        └── any failure ───────────► journal the cause in attempts.md
+                                     kill the instance, keep branch/commits/evidence
+                                     reschedule with backoff, continue the queue
+                                     fresh instance + journal ──► (back to spawn)
         │
         ▼
-   move to next ticket
-        │
-        ▼
-   all tickets done → exit
+   every ticket complete, cancelled, or stopped by maxTaskAttempts → exit
 ```
 
 ---
@@ -139,27 +165,33 @@ GitHub Issue (Todo)
 
 ```
 .iteris/
-  config.json          # local project config (overrides global)
-  runs/
-    42-add-login/
-      status.md        # current status + metadata
-      prompt.md        # prompt sent to Claude Code
-      log.txt          # full stdout/stderr log
-    87-fix-nav-bug/
-      status.md
-      prompt.md
-      log.txt
+  tasks/
+    <stable-task-key>/
+      run.json         # durable task state, including the attempt journal
+      status.md        # generated view of requirements, evidence and dependencies
+      attempts.md      # generated attempt journal: what failed, why, and what happens next
+      artifacts/
+        prompt.md      # prompt sent to the latest instance
+        log.txt        # full stdout/stderr log across attempts
+        plan.md        # saved plan, reused by later attempts
+        review/        # independent review reports and checkpoints
+  pending-queue.json   # selected tickets not yet started
   progress.md          # append-only learnings across all runs (like Ralph's progress.txt)
 ```
 
+Legacy `.iteris/runs/<ticket>/` folders from earlier versions are imported conservatively and left intact.
+
 ### Status Values
 
-| Status    | Meaning                                                               |
-| --------- | --------------------------------------------------------------------- |
-| `running` | Claude Code instance is active                                        |
-| `done`    | Completed successfully, PR opened                                     |
-| `stale`   | Process died without signaling done (no `<task>done</task>` received) |
-| `failed`  | Quality checks failed or explicit error                               |
+| Status     | Meaning                                                                                      |
+| ---------- | -------------------------------------------------------------------------------------------- |
+| `running`  | An instance is active                                                                        |
+| `done`     | Verified complete: checks, independent review, publication, CI and acceptance stages passed  |
+| `retrying` | The last attempt failed and was journaled; a fresh instance is scheduled                     |
+| `waiting`  | Waiting on external evidence or a dependency (CI, deployment, provider access), probed with backoff |
+| `blocked`  | Stopped by `recovery.maxTaskAttempts` or disabled recovery; needs attention or `iteris resume`  |
+| `stale`    | Display status for a pass whose process died without signaling done                          |
+| `failed`   | Display status for a pass that failed; the ticket itself moves to `retrying`                 |
 
 ### status.md Schema
 
@@ -204,14 +236,14 @@ A per-instance watcher reads stdout in real time. On detection of `<task>done</t
 3. Update `status.md` to `done`
 4. Move to next ticket
 
-### Timeout
+### Timeout and stalls
 
-Each instance has a configurable timeout (default: 20 minutes). On timeout:
+Each attempt has a configurable allowance (`timeout`, default: 2 hours) and a stall limit (`recovery.idleTimeout`, default: 30 minutes without output). On either:
 
 1. Kill the process
-2. Update `status.md` to `stale`
-3. Log timeout event to `log.txt`
-4. Continue to next ticket
+2. Journal the attempt as `stale` with the cause and the last output
+3. Commit any partial work as a checkpoint on the ticket branch
+4. Reschedule the ticket for a fresh instance and continue to the next ticket
 
 ### Clean Interrupt
 
@@ -294,10 +326,10 @@ The UI renders live in the terminal using Ink. No static log spam.
  Total time: 1h 12m
 ```
 
-### Error / Stale View
+### Retrying View
 
 ```
- ⚠️   #44 — Refactor API layer     stale     timed out after 20m — skipped
+ ↻   #44 — Refactor API layer     retrying  (Attempt 2 failed during running: Process stalled: no output for 1800s)  fresh instance after 14:05
 ```
 
 ---
@@ -356,23 +388,21 @@ iteris/
 
 - Not a GitHub Actions replacement — it runs locally
 - Not a general-purpose AI assistant — it only ships GitHub tickets
-- Not a multi-agent system — one ticket, one instance, sequential
+- Not a multi-agent system — one ticket, one instance at a time (tickets may run in parallel worktrees)
 - Not a platform — no gateway, no channels, no companion apps
 - Not opinionated about your stack — quality check commands are fully configurable
 
 ---
 
-## Out of Scope (v1)
+## Out of Scope
 
-- Parallel ticket processing (multiple simultaneous Claude Code instances)
 - Web dashboard
 - Slack / Discord notifications
-- Auto-retry on stale tickets
-- Self-healing (detecting bad code and re-running)
 - Support for GitLab or Linear
+- A background daemon: the loop runs while the foreground `iteris` process runs
 
 ---
 
 ## Success Criteria
 
-A successful Iteris run takes a list of GitHub issues labeled `Todo`, works through them one by one without human intervention, and leaves behind a set of open PRs — each on its own branch, each referencing the original ticket, each with a clean commit history and passing quality checks.
+A successful Iteris run takes a backlog of tickets, works through all of them without human intervention — retrying failed attempts with fresh instances that know why earlier attempts failed — and leaves behind a set of verified PRs, each on its own branch, each referencing the original ticket, each passing its quality checks and independent review. The measure is verified completion across the whole backlog, not PRs opened.

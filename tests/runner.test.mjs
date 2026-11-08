@@ -8,7 +8,7 @@ import {generatePrDescription} from '../dist/agent/pr-description.js';
 import {runCodeReview} from '../dist/agent/reviewer.js';
 import {captureContext} from '../dist/review/context.js';
 import {runAllTickets} from '../dist/agent/runner.js';
-import {taskKey} from '../dist/lifecycle/state.js';
+import {taskKey,readRun} from '../dist/lifecycle/state.js';
 import {prepareEnvironment} from '../dist/lifecycle/environment.js';
 import {loadPendingQueue} from '../dist/state/queue.js';
 import {temporary,environment,executable,config,fakeAgent,reviewRepository} from './helpers.mjs';
@@ -174,16 +174,20 @@ test('an existing branch PR is reused without generating a replacement descripti
  await runAllTickets([ticket(1)],cfg,cwd,{onStatusChange(){},onLogLine(){},onComplete(){},onFailure:async()=>assert.fail('unexpected failure')},undefined,{...services(),findPr:async()=>({url:'https://example.com/existing',number:3}),createPr:async()=>assert.fail('must not create a duplicate PR'),addLabel:async()=>{},moveCard:async()=>{}});
  const calls=(await readFile(path.join(cwd,'calls.jsonl'),'utf8')).trim().split('\n').map(JSON.parse);assert.equal(calls.some(call=>call.prompt.startsWith('Write a high-value pull request description')),false);
 });
-test('changes apply at next ticket; retry retains original harness',async t=>{
+test('changes apply at next ticket; immediate repair of a failed attempt retains original harness',async t=>{
  const {cwd}=await reviewRepository(t);for(const h of ['claude','codex'])await executable(cwd,h,fakeAgent);
- environment(t,{PATH:`${cwd}:${process.env.PATH}`,FAKE_IMPLEMENT:'1',FAKE_MODE:'fail',CAPTURE:path.join(cwd,'calls.jsonl')});
- const cfg=config('claude');cfg.planMode=false;await atomicWriteConfig(cfg,cwd);let changed=false;
- await runAllTickets([ticket(1),ticket(2)],cfg,cwd,{onStatusChange(){},onLogLine(){},onComplete(){},beforeTicket:()=>loadConfig(cwd),onFailure:async()=>{
-  assert.equal(changed,false);changed=true;process.env.FAKE_MODE='normal';await updateConfig(c=>{c.harness='codex';},cwd);return 'retry';
- }},undefined,services());
+ environment(t,{PATH:`${cwd}:${process.env.PATH}`,FAKE_IMPLEMENT:'1',FAKE_MODE:'fail',REVIEW_SCENARIO:'recover-ticket-failure',CAPTURE:path.join(cwd,'calls.jsonl')});
+ const cfg=config('claude');cfg.planMode=false;await atomicWriteConfig(cfg,cwd);let changed=false;const api=services();
+ await runAllTickets([ticket(1),ticket(2)],cfg,cwd,{onStatusChange(_,state){if(state.status==='recovering')delete process.env.FAKE_MODE;},onLogLine(){},onComplete(){},beforeTicket:()=>loadConfig(cwd),onAttemptFailed:async(number,state)=>{
+  assert.equal(changed,false);assert.equal(number,1);assert.equal(state.attempt.disposition,'retry');changed=true;await updateConfig(c=>{c.harness='codex';},cwd);
+ }},undefined,api);
+ assert.equal(changed,true);assert.equal(api.created.length,2);
  const calls=(await readFile(path.join(cwd,'calls.jsonl'),'utf8')).trim().split('\n').map(JSON.parse);
- assert.deepEqual(calls.map(call=>call.harness),[...Array(8).fill('claude'),...Array(6).fill('codex')]);
- assert.equal(calls.filter(call=>call.prompt.startsWith('ITERIS_FAILURE_RECOVER')).length,1);
+ const firstCodex=calls.findIndex(call=>call.harness==='codex');
+ assert.ok(firstCodex>0);assert.ok(calls.slice(0,firstCodex).every(call=>call.harness==='claude'));assert.ok(calls.slice(firstCodex).every(call=>call.harness==='codex'));
+ const recovery=calls.filter(call=>call.prompt.startsWith('ITERIS_FAILURE_RECOVER'));
+ assert.equal(recovery.length,1);assert.equal(recovery[0].harness,'claude');assert.match(recovery[0].prompt,/Previous attempts on this task/);assert.match(recovery[0].prompt,/Process exited with 2/);
+ const run=await readRun(cwd,taskKey(ticket(1),cfg));assert.equal(run.state,'complete',run.reason);assert.equal(run.attempts.length,1);
 });
 test('Trello completion uses same pipeline without GitHub issue labeling',async t=>{
  const {cwd}=await reviewRepository(t);await executable(cwd,'codex',fakeAgent);environment(t,{PATH:`${cwd}:${process.env.PATH}`,FAKE_IMPLEMENT:'1',FAKE_MODE:undefined});

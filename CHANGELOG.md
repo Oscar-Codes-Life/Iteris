@@ -2,6 +2,28 @@
 
 User-visible changes are recorded here. Iteris uses [Semantic Versioning](https://semver.org/); configuration format versions are independent of the application version.
 
+## [Unreleased]
+
+### Changed
+
+- A failed attempt no longer abandons its task or waits for input. Iteris journals the cause, stops the instance, keeps the branch, commits, plan and evidence, reschedules the task with backoff, and starts a fresh instance whose prompt includes the journal. The **Retry/Skip** dialog is removed; failed tasks show **retrying**.
+- Blocked reviews, failed CI repairs, workspace and host errors, and exhausted setup budgets are retried instead of becoming permanently blocked. When review blocked a commit, a repair instance fixes it before review runs again.
+- The implementation prompt no longer tells agents to commit failing work and move on. Checks that genuinely cannot run locally must be reported, not skipped.
+- Tasks left blocked by earlier versions rejoin the attempt loop automatically.
+
+### Added
+
+- Per-task attempt journal in `run.json`, rendered to `.iteris/tasks/<key>/attempts.md` and summarized in `iteris status`.
+- `recovery.idleTimeout` (default 1800 seconds) kills instances that stop producing output.
+- `recovery.maxTaskAttempts` (default `0`, unlimited) optionally stops a task after repeated failures; `iteris resume` grants a fresh budget.
+- Uncommitted partial work from a crashed instance is committed as a checkpoint so the next attempt starts from it.
+- `npm run test:soak`, run in CI: a 20-ticket chaotic backlog must drain to zero without human input.
+
+### Fixed
+
+- Exhausting the task allowance after every check passed no longer blocks a verified task; a fresh readiness check completes it.
+- An unexpected host error in one task no longer stops the whole queue.
+
 ## [1.1.0] — 2026-10-13
 
 ### Added

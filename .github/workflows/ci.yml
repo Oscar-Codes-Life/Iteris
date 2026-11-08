@@ -34,6 +34,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm run typecheck
       - run: pnpm test
+      - run: pnpm run test:soak
       - run: pnpm run release:check
       - run: npm pack --dry-run
       - run: git diff --exit-code

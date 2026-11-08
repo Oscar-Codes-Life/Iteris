@@ -21,14 +21,15 @@ import {generatePrDescription, ticketReference} from './pr-description.js';
 import {captureContext, publishReviewed, assertPublished, savedPlan,git} from '../review/context.js';
 import {loadPassedReview, previousEvidence, saveJson} from '../review/report.js';
 import {runHarness} from '../harness/process.js';
-import {ensureRun, saveRun, taskKey, waitFor, renderRun, recordFailure,clearVerifiedLocalDependencies} from '../lifecycle/state.js';
+import {ensureRun, saveRun, readRun, taskKey, waitFor, renderRun, recordFailure,clearVerifiedLocalDependencies, type TaskRun} from '../lifecycle/state.js';
 import {extractRequirements, verificationPack, addEvidence, reconcileEvidence} from '../lifecycle/requirements.js';
 import {prepareEnvironment,persistedManifest,CapabilityUnavailable,setupBudget} from '../lifecycle/environment.js';
 import {advanceCompletion, publishCompletionView, type CompletionServices} from '../lifecycle/stages.js';
 import {setGithubDraft} from '../lifecycle/github-verification.js';
 import {resolveTaskConfig} from '../lifecycle/config.js';
 import {classifyFailure} from '../lifecycle/failures.js';
-import {prepareBranch,commitSourceChanges} from '../lifecycle/commit.js';
+import {prepareBranch,commitSourceChanges,checkpointPartialWork} from '../lifecycle/commit.js';
+import {recordAttempt,consumeRetry,attemptBriefing,retryScheduled,type AttemptInput} from '../lifecycle/attempts.js';
 import {planningSchema,applyPlanningPack} from '../lifecycle/planning.js';
 import {parseOrRecoverReport} from './schema-recovery.js';
 import {importLegacyArtifacts} from '../lifecycle/migration.js';
@@ -39,7 +40,12 @@ export type RunnerCallbacks = {
 	onStatusChange: (ticketNumber: number, state: TicketState) => void;
 	onLogLine: (ticketNumber: number, line: string) => void;
 	onComplete: (ticketNumber: number, state: TicketState) => void;
-	onFailure: (ticketNumber: number, state: TicketState) => Promise<'retry' | 'skip'>;
+	/**
+	 * Notification only. A failed attempt never waits for a person: the host
+	 * journals it, stops the instance, keeps the task state, and schedules a
+	 * fresh instance that receives the journal.
+	 */
+	onAttemptFailed?: (ticketNumber: number, state: TicketState) => void | Promise<void>;
 	beforeTicket?: () => Promise<IterisConfig>;
 };
 export type RunnerServices = CompletionServices & {findPr: typeof findPrForBranch; createPr: typeof createPullRequest; addLabel: typeof addLabelToIssue; moveCard: typeof moveCardOnComplete; updateReview?: typeof updatePrReview};
@@ -82,48 +88,78 @@ export async function runAllTickets(tickets: Ticket[], config: IterisConfig, cwd
 			const root = stateRoot(cwd);
 			const folder = await createRunFolder(root, ticket, snapshot);
 			const run = await ensureRun(root, ticket, snapshot, folder, ticketBranch(ticket));
+			const notifyFailure = async (state: TicketState) => {
+				try {await callbacks.onAttemptFailed?.(ticket.number, state);} catch (error) {callbacks.onLogLine(ticket.number, `[iteris] Attempt notification failed: ${String(error)}`);}
+			};
+			// Journal a failure outside runSingleTicket (workspace, recovery or host errors).
+			const journal = async (input: AttemptInput, base: Partial<TicketState> = {}) => {
+				const current = await readRun(root, run.key) ?? run;
+				if (['complete', 'cancelled'].includes(current.state)) return;
+				const record = recordAttempt(current, snapshot, input);
+				await saveRun(root, current);
+				const state: TicketState = {ticket, runKey: current.key, branch: current.branch, workspace: current.workspace, logLines: [], elapsedMs: 0, ...base,
+					status: record.disposition === 'stopped' ? 'blocked' : record.disposition === 'retry' ? 'retrying' : 'waiting', failureReason: current.reason, attempt: attemptView(record)};
+				callbacks.onStatusChange(ticket.number, state);
+				await notifyFailure(state);
+				return record;
+			};
 			let taskCwd: string;
 			const workspaceLogs: string[] = [];
 			try {
 				taskCwd = await prepareTaskWorkspace(root, run, snapshot, line => {workspaceLogs.push(line); callbacks.onLogLine(ticket.number, line);});
 			} catch (error) {
-				run.state = 'blocked'; run.reason = String(error); await saveRun(root, run);
-				callbacks.onStatusChange(ticket.number, {ticket, runKey: run.key, status: 'blocked', branch: run.branch, workspace: run.workspace, failureReason: run.reason, logLines: [], elapsedMs: 0});
+				// A workspace failure is an attempt failure like any other: record it and retry later.
+				await journal({phase: 'workspace', status: 'failed', kind: 'environment', reason: `Task workspace could not be prepared: ${error instanceof Error ? error.message : String(error)}`, logTail: workspaceLogs});
 				return;
 			}
 			if (workspaceLogs.length) await appendLog(folder, workspaceLogs.join('\n') + '\n');
-			await inTaskWorkspace(root, run.key, async () => {
-				const cwd = taskCwd;
-				const checkpoint: TicketCheckpoint = {logs: workspaceLogs};
-				const recoveryAttempts = new Map<string, number>();
-				let schemaRetryCount = 0;
-				let retry = true;
-				while (retry && !controller.signal.aborted) {
-					const result = await runSingleTicket(ticket, snapshot, cwd, callbacks, controller.signal, services, checkpoint);
-					const failed = ['failed', 'stale', 'blocked', 'incomplete'].includes(result.status) && !result.prUrl;
-					if (!failed || controller.signal.aborted) {retry = false; continue;}
-					if (isSchemaReportFailure(result.failureReason) && schemaRetryCount < snapshot.recovery.attempts && Date.now() < (snapshot._deadline ?? Infinity)) {
-						const delayMs = Math.min(60_000, 1_000 * 2 ** Math.min(schemaRetryCount++, 6));
-						callbacks.onStatusChange(ticket.number, {...result, status: 'recovering'});
-						callbacks.onLogLine(ticket.number, `[iteris] Schema recovery needs another attempt; retrying ticket #${ticket.number} in ${delayMs / 1000}s without repeating implementation.`);
-						await waitForSchemaRetry(delayMs, controller.signal);
-						retry = !controller.signal.aborted;
-						continue;
-					}
-					schemaRetryCount = 0;
-					const failureKey = classifyFailure(result.failureReason??result.status,result.status).signature;
-					const attempts = recoveryAttempts.get(failureKey) ?? 0;
-					if (attempts < snapshot.recovery.attempts && snapshot.recovery.enabled && Date.now() < (snapshot._deadline ?? Infinity) && snapshot.review?.maxRepairCycles !== 0 && !result.failureReason?.includes('Invalid review report')) {
+			try {
+				await inTaskWorkspace(root, run.key, async () => {
+					const cwd = taskCwd;
+					const checkpoint: TicketCheckpoint = {logs: workspaceLogs};
+					const recoveryAttempts = new Map<string, number>();
+					let schemaRetryCount = 0;
+					while (!controller.signal.aborted) {
+						const result = await runSingleTicket(ticket, snapshot, cwd, callbacks, controller.signal, services, checkpoint);
+						// Completed, cancelled, or waiting on external evidence: nothing failed.
+						if (controller.signal.aborted || !result.attempt) break;
+						await notifyFailure(result);
+						// Published drafts and dependency waits continue through the worker with a fresh instance.
+						if (result.prUrl || result.attempt.disposition !== 'retry') break;
+						if (isSchemaReportFailure(result.failureReason) && schemaRetryCount < snapshot.recovery.attempts && Date.now() < (snapshot._deadline ?? Infinity)) {
+							const delayMs = Math.min(60_000, 1_000 * 2 ** Math.min(schemaRetryCount++, 6));
+							callbacks.onStatusChange(ticket.number, {...result, status: 'recovering'});
+							callbacks.onLogLine(ticket.number, `[iteris] Schema recovery needs another attempt; retrying ticket #${ticket.number} in ${delayMs / 1000}s without repeating implementation.`);
+							await waitForSchemaRetry(delayMs, controller.signal);
+							continue;
+						}
+						schemaRetryCount = 0;
+						const failureKey = classifyFailure(result.failureReason??result.status,result.status).signature;
+						const attempts = recoveryAttempts.get(failureKey) ?? 0;
+						// Immediate repair stays within this task allowance. Anything beyond it
+						// is a later fresh attempt with its own allowance, scheduled already.
+						if (!(attempts < snapshot.recovery.attempts && snapshot.recovery.enabled && Date.now() < (snapshot._deadline ?? Infinity) && snapshot.review?.maxRepairCycles !== 0 && !result.failureReason?.includes('Invalid review report'))) break;
 						recoveryAttempts.set(failureKey, attempts + 1);
 						callbacks.onStatusChange(ticket.number, {...result, status: 'recovering'});
-						const folder = path.join(stateRoot(cwd), '.iteris', 'tasks', taskKey(ticket,snapshot),'artifacts');
-						const recovered = await recoverFailedTicket({ticket, config: snapshot, cwd, state: result, plan: checkpoint.plan ?? await savedPlan(folder), signal: controller.signal,
-							onLogLine: line => callbacks.onLogLine(ticket.number, line)});
-						if (recovered) {checkpoint.implemented = true; retry = true; continue;}
+						const artifacts = path.join(stateRoot(cwd), '.iteris', 'tasks', taskKey(ticket,snapshot),'artifacts');
+						const recoveryLog: string[] = [], outcome: {reason?: string} = {};
+						const recovered = await recoverFailedTicket({ticket, config: snapshot, cwd, state: {...result, status: result.attempt.status as TicketState['status']}, plan: checkpoint.plan ?? await savedPlan(artifacts), signal: controller.signal,
+							history: attemptBriefing(await readRun(root, run.key)), outcome,
+							onLogLine: line => {recoveryLog.push(line); callbacks.onLogLine(ticket.number, line);}});
+						if (recovered) {checkpoint.implemented = hasCommittedWork(cwd, snapshot.baseBranch); continue;}
+						if (controller.signal.aborted) break;
+						const reason = outcome.reason ?? 'Recovery instance could not repair the failure';
+						await journal({phase: 'repair', status: 'failed', kind: classifyFailure(reason, 'repair').kind, reason, head: headOf(cwd), selection: result.selection, logTail: recoveryLog}, result);
+						break;
 					}
-					retry = !controller.signal.aborted && await callbacks.onFailure(ticket.number, result) === 'retry';
-				}
-			});
+				});
+			} catch (error) {
+				if (controller.signal.aborted) return;
+				// One task's unexpected host error must not stop a queue that runs for days.
+				const reason = error instanceof Error ? error.message : String(error);
+				callbacks.onLogLine(ticket.number, `[iteris] Unexpected failure: ${reason}`);
+				try {await journal({phase: 'host', status: 'failed', kind: classifyFailure(error, 'host').kind, reason});} catch (failure) {callbacks.onLogLine(ticket.number, `[iteris] Could not record the failed attempt: ${String(failure)}`);}
+			}
 			if (controller.signal.aborted) return;
 			remaining.delete(taskKey(ticket, config));
 			if (!ownsRepositoryLock) queueWrites = queueWrites.then(() => savePendingQueue(stateRoot(cwd), config, [...remaining.values()]));
@@ -158,10 +194,43 @@ async function waitForSchemaRetry(delayMs: number, signal: AbortSignal): Promise
 
 type TicketCheckpoint = {plan?: string; implemented?: boolean; logs?: string[]};
 
+function reviewDetails(report: {findings: Array<{status: string; priority: string; category: string; file: string; line: number; title: string; duplicateOf?: string}>; checks: Array<{command: string; exitCode: number | null}>; requirements: Array<{requirement: string; status: string}>; gaps: string[]}): string[] {
+	return [
+		...report.findings.filter(finding => finding.status === 'confirmed' && !finding.duplicateOf).map(finding => `${finding.priority} ${finding.category} finding at ${finding.file}:${finding.line}: ${finding.title}`),
+		...report.checks.filter(check => check.exitCode !== 0).map(check => `failed check (exit ${check.exitCode ?? 'none'}): ${check.command}`),
+		...report.requirements.filter(requirement => requirement.status !== 'covered').map(requirement => `${requirement.status} requirement: ${requirement.requirement}`),
+		...report.gaps.map(gap => `gap: ${gap}`),
+	];
+}
+
+function headOf(cwd: string): string | undefined {
+	try {return git(cwd, ['rev-parse', 'HEAD']).trim();} catch {return undefined;}
+}
+
+/** True when the current branch carries commits beyond the configured base. */
+function hasCommittedWork(cwd: string, base: string): boolean {
+	for (const ref of [`refs/remotes/origin/${base}`, `refs/heads/${base}`]) {
+		try {return Number(git(cwd, ['rev-list', '--count', `${ref}..HEAD`]).trim()) > 0;} catch { /* try the next base ref */ }
+	}
+	return false;
+}
+
+function attemptView(record: ReturnType<typeof recordAttempt>): NonNullable<TicketState['attempt']> {
+	return {number: record.number, status: record.status, disposition: record.disposition, ...(record.nextRetryAt ? {nextRetryAt: record.nextRetryAt} : {}), ...(record.needsRepair ? {needsRepair: true} : {})};
+}
+
+/** Journal a failed pass at the point it failed, while its output and phase are known. */
+function failAttempt(run: TaskRun, config: IterisConfig, state: TicketState, cwd: string, input: Omit<AttemptInput, 'logTail' | 'selection' | 'head' | 'status'> & {status?: string}): void {
+	const record = recordAttempt(run, config, {...input, status: input.status ?? state.status, head: headOf(cwd), selection: state.selection, logTail: state.logLines});
+	state.attempt = attemptView(record);
+}
+
 async function runSingleTicket(ticket: Ticket, config: IterisConfig, cwd: string, callbacks: RunnerCallbacks, parentSignal: AbortSignal, services: RunnerServices, checkpoint: TicketCheckpoint): Promise<TicketState> {
 	const folder = await createRunFolder(cwd, ticket,config);
 	await importLegacyArtifacts(cwd,ticket,config,folder);
 	const run = await ensureRun(cwd,ticket,config,folder,ticketBranch(ticket));
+	// This pass is the scheduled fresh attempt; its outcome decides what comes next.
+	consumeRetry(run);
 	const cancellation=await cancellationScope(cwd,run.key,parentSignal),signal=cancellation.signal;
 	ticket={...ticket,branch:run.branch};run.ticket=ticket;
 	const settings = config.harnesses[config.harness];
@@ -180,6 +249,9 @@ async function runSingleTicket(ticket: Ticket, config: IterisConfig, cwd: string
 	const phase = async (status: TicketState['status']) => {state.status = status; run.phase=status;run.state='active';callbacks.onStatusChange(ticket.number, {...state}); await writeStatus(folder, state);await saveRun(cwd,run);};
 	try {
 		if(signal.aborted)throw new Error('Cancelled');
+		// A stopped or crashed instance can leave edits behind. Keep them as a
+		// checkpoint so this fresh instance continues instead of failing on a dirty tree.
+		if (checkpointPartialWork(cwd, state.branch, `Checkpoint partial work from an interrupted attempt on ${ticket.title}`)) log('[iteris] Committed partial work left by the previous instance; this attempt continues from it.');
 		run.state='active';run.phase='preflight';await saveRun(cwd,run);
 		callbacks.onStatusChange(ticket.number, {...state});
 		await writeStatus(folder, state);
@@ -189,7 +261,7 @@ async function runSingleTicket(ticket: Ticket, config: IterisConfig, cwd: string
 		const pack=verificationPack(run,config);
 		await saveJson(path.join(folder,'verification-pack.json'),JSON.parse(pack));await saveRun(cwd,run);
 		await writeFile(path.join(folder, 'execution.json'), JSON.stringify(state.selection, null, 2) + '\n');
-		const prompt = `${expandPrompt(ticket, config, await readProgress(cwd))}\n\nHost-owned task verification pack:\n${pack}\nExternal acceptance stages are verified by the host after publication. Implement all required local behavior. Do not deploy or update providers from the harness. The host prepares the branch and commits your source changes. Leave changes ready for independent review and print <task>done</task>; do not require permission to write .git or change host-owned .iteris files.`;
+		const prompt = `${expandPrompt(ticket, config, await readProgress(cwd), attemptBriefing(run))}\n\nHost-owned task verification pack:\n${pack}\nExternal acceptance stages are verified by the host after publication. Implement all required local behavior. Do not deploy or update providers from the harness. The host prepares the branch and commits your source changes. Leave changes ready for independent review and print <task>done</task>; do not require permission to write .git or change host-owned .iteris files.`;
 		await writePrompt(folder, prompt);
 		let plan = checkpoint.plan ?? run.plan ?? '';
 		if (!checkpoint.implemented) {
@@ -295,29 +367,47 @@ async function runSingleTicket(ticket: Ticket, config: IterisConfig, cwd: string
 			run.state='queued';run.phase='reconciliation';run.reason='The base changed during publication; fresh review and CI must verify the current base';
 		}else if(reviewed.report.dependencies?.length || reviewed.report.deferredToCI) {
 			for(const dependency of reviewed.report.dependencies ?? [{id:'ci',kind:'external' as const,description:reviewed.report.reason,nextAction:'Wait for CI and rerun independent review'}])waitFor(run,config,dependency.id,dependency.kind,dependency.description,dependency.nextAction);
-		}else {run.state='blocked';run.reason=reviewed.report.reason;recordFailure(run,config,'code',{files:reviewedContext.changedFiles,findings:reviewed.report.findings.filter(f=>f.status==='confirmed').map(f=>[f.category,f.file,f.line]),checks:reviewed.report.checks.filter(c=>c.exitCode!==0).map(c=>c.command)},reviewedContext.stamp.head,reviewed.report.reason);}
+		}else {
+			run.state='blocked';run.reason=reviewed.report.reason;recordFailure(run,config,'code',{files:reviewedContext.changedFiles,findings:reviewed.report.findings.filter(f=>f.status==='confirmed').map(f=>[f.category,f.file,f.line]),checks:reviewed.report.checks.filter(c=>c.exitCode!==0).map(c=>c.command)},reviewedContext.stamp.head,reviewed.report.reason);
+			// The draft stays published; a fresh instance repairs this commit later with the findings.
+			const reviewerFailure=/timed out|deadline exceeded|stalled|Process exited|Cancelled|reviewer failed|ENOENT|spawn/i.test(reviewed.report.reason);
+			failAttempt(run,config,state,cwd,{phase:'reviewing',status:reviewed.report.outcome,kind:reviewed.report.checks.some(c=>c.exitCode!==0)?'test':'code',reason:`Review ${reviewed.report.outcome}: ${reviewed.report.reason}`,details:reviewDetails(reviewed.report),needsRepair:reviewed.report.outcome==='blocked'||!reviewerFailure});
+		}
 		if(!reviewPassed || baseChanged)await publishCompletionView(config,run,cwd,services);
 		const completionState=run.state,completionPhase=run.phase;
 		await phase('summarizing'); run.state=completionState;await logWrites;
 		try {await generateSummary(folder, config, cwd, undefined, signal);} catch (error) {log(`Summary failed: ${String(error)}`);}
 		run.phase=completionPhase;
 		if (signal.aborted) throw new Error('Cancelled');
-		state.status = String(run.state)==='complete' ? 'done' : String(run.state)==='waiting' ? 'waiting' : 'blocked';
+		state.status = String(run.state)==='complete' ? 'done' : retryScheduled(run) ? 'retrying' : String(run.state)==='waiting' ? 'waiting' : 'blocked';
 		state.remaining=run.requirements.filter(r=>r.status!=='verified').map(r=>r.text);state.failureReason=run.reason;
 		await appendProgress(cwd, `#${ticket.number} (${ticket.title}) — ${run.state}; PR ${pr.url}; ${run.reason ?? 'all required evidence verified'}`);
 	} catch (error) {
-		if(error instanceof CapabilityUnavailable){waitFor(run,config,'preflight','environment',error.message,error.nextAction);state.status='waiting';}
+		const failedStatus = state.status === 'stale' ? 'stale' : state.status === 'blocked' || state.status === 'incomplete' ? state.status : 'failed';
+		const failedPhase = run.phase;
+		if(error instanceof CapabilityUnavailable){
+			waitFor(run,config,'preflight','environment',error.message,error.nextAction);state.status='waiting';
+			if(!signal.aborted)failAttempt(run,config,state,cwd,{phase:failedPhase,status:'waiting',kind:'environment',reason:error.message,schedule:false});
+		}
 		else {
 			const failure=classifyFailure(error,run.phase),reason=error instanceof Error?error.message:String(error);
-			if(!signal.aborted && ['transport','capability','environment','external'].includes(failure.kind)){waitFor(run,config,run.phase,failure.kind,reason,failure.nextAction);state.status='waiting';}
+			if(!signal.aborted && ['transport','capability','environment','external'].includes(failure.kind)){
+				waitFor(run,config,run.phase,failure.kind,reason,failure.nextAction);state.status='waiting';
+				failAttempt(run,config,state,cwd,{phase:failedPhase,status:'waiting',kind:failure.kind,reason,schedule:false});
+			}
 			else if(/Remote base changed|Base changed/i.test(reason)){run.state='queued';run.phase='reconciliation';run.reason=reason;state.status='waiting';}
-			else {run.state=signal.aborted?'queued':'blocked';run.reason=reason;}
+			else if(signal.aborted){run.state='queued';run.reason=reason;}
+			// The instance is already stopped. Record why, keep the branch and evidence, and schedule a fresh instance.
+			else failAttempt(run,config,state,cwd,{phase:failedPhase,status:failedStatus,kind:failure.kind,reason});
 		}
-		state.status = state.status==='waiting' ? 'waiting' : signal.aborted ? 'cancelled' : state.status === 'stale' ? 'stale' : state.status === 'blocked' || state.status === 'incomplete' ? state.status : 'failed';
+		state.status = state.status==='waiting' ? 'waiting' : signal.aborted ? 'cancelled' : failedStatus;
+		if (!signal.aborted && state.attempt?.disposition === 'retry') state.status = 'retrying';
+		else if (state.attempt?.disposition === 'stopped') state.status = 'blocked';
 		state.failureReason = error instanceof Error ? error.message : String(error);
 		log(`[iteris] ${state.failureReason}`);
+		if (state.attempt) log(`[iteris] ${run.reason}`);
 	} finally {
-		if(cancellation.cancelled()){run.state='cancelled';run.phase='cancelled';run.reason='Cancelled explicitly';state.status='cancelled';}
+		if(cancellation.cancelled()){run.state='cancelled';run.phase='cancelled';run.reason='Cancelled explicitly';state.status='cancelled';consumeRetry(run);}
 		cancellation.dispose();
 		state.finishedAt = new Date(); state.elapsedMs = Date.now() - state.startedAt!.getTime();
 		await logWrites;

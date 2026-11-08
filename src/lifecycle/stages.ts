@@ -164,7 +164,7 @@ export async function advanceCompletion(config: IterisConfig, run: TaskRun, cwd:
     const { head, base } = run.publication;
     reconcileEvidence(run, head, base);
     const priorActions = await reconcilePriorActions(config, run, cwd, signal);
-    run.dependencies = run.dependencies.filter(d => d.id !== 'publication-status');
+    run.dependencies = run.dependencies.filter(d => d.id !== 'publication-status' && d.id !== 'deadline');
     // Dependencies from earlier probes are rebuilt while preserving backoff.
     const ci = await (services.ci ?? verifyGithubCi)(config, run);
     if (ci.state === 'changed') {
@@ -241,8 +241,8 @@ export async function advanceCompletion(config: IterisConfig, run: TaskRun, cwd:
     }
     if (readyToComplete(run)) {
         if (Date.now() >= (config._deadline ?? Infinity)) {
-            run.state = 'blocked';
-            run.reason = 'Task deadline exhausted before final readiness verification';
+            // Out of time is not a verdict on the work: the next pass verifies again with a fresh allowance.
+            waitFor(run, config, 'deadline', 'external', 'Task deadline exhausted before final readiness verification', 'Verify readiness again with a fresh allowance');
             await saveRun(cwd, run);
             return;
         }

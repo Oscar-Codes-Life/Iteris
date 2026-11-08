@@ -46,7 +46,8 @@ export function App({config, tickets, cwd, resume = false}: {config: IterisConfi
 		const update = (_number: number, state: TicketState) => {setStates(previous => new Map(previous).set(state.runKey??taskKey(state.ticket,config), state));};
 		const callbacks: RunnerCallbacks = {
 			onStatusChange: update, onLogLine() {}, onComplete: update,
-			async onFailure(_number, state) {return await pick(`Ticket #${state.ticket.number}: ${state.failureReason ?? 'failed'}`, [{value: 'retry', label: 'Retry with same settings'}, {value: 'skip', label: 'Skip ticket'}]) as 'retry' | 'skip';},
+			// Failed attempts never wait for a person; they are journaled and retried by a fresh instance.
+			onAttemptFailed: update,
 			async beforeTicket() {
 				for (;;) {
 					if (controller.current.signal.aborted) throw new Error('Cancelled');
@@ -100,7 +101,7 @@ export function App({config, tickets, cwd, resume = false}: {config: IterisConfi
 		else if (input === 'q' && (finished || ![...states.values()].some(state=>activeStatuses.has(state.status)))) {controller.current.abort();exit();}
 	});
 	const active = [...states.values()].find(state => activeStatuses.has(state.status));
-	const hasFailures = [...states.values()].some(state => ['failed', 'stale', 'blocked', 'incomplete', 'waiting','cancelled'].includes(state.status));
+	const hasFailures = [...states.values()].some(state => ['failed', 'stale', 'blocked', 'incomplete', 'waiting', 'retrying', 'cancelled'].includes(state.status));
 	return <Box flexDirection="column" paddingX={1}>
 		<Text bold color="magenta">Iteris · {config.repo}</Text>
 		<Text dimColor wrap="truncate">Saved settings for the next ticket: {selectionLabel(pending)}</Text>

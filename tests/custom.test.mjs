@@ -19,7 +19,7 @@ const cfg = (harness='codex') => ({...config(harness),provider:'custom',custom})
 const ok = value => ({success:true,text:JSON.stringify(value),done:false,timedOut:false});
 const draft = {title:'Fix navigation',description:'Repair the menu',labels:['p1'],analysis:'',attachments:[]};
 async function fixture(t) {
- const cwd=await temporary(t); execFileSync('git',['init','-q',cwd]);
+ const cwd=await temporary(t); execFileSync('git',['init','-q','-b','main',cwd]);
  environment(t,{CUSTOM_TEST_KEY:'test-custom-secret'});
  return cwd;
 }

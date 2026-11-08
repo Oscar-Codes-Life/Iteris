@@ -27,7 +27,9 @@ test('custom setup stays alive after the Ink provider picker and saves typed ans
   });
   if (provider !== 'custom') throw new Error('Wrong provider selected');
   await setupCustom(await loadConfig(process.argv[1]), process.argv[1]);
- `, cwd], {cwd: fileURLToPath(new URL('..', import.meta.url)), stdio: ['pipe', 'pipe', 'pipe']});
+ `, cwd], {cwd: fileURLToPath(new URL('..', import.meta.url)), stdio: ['pipe', 'pipe', 'pipe'],
+  // Under CI=true (GitHub Actions) Ink renders only the final frame, hiding the prompts this test answers.
+  env: {...process.env, CI: 'false'}});
  t.after(() => {if (child.exitCode === null) child.kill();});
  const exited = once(child, 'exit');
  let output = '';
