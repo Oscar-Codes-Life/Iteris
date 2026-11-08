@@ -3,7 +3,7 @@ import {Box, Text, useStdout} from 'ink';
 import type {TicketState, WorkspaceSettings} from '../types.js';
 
 export const activeStatuses = new Set(['preparing', 'planning', 'running', 'reviewing', 'recovering', 'creating-pr', 'summarizing']);
-const attention = new Set(['failed', 'blocked', 'incomplete', 'stale', 'waiting']);
+const attention = new Set(['failed', 'blocked', 'incomplete', 'stale', 'waiting', 'retrying']);
 const color = (state: TicketState) => state.status === 'done' ? 'green' : attention.has(state.status) ? 'yellow' : activeStatuses.has(state.status) ? 'cyan' : 'gray';
 const icon = (state: TicketState) => state.status === 'done' ? '✓' : attention.has(state.status) ? '!' : activeStatuses.has(state.status) ? '●' : '○';
 const elapsed = (ms: number) => `${Math.floor(ms / 60000)}m ${Math.floor(ms / 1000) % 60}s`;

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import type { IterisConfig, Ticket } from '../types.js';
 import type { ExecutionManifest } from './environment.js';
+import { renderAttempts, type AttemptRecord } from './attempts.js';
 export const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 export type LifecycleState = 'queued' | 'active' | 'waiting' | 'blocked' | 'complete' | 'cancelled';
 export type FailureKind = 'code' | 'test' | 'environment' | 'transport' | 'review-protocol' | 'capability' | 'external';
@@ -104,6 +105,8 @@ export type TaskRun = {
         elapsedMs: number;
     };
     planning?: import('./planning.js').PlanningPack;
+    /** Journal of failed attempts; a fresh instance receives it in its prompt. */
+    attempts?: AttemptRecord[];
 };
 export function sourceIdentity(ticket: Ticket, config: IterisConfig): NonNullable<Ticket['source']> {
     if (ticket.source)
@@ -157,6 +160,8 @@ export async function saveRun(cwd: string, run: TaskRun): Promise<void> {
     run.updatedAt = new Date().toISOString();
     await atomicJson(runPath(cwd, run.key), run);
     await writeFile(path.join(path.dirname(runPath(cwd, run.key)), 'status.md'), renderRun(run));
+    if (run.attempts?.length)
+        await writeFile(path.join(path.dirname(runPath(cwd, run.key)), 'attempts.md'), renderAttempts(run));
 }
 export async function listRuns(cwd: string, repository?: string): Promise<TaskRun[]> {
     let entries: string[];
@@ -188,6 +193,7 @@ export async function ensureRun(cwd: string, ticket: Ticket, config: IterisConfi
             existing.plan = undefined;
             existing.planning = undefined;
             existing.retries = [];
+            existing.attempts = [];
             existing.reviewSummary = undefined;
             // Keep outstanding intent: a changed ticket cannot erase an interrupted deployment.
             existing.phase = 'preflight';
@@ -250,5 +256,5 @@ export function renderRun(run: TaskRun): string {
     const covered = run.requirements.filter(r => [...run.evidence].reverse().find(e => e.requirementId === r.id && e.commit === head && (!e.base || !base || e.base === base))?.success).length;
     const elapsed = Math.max(0, Date.parse(run.updatedAt) - Date.parse(run.createdAt));
     const verified = run.state === 'complete' && !!run.publication && covered === run.requirements.length && run.requirements.length > 0 && !run.dependencies.length && run.actions.every(a => a.status === 'verified');
-    return `# ${run.ticket.title}\n\nState: **${run.state}** · Phase: ${run.phase}\nSource: ${run.source.provider}/${run.source.namespace}/${run.source.id}\n${run.publication ? `PR: ${run.publication.url} (${run.publication.draft ? 'draft' : 'review-ready'})\n` : ''}Verified completion: ${verified ? 'yes' : 'no'}; current-commit evidence: ${covered}/${run.requirements.length}; elapsed: ${Math.round(elapsed / 1000)}s.\nReview repairs: ${run.reviewSummary?.repairs ?? 0}; setup/CI attempts: ${run.retries.filter(r => r.kind !== 'code').reduce((sum, r) => sum + r.attempts, 0)}.\n\n${run.requirements.map(r => `- [${r.status === 'verified' ? 'x' : ' '}] ${r.text} (${r.id}; ${r.stage})`).join('\n')}\n\n${run.dependencies.map(d => `- ${d.kind}: ${d.description}\n  Next action: ${d.nextAction}; last probe: ${d.lastProbe ?? 'not yet probed'}; retry: ${d.nextRetryAt}`).join('\n')}\n\n${run.evidence.map(e => `- ${e.success ? 'Verified' : 'Pending/failed'} ${e.requirementId}: ${e.provenance}, commit ${e.commit}, observed ${e.observedAt}`).join('\n')}\n`;
+    return `# ${run.ticket.title}\n\nState: **${run.state}** · Phase: ${run.phase}\nSource: ${run.source.provider}/${run.source.namespace}/${run.source.id}\n${run.publication ? `PR: ${run.publication.url} (${run.publication.draft ? 'draft' : 'review-ready'})\n` : ''}Verified completion: ${verified ? 'yes' : 'no'}; current-commit evidence: ${covered}/${run.requirements.length}; elapsed: ${Math.round(elapsed / 1000)}s.\nReview repairs: ${run.reviewSummary?.repairs ?? 0}; setup/CI attempts: ${run.retries.filter(r => r.kind !== 'code').reduce((sum, r) => sum + r.attempts, 0)}.\n${run.attempts?.length ? `Failed attempts: ${run.attempts.length}; last: ${run.attempts.at(-1)!.phase} — ${run.attempts.at(-1)!.reason.slice(0, 300)}. Journal: attempts.md\n` : ''}\n${run.requirements.map(r => `- [${r.status === 'verified' ? 'x' : ' '}] ${r.text} (${r.id}; ${r.stage})`).join('\n')}\n\n${run.dependencies.map(d => `- ${d.kind}: ${d.description}\n  Next action: ${d.nextAction}; last probe: ${d.lastProbe ?? 'not yet probed'}; retry: ${d.nextRetryAt}`).join('\n')}\n\n${run.evidence.map(e => `- ${e.success ? 'Verified' : 'Pending/failed'} ${e.requirementId}: ${e.provenance}, commit ${e.commit}, observed ${e.observedAt}`).join('\n')}\n`;
 }

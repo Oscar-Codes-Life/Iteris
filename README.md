@@ -150,8 +150,8 @@ Live `/workspace` and `/parallel` commands save defaults for the next queue. An 
 | --- | --- |
 | Ticket picker | ↑/↓ or `j`/`k` to move, Space to toggle one ticket, `a` to select or clear all, Enter to start the selected tickets. |
 | Ticket source, Project, board, and list pickers | ↑/↓ or `j`/`k` to move, Enter to select. |
-| Harness, model, effort, and retry dialogs | ↑/↓ to move, Enter to confirm, Escape or `q` to cancel. |
-| Running queue | Tab switches Queue/Instances; ↑/↓ focuses an instance; `/` enters a harness/model/effort/workspace/parallel command; `q` exits after the queue finishes. Failed tickets offer **Retry with same settings** or **Skip ticket**. |
+| Harness, model, and effort dialogs | ↑/↓ to move, Enter to confirm, Escape or `q` to cancel. |
+| Running queue | Tab switches Queue/Instances; ↑/↓ focuses an instance; `/` enters a harness/model/effort/workspace/parallel command; `q` exits after the queue finishes. Failed attempts never wait for input: the ticket shows **retrying** with the recorded cause and when a fresh instance starts. |
 
 ## Configuration and migration
 
@@ -199,7 +199,10 @@ The most useful settings to edit directly are:
 | `qualityChecks` | Shell commands that must pass on the reviewed commit, such as `npm run typecheck` and `npm test`. |
 | `review.mode`, `review.maxRepairCycles`, `review.timeout`, `review.allowNoChecks` | Set review depth, attempts per recurring issue, per-stage timeout, and the explicit no-checks exception. |
 | `pr.draft`, `pr.addLabelOnOpen` | Open a draft PR and, for GitHub tickets, optionally add a label after opening it. |
-| `timeout` | Overall local execution allowance in seconds; defaults to 7200, with 20% reserved for final verification. |
+| `timeout` | Local execution allowance per attempt in seconds; defaults to 7200, with 20% reserved for final verification. |
+| `recovery.idleTimeout` | Seconds without harness output before an instance is killed as stalled and retried; defaults to 1800, `0` disables. |
+| `recovery.maxTaskAttempts` | Failed attempts after which a ticket stops; defaults to `0`, which never gives up. |
+| `recovery.attempts` | Immediate repairs within one attempt before the ticket is rescheduled; defaults to 2. |
 
 ### Choose or change a ticket source
 
@@ -271,9 +274,21 @@ Unchanged completed tasks are unchecked by default. After a refresh, edited task
 
 ## Execution and state
 
-Each task receives a durable record and verification pack before implementation. The host prepares the branch, the harness implements within project-local permissions, and the host commits source changes. Checks and independent reviewers assess every resulting commit. Bounded recovery preserves local evidence and records unavailable capabilities separately.
+Each task receives a durable record and verification pack before implementation. The host prepares the branch, the harness implements within project-local permissions, and the host commits source changes. Checks and independent reviewers assess every resulting commit. Recovery preserves local evidence and records unavailable capabilities separately.
 
-Iteris publishes unfinished work as a draft and processes the next runnable task. A task completes only when current-commit checks, independent review, publication, required CI, explicit acceptance stages and configured source updates succeed. Waiting work resumes through the foreground worker; exhausted local repair is blocked. No background service is installed.
+Iteris publishes unfinished work as a draft and processes the next runnable task. A task completes only when current-commit checks, independent review, publication, required CI, explicit acceptance stages and configured source updates succeed. Waiting and retrying work resumes through the foreground worker. No background service is installed.
+
+### Failed attempts: journal, kill, respawn
+
+Iteris is built to finish a backlog over hours or days, so a failed attempt never abandons a ticket. When an attempt crashes, times out, stalls, fails checks or CI, or is blocked by review, Iteris:
+
+1. records the phase, cause, commit, review findings or failed checks, and the instance's last output in `.iteris/tasks/<key>/attempts.md`;
+2. stops the instance — including one that produced no output for `recovery.idleTimeout` seconds (default 1800);
+3. keeps the branch, commits, plan, draft PR and evidence, committing any uncommitted partial work as a checkpoint;
+4. reschedules the ticket with backoff and continues the queue;
+5. starts a fresh instance whose prompt includes the ticket and the journal of earlier failures. If review blocked a commit, a repair instance fixes that commit before review runs again.
+
+Within one attempt, up to `recovery.attempts` immediate repairs (default 2) run before the ticket is rescheduled. Fresh attempts are unlimited by default; set `recovery.maxTaskAttempts` to stop a ticket after that many failures. A stopped ticket keeps its journal and resumes with a fresh budget through `iteris resume`. Waits for external evidence and provider outages are probed with backoff and do not count. Tasks left blocked by earlier Iteris versions rejoin the loop automatically. Later attempts use the harness selection current when they start, so switching models with `/model` applies to a stuck ticket's next attempt.
 
 State lives in `.iteris/tasks/<stable-key>/run.json`; Markdown reports are views. Keys include repository, provider, source namespace and stable source ID. Artifacts, plans, logs and review checkpoints live under the task's `artifacts/` directory. Legacy folders remain intact during migration. See [the lifecycle guide](docs/lifecycle.md) for all commands, schemas and recovery rules.
 
@@ -296,9 +311,9 @@ Review configuration is optional and receives defaults:
 
 `deep` always adds the risk specialist. Standard mode also adds it for paths suggesting auth, credentials, migrations, shared types, subprocesses, or concurrency; this routing is a heuristic and the main pass always checks security. All required investigators run concurrently (up to three), including the risk specialist. Verification starts after they finish and has its own time allowance. Persistent blockers stop repairs early. Review and check settings edited during a queue apply at the next ticket; retries retain the active ticket settings.
 
-Valid incomplete reviews and unverified acceptance criteria enter bounded recovery. Recovery receives unverified defect candidates, can prepare code or test-setup fixes for host commits, and can request additional local test commands. The host reruns configured checks and the independent review on a changed commit. Evidence-only recovery does not require an empty commit. If recovery cannot resolve the gap, including a hosted CI prerequisite, Iteris preserves the incomplete report, opens the PR, and continues the queue. Schema recovery uses a separate read-only agent; a format error that survives correction is reported as incomplete without launching a project write agent or restarting the ticket indefinitely. Standalone review and audit commands still exit with status 1 for incomplete or blocked outcomes.
+Valid incomplete reviews and unverified acceptance criteria enter bounded recovery. Recovery receives unverified defect candidates, can prepare code or test-setup fixes for host commits, and can request additional local test commands. The host reruns configured checks and the independent review on a changed commit. Evidence-only recovery does not require an empty commit. A gap that only hosted CI can close is published as a draft and waits for CI. Any other gap recovery cannot resolve is preserved in the draft PR and the attempt journal, and the ticket is retried by a fresh instance while the queue continues. Schema recovery uses a separate read-only agent; a format error that survives correction is reported as incomplete without launching a project write agent or restarting the ticket indefinitely. Standalone review and audit commands still exit with status 1 for incomplete or blocked outcomes.
 
-The queue saves its selected tickets in `.iteris/pending-queue.json`. If Iteris is interrupted, the next `iteris` invocation reclaims a dead process lock and resumes the unfinished ticket, including its saved plan, committed implementation, and review evidence. A project failure outside the review loop launches a bounded write-capable recovery agent before asking for a manual retry. That agent must leave the ticket branch committed and clean; the normal checks and independent review still run before publication. A recovery that cannot make progress stops with the original failure instead of looping indefinitely. `iteris refresh` starts a new ticket selection.
+The queue saves its selected tickets in `.iteris/pending-queue.json`. If Iteris is interrupted, the next `iteris` invocation reclaims a dead process lock and resumes the unfinished ticket, including its saved plan, committed implementation, and review evidence. A project failure outside the review loop launches a write-capable recovery agent that receives the attempt journal. That agent must leave the ticket branch committed and clean; the normal checks and independent review still run before publication. A recovery that cannot make progress is journaled and the ticket is rescheduled for a fresh instance rather than retried in a tight loop. `iteris refresh` starts a new ticket selection.
 
 Add `REVIEW.md` to the base branch for domain invariants and path-specific review expectations. Review uses that base version supplied inline as `context.policy`, so a branch cannot weaken its own policy. An absent base policy is allowed and is not itself an incomplete review. A finding must cite the applicable rule. File length is an investigation signal, not an automatic blocker. Reviews see the full ticket and relevant plan, inspect committed files and callers, and must justify findings through concrete causal evidence. The verifier can confirm findings, reject false positives, or mark a finding as a duplicate of one confirmed canonical finding; it must explicitly verify that previous blockers were fixed.
 
@@ -332,7 +347,8 @@ npm run eval:review -- --case zero-default --harness codex
 | `No qualityChecks configured` | Add real commands to `qualityChecks`, or set `review.allowNoChecks` to `true` only when the change needs no executable validation. |
 | Custom tasks look stale or downloaded files are invalid | Run `iteris refresh` to fetch and convert them again. |
 | A queue reports an active or stale lock | Confirm the previous Iteris process has stopped, then remove `.iteris/active.json` if the lock is stale. |
-| A ticket has a blocked or incomplete review | Read the review report in the PR and the task artifacts directory; use `iteris status` and `iteris resume --once` to reconcile the remaining dependencies. |
+| A ticket keeps retrying | Read `.iteris/tasks/<key>/attempts.md` (the key is shown by `iteris status`) for every failed attempt's cause and last output. Fix a shared prerequisite, switch `/model`, or cancel with `iteris cancel <key>`. |
+| A ticket is blocked | It reached `recovery.maxTaskAttempts` or recovery is disabled. Read its `attempts.md`, then run `iteris resume` to grant a fresh attempt budget. |
 
 Follow [Upgrading](#upgrading) to update Iteris itself. `iteris setup` checks harness prerequisites and authentication; it does not update global tools.
 
@@ -344,9 +360,12 @@ TypeScript, Node.js 22+, React/Ink, Octokit, and Zod. Package manager: pnpm (npm
 npm run build
 npm run typecheck
 npm test
+npm run test:soak
 ```
 
 Tests build the application and use isolated fake CLI executables for discovery, update/login behavior, subprocess failures, configuration migration, setup, switching, and complete ticket lifecycles. They do not need real model calls or create real PRs.
+
+`npm run test:soak` runs a 20-ticket backlog through the real runner and worker with deterministic chaos: crashed, stalled and rate-limited instances, crashes that leave uncommitted work, implementations that review blocks, crashing recovery instances, and failed CI. It passes only when the backlog drains to zero with every ticket verified complete, one PR per ticket, and fresh instances receiving the attempt journal. It runs separately from `npm test` so its load cannot skew timing-sensitive tests.
 
 Releases use semantic versions and annotated `vX.Y.Z` tags. CI validates Linux/macOS builds and the release workflow prepares a **draft GitHub release** with a package and SHA-256 checksum. See [the release checklist](docs/releasing.md).
 

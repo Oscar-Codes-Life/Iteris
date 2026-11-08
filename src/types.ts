@@ -1,6 +1,6 @@
 import {createHash} from 'node:crypto';
 
-export type TicketStatus = 'pending' | 'preparing' | 'planning' | 'summarizing' | 'running' | 'reviewing' | 'recovering' | 'creating-pr' | 'done' | 'stale' | 'failed' | 'blocked' | 'incomplete' | 'waiting' | 'cancelled';
+export type TicketStatus = 'pending' | 'preparing' | 'planning' | 'summarizing' | 'running' | 'reviewing' | 'recovering' | 'retrying' | 'creating-pr' | 'done' | 'stale' | 'failed' | 'blocked' | 'incomplete' | 'waiting' | 'cancelled';
 
 export type Ticket = {
 	branch?: string;
@@ -32,6 +32,8 @@ export type TicketState = {
 	prNumber?: number;
 	reviewPending?: string;
 	failureReason?: string;
+	/** Set when this pass failed and was journaled; retry means a fresh instance is scheduled. */
+	attempt?: {number: number; status: string; disposition: 'retry' | 'waiting' | 'stopped'; nextRetryAt?: string; needsRepair?: boolean};
 	startedAt?: Date;
 	finishedAt?: Date;
 	logLines: string[];

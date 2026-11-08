@@ -45,3 +45,23 @@ export function commitSourceChanges(cwd: string, branch: string, message: string
     git(cwd, ['commit', '-m', message]);
     assertClean(cwd);
 }
+/**
+ * Preserve uncommitted work left by a stopped or crashed instance on the task
+ * branch so the next fresh instance starts from it instead of a dirty tree.
+ * Returns true when a checkpoint commit was created. Work on any other branch
+ * is left untouched for the existing clean-tree checks to report.
+ */
+export function checkpointPartialWork(cwd: string, branch: string, message: string): boolean {
+    let current: string;
+    try {
+        current = git(cwd, ['branch', '--show-current']).trim();
+    }
+    catch {
+        return false;
+    }
+    if (current !== branch)
+        return false;
+    const before = git(cwd, ['rev-parse', '--verify', 'HEAD']).trim();
+    commitSourceChanges(cwd, branch, message);
+    return git(cwd, ['rev-parse', '--verify', 'HEAD']).trim() !== before;
+}
