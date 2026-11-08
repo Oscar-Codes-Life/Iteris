@@ -4,9 +4,9 @@
 
 Iteris pulls tickets from **GitHub Issues, GitHub Projects, Trello, custom imports, or configured command adapters**, implements them with **Claude Code or Codex**, reviews the changes, and opens pull requests. It runs locally with a live terminal UI.
 
-**v1.1.0 · Parallel worktrees** — Run up to eight tasks in isolated checkouts, carry over local environment files, and follow every task in the new Instances view.
+**v1.2.0 · Finish the backlog** — A failed attempt no longer stops a ticket. Iteris records the cause, stops the instance, keeps the work, and starts a fresh instance with that history until every ticket is done. Also includes parallel worktrees and the Instances view.
 
-[Release notes](docs/releases/v1.1.0.md) · [Changelog](CHANGELOG.md) · [Upgrade](#upgrading) · [Release process](docs/releasing.md)
+[Release notes](docs/releases/v1.2.0.md) · [Changelog](CHANGELOG.md) · [Upgrade](#upgrading) · [Release process](docs/releasing.md)
 
 ![Instances view with three sample tasks running in parallel](assets/instances-preview.png)
 
@@ -17,10 +17,10 @@ Iteris pulls tickets from **GitHub Issues, GitHub Projects, Trello, custom impor
 ## Installation
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Oscar-Codes-Life/Iteris/v1.1.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Oscar-Codes-Life/Iteris/v1.2.0/install.sh | bash
 ```
 
-Requires macOS/Linux, Node.js 22+, Git, and [GitHub CLI](https://cli.github.com/). The installer checks out the **v1.1.0 tag** in `~/.iteris`, builds it, and links `iteris` globally. It prefers pnpm with the committed lockfile and falls back to npm. Run `iteris --version` to check your installation.
+Requires macOS/Linux, Node.js 22+, Git, and [GitHub CLI](https://cli.github.com/). The installer checks out the **v1.2.0 tag** in `~/.iteris`, builds it, and links `iteris` globally. It prefers pnpm with the committed lockfile and falls back to npm. Run `iteris --version` to check your installation.
 
 For a user-owned installation, create a directory on your `PATH` and set `ITERIS_BIN_DIR` to it. `ITERIS_INSTALL_DIR` overrides the checkout location. The default symlink location, `/usr/local/bin`, may require sudo.
 
@@ -63,7 +63,11 @@ curl -fsSL https://raw.githubusercontent.com/Oscar-Codes-Life/Iteris/master/inst
 iteris --version
 ```
 
-The installer preserves local source edits by refusing to overwrite them. Project settings, task history, and worktrees live in your project and remain in place. Configuration format stays at version 3; existing projects continue in local mode until you opt in:
+The installer preserves local source edits by refusing to overwrite them. Project settings, task history, and worktrees live in your project and remain in place. Configuration format stays at version 3.
+
+**Upgrading to 1.2.0.** Failed tickets now retry with fresh instances until they finish instead of stopping or asking Retry/Skip. Tickets that an earlier version left blocked are picked up again on the next queue or `iteris resume`. No configuration change is required. To cap retries, set `recovery.maxTaskAttempts`; see [Failed attempts](#failed-attempts-journal-kill-respawn). Before running an earlier version again, remove `recovery.maxTaskAttempts` and `recovery.idleTimeout` from `.iteris.json`.
+
+Existing projects continue in local mode until you opt in to parallel worktrees:
 
 ```bash
 cd your-repository
@@ -372,7 +376,7 @@ Releases use semantic versions and annotated `vX.Y.Z` tags. CI validates Linux/m
 ## Uninstall
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Oscar-Codes-Life/Iteris/v1.1.0/install.sh | bash -s -- --uninstall
+curl -fsSL https://raw.githubusercontent.com/Oscar-Codes-Life/Iteris/v1.2.0/install.sh | bash -s -- --uninstall
 ```
 
 ## License

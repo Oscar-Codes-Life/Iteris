@@ -2,7 +2,7 @@
 
 User-visible changes are recorded here. Iteris uses [Semantic Versioning](https://semver.org/); configuration format versions are independent of the application version.
 
-## [Unreleased]
+## [1.2.0] — 2026-11-08
 
 ### Changed
 
@@ -23,8 +23,18 @@ User-visible changes are recorded here. Iteris uses [Semantic Versioning](https:
 
 - Exhausting the task allowance after every check passed no longer blocks a verified task; a fresh readiness check completes it.
 - An unexpected host error in one task no longer stops the whole queue.
+- The test suite no longer depends on the CI runner's `CI` variable or Git default branch.
+
+### Compatibility
+
+- Node.js 22 or newer is required, as before. Configuration remains version 3 and needs no migration; the new `recovery` keys have defaults.
+- Behavior change: failed tasks are retried until they finish instead of stopping. To cap retries, set `recovery.maxTaskAttempts`. Set `recovery.idleTimeout` to `0` to disable the stall watchdog.
+- Existing task records load unchanged. Tasks that 1.1.0 left blocked are picked up again on the next queue or `iteris resume`.
+- Before running an earlier version again, remove `recovery.maxTaskAttempts` and `recovery.idleTimeout` from `.iteris.json`; 1.2.0 may write them when it saves settings. See [release notes](docs/releases/v1.2.0.md).
 
 ## [1.1.0] — 2026-10-13
+
+This release was prepared but never tagged, so the tagged installer cannot select it. Version 1.2.0 includes all of its changes.
 
 ### Added
 
@@ -57,4 +67,5 @@ The package identified itself as 1.0.0 before formal tagged releases. This entry
 - GitHub Issues/Projects, Trello, custom REST imports, and configured command adapters.
 - Configurable completion evidence, recovery, and persisted task continuation.
 
-[1.1.0]: https://github.com/Oscar-Codes-Life/Iteris/releases/tag/v1.1.0
+[1.2.0]: https://github.com/Oscar-Codes-Life/Iteris/releases/tag/v1.2.0
+[1.1.0]: https://github.com/Oscar-Codes-Life/Iteris/tree/10d99983109b3b54e89859ea56645dab7d006451

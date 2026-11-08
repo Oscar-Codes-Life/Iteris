@@ -4,11 +4,11 @@ Every release has a semantic version, an annotated Git tag, user-facing notes, a
 
 ## Version policy
 
-- **Patch** for compatible fixes: `1.1.0` → `1.1.1`.
-- **Minor** for compatible new capabilities: `1.1.0` → `1.2.0`.
-- **Major** for breaking behavior or configuration changes: `1.1.0` → `2.0.0`.
+- **Patch** for compatible fixes: `1.2.0` → `1.2.1`.
+- **Minor** for compatible new capabilities: `1.2.0` → `1.3.0`.
+- **Major** for breaking behavior or configuration changes: `1.2.0` → `2.0.0`.
 
-Application versions and `.iteris.json` format versions are separate. Do not increment the configuration format unless its schema requires migration. The first tagged release is v1.1.0; earlier development used an untagged 1.0.0 package baseline.
+Application versions and `.iteris.json` format versions are separate. Do not increment the configuration format unless its schema requires migration. The first tagged release is v1.2.0. Version 1.1.0 was prepared but never tagged, and earlier development used an untagged 1.0.0 package baseline.
 
 ## Prepare the release commit
 
@@ -33,13 +33,13 @@ Application versions and `.iteris.json` format versions are separate. Do not inc
 After the release commit is approved and the working tree is clean, create an annotated tag on that commit. For example, for this release:
 
 ```bash
-git tag -a v1.1.0 -m "Iteris v1.1.0 — Parallel worktrees"
+git tag -a v1.2.0 -m "Iteris v1.2.0 — Finish the backlog"
 ```
 
 When ready to share the release commit and tag:
 
 ```bash
-git push --atomic origin master v1.1.0
+git push --atomic origin master v1.2.0
 ```
 
 If branch protection requires a PR, merge through that process first and tag the merged release commit instead. Never tag an older commit that lacks the release changes, and never move a published tag.
@@ -58,4 +58,4 @@ The **Prepare release** workflow runs the full CI matrix (Node 22 on Linux/macOS
 
 Ship corrections with a new patch version and tag. Do not replace assets on published releases.
 
-To opt out of parallel execution, run `iteris workspace local` for future queues. To install another compatible tagged release, pass `--version X.Y.Z` to the installer. Finish active work first and check that release's configuration compatibility. v1.1.0 is the first tag, so there is no v1.0.0 tag to roll back to. Keep project state and retained worktrees until their work is resolved.
+To opt out of parallel execution, run `iteris workspace local` for future queues. To stop a ticket from retrying, cancel it with `iteris cancel <key>` or set `recovery.maxTaskAttempts`. To install another compatible tagged release, pass `--version X.Y.Z` to the installer. Finish active work first and check that release's configuration compatibility. v1.2.0 is the first tag, so there is no earlier tag to roll back to. Keep project state and retained worktrees until their work is resolved.
