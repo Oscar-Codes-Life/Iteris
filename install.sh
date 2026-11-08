@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-RELEASE_VERSION="1.1.0"
+RELEASE_VERSION="1.2.0"
 INSTALL_DIR="${ITERIS_INSTALL_DIR:-$HOME/.iteris}"
 BIN_LINK="${ITERIS_BIN_DIR:-/usr/local/bin}/iteris"
 REPO_URL="https://github.com/Oscar-Codes-Life/Iteris.git"
@@ -22,14 +22,14 @@ fail()  { echo -e "${RED}[iteris]${RESET} $1"; exit 1; }
 # Each installer selects its own release, never an unversioned branch build.
 case "${1:-}" in
   --version)
-    [[ $# -eq 2 ]] || fail "Usage: install.sh [--version 1.1.0 | --uninstall]"
+    [[ $# -eq 2 ]] || fail "Usage: install.sh [--version 1.2.0 | --uninstall]"
     RELEASE_VERSION="${2#v}"
     ;;
   --uninstall) [[ $# -eq 1 ]] || fail "Usage: install.sh --uninstall" ;;
   "") ;;
   *) fail "Unknown option: $1. Use --version <version> or --uninstall." ;;
 esac
-[[ "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "Expected a stable version such as 1.1.0."
+[[ "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "Expected a stable version such as 1.2.0."
 RELEASE_TAG="v$RELEASE_VERSION"
 
 # ------------------------------------------------------------------
