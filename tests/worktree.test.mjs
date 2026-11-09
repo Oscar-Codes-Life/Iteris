@@ -149,3 +149,17 @@ test('duplicate source entries cannot schedule concurrent writers in the same wo
  await assert.rejects(runAllTickets([ticket(1),ticket(1)],cfg,cwd,{...callbacks,beforeTicket:async()=>{attempts++;throw new Error('Prerequisite unavailable');}}),/Prerequisite unavailable/);
  assert.equal(attempts,1);assert.equal((await loadPendingQueue(cwd,cfg)).length,1);assert.equal(await hasActiveRun(cwd),false);
 });
+test('a worktree whose directory was deleted is restored from its task branch',async t=>{
+ const {rm}=await import('node:fs/promises'),{ensureRun}=await import('../dist/lifecycle/state.js');
+ const {cwd,git}=await reviewRepository(t),cfg=config('codex');cfg.workspace={mode:'worktree',concurrency:1};
+ const run=await ensureRun(cwd,ticket(7),cfg,path.join(cwd,'.iteris/artifacts'),'iteris/7-ticket-7');
+ const first=await prepareTaskWorkspace(cwd,run,cfg);
+ await writeFile(path.join(first,'work.txt'),'kept\n');git('-C',first,'add','work.txt');git('-C',first,'commit','-qm','task work');
+ // Deleting .iteris removes the checkout and the saved run, but Git keeps the registration and the branch.
+ await rm(path.join(cwd,'.iteris'),{recursive:true,force:true});
+ const logs=[],again=await ensureRun(cwd,ticket(7),cfg,path.join(cwd,'.iteris/artifacts'),'iteris/7-ticket-7');
+ const second=await prepareTaskWorkspace(cwd,again,cfg,line=>logs.push(line));
+ assert.equal(second,first);assert.equal(await readFile(path.join(second,'work.txt'),'utf8'),'kept\n');
+ assert.ok(logs.some(line=>/Restored the deleted worktree/.test(line)));
+ assert.equal(await prepareTaskWorkspace(cwd,again,cfg),first);
+});

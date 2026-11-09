@@ -60,7 +60,15 @@ export async function prepareTaskWorkspace(root: string, run: TaskRun, config: I
 	const relative = `.iteris/worktrees/${run.key}`;
 	await safeParents(root, relative, true);
 	const destination = path.join(await realpath(root), relative);
-	const existing = git(root, ['worktree', 'list', '--porcelain', '-z']).split('\0\0').find(record => record.split('\0').includes(`worktree ${destination}`));
+	const registered = () => git(root, ['worktree', 'list', '--porcelain', '-z']).split('\0\0').find(record => record.split('\0').includes(`worktree ${destination}`));
+	let existing = registered();
+	// The directory was deleted (for example with .iteris) but Git still lists it.
+	// Drop the stale registration and check the task branch out again; its commits are intact.
+	if (existing && !await lstat(destination).catch(error => {if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;})) {
+		git(root, ['worktree', 'prune']);
+		existing = registered();
+		if (!existing) log(`[worktree] Restored the deleted worktree for ${run.branch}.`);
+	}
 	if (existing) {
 		if ((await lstat(destination)).isSymbolicLink() || !existing.split('\0').includes(`branch refs/heads/${run.branch}`)) throw new Error('Saved worktree no longer has the task branch; restore it before resuming.');
 	} else {

@@ -7,6 +7,7 @@ User-visible changes are recorded here. Iteris uses [Semantic Versioning](https:
 ### Fixed
 
 - Trusted review context larger than `verification.maxContextCharacters` is detected before any instance starts. Previously every attempt implemented the task, failed when preparing the review, and was retried indefinitely. The task now waits with the configured and actual sizes, and continues once the limit is raised.
+- A task whose worktree directory was deleted (for example by removing `.iteris/`) is checked out again from its branch. Previously every attempt failed with `ENOENT` while preparing the workspace.
 
 ## [1.2.0] — 2026-11-08
 
