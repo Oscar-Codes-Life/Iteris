@@ -18,7 +18,7 @@ import {generateSummary} from './summarizer.js';
 import {runCodeReview} from './reviewer.js';
 import {recoverFailedTicket} from './failure-recovery.js';
 import {generatePrDescription, ticketReference} from './pr-description.js';
-import {captureContext, publishReviewed, assertPublished, savedPlan,git} from '../review/context.js';
+import {captureContext, assertContextBudget, publishReviewed, assertPublished, savedPlan,git} from '../review/context.js';
 import {loadPassedReview, previousEvidence, saveJson} from '../review/report.js';
 import {runHarness} from '../harness/process.js';
 import {ensureRun, saveRun, readRun, taskKey, waitFor, renderRun, recordFailure,clearVerifiedLocalDependencies, type TaskRun} from '../lifecycle/state.js';
@@ -255,6 +255,8 @@ async function runSingleTicket(ticket: Ticket, config: IterisConfig, cwd: string
 		run.state='active';run.phase='preflight';await saveRun(cwd,run);
 		callbacks.onStatusChange(ticket.number, {...state});
 		await writeStatus(folder, state);
+		// A configuration the review cannot use fails here, before setup or any instance spends time on it.
+		assertContextBudget(config, cwd);
 		run.environment=persistedManifest(await prepareEnvironment(config,cwd,signal,log,setupBudget(cwd,run,config)));
 		run.dependencies=run.dependencies.filter(d=>d.kind!=='environment' && d.id!=='preflight');
 		for(const requirement of extractRequirements(ticket,config))if(!run.requirements.some(r=>r.id===requirement.id))run.requirements.push(requirement);

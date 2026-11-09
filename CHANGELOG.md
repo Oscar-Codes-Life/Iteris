@@ -2,6 +2,12 @@
 
 User-visible changes are recorded here. Iteris uses [Semantic Versioning](https://semver.org/); configuration format versions are independent of the application version.
 
+## [Unreleased]
+
+### Fixed
+
+- Trusted review context larger than `verification.maxContextCharacters` is detected before any instance starts. Previously every attempt implemented the task, failed when preparing the review, and was retried indefinitely. The task now waits with the configured and actual sizes, and continues once the limit is raised.
+
 ## [1.2.0] — 2026-11-08
 
 ### Changed

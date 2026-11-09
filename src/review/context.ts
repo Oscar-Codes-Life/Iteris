@@ -49,21 +49,14 @@ export function assertClean(cwd: string): void {
 	if (unexpected.length) throw new Error('Working tree has uncommitted changes. Preserve and commit or resolve them before review.');
 }
 export type ReviewContext = {stamp: ReviewStamp; ticket: Ticket; plan: string; policy: string; checks: string[]; checkIds:string[]; changedFiles: string[]; diff: string; risk: string[]; requirements:ReturnType<typeof extractRequirements>};
-export function captureContext(ticket: Ticket, config: IterisConfig, cwd: string, plan = '', branch = ticketBranch(ticket)): ReviewContext {
-	assertClean(cwd);
-	const current = git(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD']).trim();
-	if (current !== branch) throw new Error(`Expected branch ${branch}; found ${current}.`);
-	const head = git(cwd, ['rev-parse', 'HEAD']).trim();
-	let base = '';
+function resolveBase(config: IterisConfig, cwd: string): string {
 	for (const ref of [`refs/remotes/origin/${config.baseBranch}`, `refs/heads/${config.baseBranch}`]) {
-		try {base = git(cwd, ['rev-parse', '--verify', `${ref}^{commit}`]).trim(); break;} catch { /* try local */ }
+		try {return git(cwd, ['rev-parse', '--verify', `${ref}^{commit}`]).trim();} catch { /* try local */ }
 	}
-	if (!base) throw new Error(`Cannot resolve review base ${config.baseBranch}.`);
-	const mergeBase = git(cwd, ['merge-base', base, head]).trim();
-	const changedFiles = git(cwd, ['diff', '--name-only', '-z', '--no-renames', mergeBase, head]).split('\0').filter(Boolean);
-	if (!changedFiles.length) throw new Error('No committed changes to review against the configured base.');
-	const diff = git(cwd, ['diff', '--no-ext-diff', '--no-textconv', '--no-color', '--no-renames', '--unified=5', mergeBase, head]);
-	Object.assign(config,resolveTaskConfig(config,ticket,changedFiles));
+	return '';
+}
+/** Policy and context files as committed on the base; a branch cannot rewrite its own review rules. */
+function trustedPolicy(config: IterisConfig, cwd: string, base: string): string {
 	let policy = '';
 	for (const file of [...new Set([...config.verification.policyFiles,...config.verification.contextFiles])]) {
 		if (file.includes('..') || path.isAbsolute(file)) throw new Error('Trusted context files must be repository-relative');
@@ -73,7 +66,31 @@ export function captureContext(ticket: Ticket, config: IterisConfig, cwd: string
 			policy += `\n## ${file}\n${git(cwd, ['show', `${base}:${file}`])}`;
 		}
 	}
-	if (policy.length > config.verification.maxContextCharacters) throw new Error(`Trusted review context is too large (${config.verification.maxContextCharacters.toLocaleString('en-US')} characters maximum). Set verification.maxContextCharacters to accommodate the configured policy/context files.`);
+	const limit = config.verification.maxContextCharacters;
+	if (policy.length > limit) throw new Error(`Trusted review context is too large (${limit.toLocaleString('en-US')} characters maximum; the configured policy/context files total ${policy.length.toLocaleString('en-US')}). Set verification.maxContextCharacters in .iteris.json to accommodate the configured policy/context files.`);
+	return policy;
+}
+/**
+ * Fail before any instance runs when the trusted context cannot be supplied to
+ * reviewers. Otherwise the limit is only met after a full implementation, on every attempt.
+ */
+export function assertContextBudget(config: IterisConfig, cwd: string): void {
+	const base = resolveBase(config, cwd);
+	if (base) trustedPolicy(config, cwd, base);
+}
+export function captureContext(ticket: Ticket, config: IterisConfig, cwd: string, plan = '', branch = ticketBranch(ticket)): ReviewContext {
+	assertClean(cwd);
+	const current = git(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD']).trim();
+	if (current !== branch) throw new Error(`Expected branch ${branch}; found ${current}.`);
+	const head = git(cwd, ['rev-parse', 'HEAD']).trim();
+	const base = resolveBase(config, cwd);
+	if (!base) throw new Error(`Cannot resolve review base ${config.baseBranch}.`);
+	const mergeBase = git(cwd, ['merge-base', base, head]).trim();
+	const changedFiles = git(cwd, ['diff', '--name-only', '-z', '--no-renames', mergeBase, head]).split('\0').filter(Boolean);
+	if (!changedFiles.length) throw new Error('No committed changes to review against the configured base.');
+	const diff = git(cwd, ['diff', '--no-ext-diff', '--no-textconv', '--no-color', '--no-renames', '--unified=5', mergeBase, head]);
+	Object.assign(config,resolveTaskConfig(config,ticket,changedFiles));
+	const policy = trustedPolicy(config, cwd, base);
 	const risk = changedFiles.filter(file => /auth|credential|secret|token|migrat|schema|harness|process|permission|concurr|(^|\/)types\./i.test(file));
 	const scope = digest({version: REVIEW_VERSION + 1, base, branch, ticket:{number:ticket.number,title:ticket.title,body:ticket.body,labels:ticket.labels,source:ticket.source,custom:ticket.custom?.fingerprint}, plan, policy, checks: [...config.qualityChecks,...(config._plannedChecks??[])], requirements:(config._requirements??extractRequirements(ticket,config)).map(r=>({id:r.id,text:r.text,stage:r.stage,method:r.method})), verification:config.verification, environment:config._execution?.identity, review: reviewSettings(config.review), harness: config.harness, settings: config.harnesses[config.harness], repo: config.repo, provider: config.provider});
 	const key = digest({scope, head, mergeBase});

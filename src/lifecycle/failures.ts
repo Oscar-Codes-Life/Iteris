@@ -7,7 +7,12 @@ export function classifyFailure(error: unknown, phase: string): {
 } {
     const text = error instanceof Error ? error.message : String(error);
     let kind: FailureKind = 'code', nextAction = 'Repair the failing project invariant and rerun checks and independent review';
-    if (error instanceof CapabilityUnavailable || /missing executable|executable unavailable|spawn.*ENOENT|runtime.*incompatible|environment probe|setup failed/i.test(text)) {
+    // Only the user can correct configuration: wait and re-read it instead of spending instances on repair.
+    if (/Trusted review context is too large/i.test(text)) {
+        kind = 'capability';
+        nextAction = 'Raise verification.maxContextCharacters in .iteris.json or trim the configured policy/context files; the next attempt re-reads the configuration';
+    }
+    else if (error instanceof CapabilityUnavailable || /missing executable|executable unavailable|spawn.*ENOENT|runtime.*incompatible|environment probe|setup failed/i.test(text)) {
         kind = 'environment';
         nextAction = 'Repair configured project-local prerequisites, then retry the probe';
     }

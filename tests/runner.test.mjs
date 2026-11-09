@@ -217,3 +217,18 @@ test('review obeys configured timeout and exposes timeout result',async t=>{
  const result=await runCodeReview({ticket:ticket(1),config:cfg,cwd,folder:path.join(cwd,'.iteris/review-timeout'),onLogLine(){},onProcess(){}});
  assert.equal(result.success,false);assert.equal(result.timedOut,true,result.error);assert.match(result.error,/timed out|deadline/i);
 });
+test('oversized trusted context stops before any instance runs and continues once the limit is raised',async t=>{
+ const {cwd}=await reviewRepository(t);await executable(cwd,'codex',fakeAgent);const calls=path.join(cwd,'calls.jsonl');
+ environment(t,{PATH:`${cwd}:${process.env.PATH}`,FAKE_IMPLEMENT:'1',FAKE_MODE:undefined,CAPTURE:calls});
+ const git=(...args)=>execFileSync('git',args,{cwd});
+ git('checkout','-q','main');await writeFile(path.join(cwd,'AGENTS.md'),'Repository policy.\n'.repeat(3600));git('add','AGENTS.md');git('commit','-qm','large engineering guide');git('push','-q','origin','main');
+ const cfg=config('codex');await atomicWriteConfig(cfg,cwd);const api=services(),states=[];
+ const callbacks={onStatusChange:(_,s)=>states.push(s),onLogLine(){},onComplete(){}};
+ await runAllTickets([ticket(1)],cfg,cwd,callbacks,undefined,api);
+ await assert.rejects(readFile(calls,'utf8'),{code:'ENOENT'});
+ const run=await readRun(cwd,taskKey(ticket(1),cfg));assert.equal(run.state,'waiting');assert.match(run.reason,/verification\.maxContextCharacters/);assert.match(run.reason,/total 68,4\d\d/);
+ assert.equal(states.at(-1).status,'waiting');assert.match(run.dependencies[0].nextAction,/maxContextCharacters/);
+ cfg.verification.maxContextCharacters=100000;await atomicWriteConfig(cfg,cwd);
+ await runAllTickets([ticket(1)],cfg,cwd,callbacks,undefined,api);
+ assert.equal(api.created.length,1);assert.equal((await readRun(cwd,taskKey(ticket(1),cfg))).state,'complete');
+});
