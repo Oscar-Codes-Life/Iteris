@@ -89,7 +89,7 @@ Run these from the root of the target Git repository. Iteris reads `.iteris.json
 | `iteris resume --once` | Refresh dependencies and reconcile unfinished tasks, including blocked work. |
 | `iteris status`, `iteris doctor` | Inspect requirements/provenance or project prerequisites. |
 | `iteris evidence <key> <receipt.json>`, `iteris cancel <key>` | Submit external evidence or cancel persisted work. |
-| `iteris describe [key] [--dry-run]` | Rewrite the description, review and completion parts of published pull requests from the final diff and the saved run. |
+| `iteris describe [key \| --all] [--dry-run]` | Rewrite the description, review and completion parts of published pull requests from the final diff and the saved run. `--all` also heals older pull requests, merged or closed, that still carry a placeholder description. |
 | `iteris setup` | Reconfigure the harness, model, effort, authentication, and ticket source without running tickets. |
 | `iteris harness [claude\|codex]` | Switch harness; omit the argument for a picker. |
 | `iteris model [model-id]` | Switch model; omit the argument for a picker. |

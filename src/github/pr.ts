@@ -78,9 +78,13 @@ export function replaceDescriptionSection(body: string, description: string): st
 	const section = descriptionSection(description);
 	const start = body.indexOf(DESCRIPTION_START), end = body.indexOf(DESCRIPTION_END, start);
 	if (start >= 0 && end >= start) return body.slice(0, start) + section + body.slice(end + DESCRIPTION_END.length);
-	// Bodies from before these markers: everything above the review section was written by Iteris.
+	// Bodies from before these markers: Iteris wrote everything from its "## Summary" down to the review section.
+	// Text a person added above that heading stays.
 	const review = body.indexOf(REVIEW_START);
-	return review >= 0 ? `${section}\n\n${body.slice(review)}` : `${section}\n\n${body.trim()}`.trim();
+	if (review < 0) return `${section}\n\n${body.trim()}`.trim();
+	const summary = body.slice(0, review).search(/^## Summary\s*$/m);
+	const kept = summary >= 0 ? body.slice(0, summary).trim() : body.slice(0, review).trim();
+	return `${kept ? `${kept}\n\n` : ''}${section}\n\n${body.slice(review)}`;
 }
 /** Rewrites the sections given, in one update, leaving the rest of the body as it is. */
 export async function updatePrSections(config: IterisConfig, number: number, sections: {description?: string; review?: string; lifecycle?: string}, octokit: Octokit = createOctokit()): Promise<void> {
@@ -122,4 +126,60 @@ export async function updatePrLifecycle(config: IterisConfig, number: number, re
 	const {data} = await octokit.pulls.get({owner,repo,pull_number:number});
 	const body = fitPrBody(replaceLifecycleSection(data.body ?? '',report));
 	if (body !== data.body) await octokit.pulls.update({owner,repo,pull_number:number,body});
+}
+
+/** The stand-in a draft carries until its review passes, and the checklist snapshot older versions left above the review. */
+export const PENDING_DESCRIPTION = '_Iteris is still verifying this change.';
+export function hasPlaceholderDescription(body: string): boolean {
+	const review = body.indexOf(REVIEW_START);
+	return review >= 0 && (body.includes(PENDING_DESCRIPTION) || /^## Completion requirements\s*$/m.test(body.slice(0, review)));
+}
+function foldSection(body: string, start: string, end: string, fold: (inner: string) => string | undefined): string {
+	const from = body.indexOf(start), to = body.indexOf(end, from);
+	if (from < 0 || to < from) return body;
+	const inner = body.slice(from + start.length, to), folded = inner.includes('<details>') ? undefined : fold(inner.trim());
+	return folded === undefined ? body : `${body.slice(0, from + start.length)}\n${folded}\n${body.slice(to)}`;
+}
+/**
+ * For a pull request whose run is no longer on this machine: the reports cannot be rendered again, so the
+ * long lists older versions published are folded where they stand and the new description is put above them.
+ */
+export function healPublishedBody(body: string, description: string): string {
+	let healed = replaceDescriptionSection(body, description);
+	healed = foldSection(healed, REVIEW_START, REVIEW_END, inner => {
+		const detail = inner.search(/^### /m);
+		return detail < 0 ? undefined : `${inner.slice(0, detail).trim()}\n\n<details>\n<summary>Review details</summary>\n\n${inner.slice(detail).trim()}\n\n</details>`;
+	});
+	healed = foldSection(healed, LIFECYCLE_START, LIFECYCLE_END, inner => {
+		const state = /^State: \*\*(\w+)\*\*/m.exec(inner)?.[1];
+		if (!state) return undefined;
+		const record = inner.replace(/^## Task completion\s*/, '').replace(/^# .*\n+/, '').trim();
+		return `## Task completion\n<details>\n<summary>Iteris's record when it last updated this pull request: ${state}</summary>\n\n${record}\n\n</details>`;
+	});
+	return fitPrBody(healed);
+}
+export type PublishedPr = {number: number; url: string; title: string; body: string; state: string};
+/** Every pull request in the repository, open or not, that still carries a placeholder description from Iteris. */
+export async function listPlaceholderPrs(config: IterisConfig, octokit: Octokit = createOctokit()): Promise<PublishedPr[]> {
+	const [owner, repo] = config.repo.split('/') as [string, string];
+	const prs = await octokit.paginate(octokit.pulls.list, {owner, repo, state: 'all', per_page: 100});
+	return prs.filter(pr => hasPlaceholderDescription(pr.body ?? '')).map(pr => ({number: pr.number, url: pr.html_url, title: pr.title, body: pr.body ?? '', state: pr.merged_at ? 'merged' : pr.state}));
+}
+/** Commit subjects and the diff as GitHub has them, which also works for a merged pull request whose branch is gone. */
+export async function prChanges(config: IterisConfig, number: number, octokit: Octokit = createOctokit()): Promise<{commits: string; diff: string}> {
+	const [owner, repo] = config.repo.split('/') as [string, string];
+	const commits = (await octokit.paginate(octokit.pulls.listCommits, {owner, repo, pull_number: number, per_page: 100})).map(commit => commit.commit.message.split('\n')[0]).join('\n');
+	let diff: string;
+	try {
+		diff = (await octokit.pulls.get({owner, repo, pull_number: number, mediaType: {format: 'diff'}})).data as unknown as string;
+	} catch {
+		// GitHub refuses one diff for a very large pull request; the per-file patches are still served.
+		const files = await octokit.paginate(octokit.pulls.listFiles, {owner, repo, pull_number: number, per_page: 100});
+		diff = files.map(file => `--- ${file.filename} (${file.status})\n${file.patch ?? '(no text patch)'}`).join('\n');
+	}
+	return {commits: commits || '(none)', diff: diff || '(no changes)'};
+}
+export async function updatePrBody(config: IterisConfig, number: number, body: string, octokit: Octokit = createOctokit()): Promise<void> {
+	const [owner, repo] = config.repo.split('/') as [string, string];
+	await octokit.pulls.update({owner, repo, pull_number: number, body: fitPrBody(body)});
 }

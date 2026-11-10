@@ -1,4 +1,4 @@
-import {descriptionSection, reviewSection} from '../github/pr.js';
+import {descriptionSection, reviewSection, PENDING_DESCRIPTION} from '../github/pr.js';
 import {execFileSync} from 'node:child_process';
 import {ticketBranch, type IterisConfig, type Ticket} from '../types.js';
 import {runHarness, type ProcessResult} from '../harness/process.js';
@@ -48,7 +48,7 @@ export function ticketReference(ticket: Ticket, config: IterisConfig): string {
 }
 
 /** Stands in until a review passes: an unreviewed diff is not worth describing, and it changes with every repair. */
-export const pendingDescription = (ticket: Ticket) => `## Summary\n${ticket.title}\n\n_Iteris is still verifying this change. The description is written once its review passes; the review below lists what is outstanding._`;
+export const pendingDescription = (ticket: Ticket) => `## Summary\n${ticket.title}\n\n${PENDING_DESCRIPTION} The description is written once its review passes; the review below lists what is outstanding._`;
 
 export function prBody(description: string, review: string, reference: string): string {
 	return `${descriptionSection(description)}\n\n${reviewSection(review)}\n\n${reference}`;
@@ -56,7 +56,7 @@ export function prBody(description: string, review: string, reference: string): 
 
 /** Drops what a model adds around the description: remarks before the first heading, a wrapping code fence, a repeated task reference. */
 export function cleanDescription(text: string, reference: string): string {
-	const lines = text.trim().replace(/^```(?:markdown|md)?\n([\s\S]*)\n```$/, '$1').split(/\r?\n/).filter(line => line.trim() !== reference);
+	const lines = text.trim().replace(/^```(?:markdown|md)?\n([\s\S]*)\n```$/, '$1').split(/\r?\n/).filter(line => !reference || line.trim() !== reference);
 	const heading = lines.findIndex(line => /^#{1,6}\s/.test(line));
 	return lines.slice(Math.max(0, heading)).join('\n').trim();
 }
@@ -70,11 +70,13 @@ export async function generatePrDescription(options: {
 	baseCommit?: string;
 	/** Defaults to the ticket's branch. */
 	branch?: string;
+	/** Commit subjects and diff obtained elsewhere, for a pull request whose commits are not in this checkout. */
+	changes?: {commits: string; diff: string};
 	onLine?: (line: string) => void;
 	signal?: AbortSignal;
 }): Promise<ProcessResult> {
 	const {ticket, config, cwd, review, onLine, signal} = options;
-	const changes = changesForDescription(config, cwd, options.branch ?? ticketBranch(ticket), options.baseCommit);
+	const changes = options.changes ? {commits: options.changes.commits, diff: truncate(options.changes.diff, MAX_DIFF_CHARS)} : changesForDescription(config, cwd, options.branch ?? ticketBranch(ticket), options.baseCommit);
 	const prompt = `Write a high-value pull request description for the change below.
 
 Return only the final Markdown body, without a title, preamble, commentary, or code fence. Write for a reviewer who has not read the ticket and will decide from this text where to look. Keep it concise and specific. Use these sections:

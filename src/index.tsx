@@ -135,7 +135,7 @@ async function main() {
 		return;
 	}
 	if (command === '--help' || command === '-h') {
-		console.log('iteris [--version | --help] [--once] [setup | refresh | resume | status [task-key] | doctor | evidence <task-key> <receipt.json> | cancel <task-key> | describe [task-key] [--dry-run] | review [standard|deep|audit] | harness [claude|codex] | model [id] | effort [level] | workspace [local|worktree] | parallel [1-8] | instances]');
+		console.log('iteris [--version | --help] [--once] [setup | refresh | resume | status [task-key] | doctor | evidence <task-key> <receipt.json> | cancel <task-key> | describe [task-key | --all] [--dry-run] | review [standard|deep|audit] | harness [claude|codex] | model [id] | effort [level] | workspace [local|worktree] | parallel [1-8] | instances]');
 		return;
 	}
 	let config = await loadConfig();

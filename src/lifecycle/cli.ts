@@ -13,7 +13,7 @@ import { resolveTaskConfig } from './config.js';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { generatePrDescription } from '../agent/pr-description.js';
-import { updatePrSections } from '../github/pr.js';
+import { updatePrSections, listPlaceholderPrs, prChanges, updatePrBody, healPublishedBody, REVIEW_START, REVIEW_END } from '../github/pr.js';
 import { loadReportText } from '../review/report.js';
 export async function lifecycleCommand(command: string, args: string[], config: IterisConfig, cwd: string): Promise<boolean> {
     if (!['status', 'resume', 'doctor', 'evidence', 'cancel', 'describe'].includes(command))
@@ -28,9 +28,11 @@ export async function lifecycleCommand(command: string, args: string[], config: 
         return true;
     }
     if (command === 'describe') {
-        const dryRun = args.includes('--dry-run'), key = args.find(arg => !arg.startsWith('--'));
+        const dryRun = args.includes('--dry-run'), all = args.includes('--all'), key = args.find(arg => !arg.startsWith('--'));
+        if (key && all)
+            throw new Error('Usage: iteris describe [task-key | --all] [--dry-run]');
         const published = (key ? [await readRun(cwd, key)] : await listRuns(cwd, config.repo)).filter((run): run is TaskRun => !!run?.publication && run.state !== 'cancelled');
-        if (!published.length)
+        if (!published.length && !all)
             console.log(key ? 'That task has no published pull request.' : 'No published task runs.');
         // The saved run is rewritten, so a running queue must not be writing it at the same time.
         const release = dryRun ? undefined : await acquireRun(cwd);
@@ -63,6 +65,36 @@ export async function lifecycleCommand(command: string, args: string[], config: 
                 publication.described = publication.head;
                 await saveRun(cwd, run);
                 console.log(`${label}\n  Description rewritten.`);
+            }
+            if (all) {
+                // Pull requests from earlier queues, merged or closed since, whose runs are no longer on this machine.
+                const local = new Set((await listRuns(cwd, config.repo)).map(run => run.publication?.number));
+                const remote = (await listPlaceholderPrs(config)).filter(pr => !local.has(pr.number));
+                if (!remote.length)
+                    console.log('No other pull request in this repository carries a placeholder description from Iteris.');
+                for (const pr of remote) {
+                    const label = `${pr.url} (${pr.state}) — ${pr.title}`;
+                    try {
+                        const reviewStart = pr.body.indexOf(REVIEW_START), reviewEnd = pr.body.indexOf(REVIEW_END, reviewStart);
+                        // The ticket itself is gone; the checklist the placeholder kept is its text, line by line.
+                        const requirements = [...pr.body.slice(0, reviewStart).matchAll(/^- \[[ x]\] (.+?) \((?:acceptance|plan)-[0-9a-f]+; [^)]*\)$/gm)].map(match => match[1]!);
+                        const ticket = { number: pr.number, title: pr.title, body: requirements.join('\n') || '(not available)', slug: `pr-${pr.number}`, labels: [], htmlUrl: pr.url };
+                        const described = await generatePrDescription({ ticket, config, cwd, review: pr.body.slice(reviewStart + REVIEW_START.length, reviewEnd).trim(), changes: await prChanges(config, pr.number) });
+                        if (!described.success || !described.text) {
+                            console.log(`${label}\n  Failed: ${described.error ?? 'the harness produced no description'}`);
+                            continue;
+                        }
+                        if (dryRun) {
+                            console.log(`${label}\n\n${described.text}\n`);
+                            continue;
+                        }
+                        await updatePrBody(config, pr.number, healPublishedBody(pr.body, described.text));
+                        console.log(`${label}\n  Description rewritten.`);
+                    }
+                    catch (error) {
+                        console.log(`${label}\n  Failed: ${String(error)}`);
+                    }
+                }
             }
         }
         finally {

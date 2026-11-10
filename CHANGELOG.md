@@ -13,7 +13,7 @@ User-visible changes are recorded here. Iteris uses [Semantic Versioning](https:
 
 ### Added
 
-- `iteris describe [key] [--dry-run]` rewrites the description, review and completion parts of already published pull requests from the final diff and the saved run.
+- `iteris describe [key] [--dry-run]` rewrites the description, review and completion parts of already published pull requests from the final diff and the saved run. `iteris describe --all` also heals pull requests from earlier queues, open, merged or closed, that still carry a placeholder description: it writes the description from the diff GitHub holds, keeps text a person added above it and folds the long lists.
 
 ### Fixed
 

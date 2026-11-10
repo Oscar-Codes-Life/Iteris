@@ -13,7 +13,7 @@ import {temporary, reviewRepository, environment, executable, fakeAgent, config,
 import {localPlannedChecks,localEvidenceCommand} from '../dist/lifecycle/planning.js';
 import {runRecoveryCheck} from '../dist/lifecycle/local-check.js';
 import {listRuns} from '../dist/lifecycle/state.js';
-import {fitPrBody, PR_BODY_LIMIT, reviewSection, replaceReviewSection, replaceLifecycleSection, replaceDescriptionSection, descriptionSection, REVIEW_START, REVIEW_END, LIFECYCLE_START, LIFECYCLE_END} from '../dist/github/pr.js';
+import {fitPrBody, PR_BODY_LIMIT, reviewSection, replaceReviewSection, replaceLifecycleSection, replaceDescriptionSection, descriptionSection, healPublishedBody, hasPlaceholderDescription, listPlaceholderPrs, prChanges, REVIEW_START, REVIEW_END, LIFECYCLE_START, LIFECYCLE_END} from '../dist/github/pr.js';
 const ticket={number:1,title:'Feature',body:'Implement feature. Handle retries without duplicate writes.',slug:'feature',labels:[],htmlUrl:'https://example.com/1'};
 async function fixture(t, {harness='codex', content='changed\n', scenario, mode='normal'}={}) {
  const repo=await reviewRepository(t),{cwd,git}=repo;
@@ -575,4 +575,20 @@ test('a rewritten description replaces its own section, or everything Iteris wro
  const legacy=`## Summary\nTitle\n\n## Changes\n- a.ts\n\n## Completion requirements\n- [ ] stale (acceptance-1; local)\n\n${review}\n\nCloses #1`;
  const rewritten=replaceDescriptionSection(legacy,next);assert.equal(rewritten,`${descriptionSection(next)}\n\n${review}\n\nCloses #1`);assert.doesNotMatch(rewritten,/Completion requirements|stale/);
  assert.equal(replaceDescriptionSection('',next),descriptionSection(next));
+});
+test('a published pull request without a saved run is healed in place: new description, long lists folded, a person\'s text kept',async()=>{
+ const review='## Iteris review\n\n**PASSED** — Required reviews completed.\nReviewed commit: `abc`.\n\n### Acceptance\n\n- **covered** One\n\n### Findings\n\n- No confirmed findings.';
+ const lifecycle='<!-- iteris:lifecycle:start -->\n## Task completion\n# Feature\n\nState: **complete** · Phase: complete\nVerified completion: yes\n\n- [x] One (acceptance-0123456789abcdef; local)\n\n- Verified acceptance-0123456789abcdef: host-review\n<!-- iteris:lifecycle:end -->';
+ const body=`## Resolution — superseded by #491\n\nKept by a person.\n\n## Summary\nFeature\n\n## Changes\n- a.ts\n\n## Completion requirements\n# Feature\n\nState: **active** · Phase: creating-pr\n\n- [ ] One (acceptance-0123456789abcdef; local)\n\n${reviewSection(review)}\n\nImplements custom task: Feature\n\n${lifecycle}`;
+ assert.equal(hasPlaceholderDescription(body),true);
+ const healed=healPublishedBody(body,'## Summary\n- Real description.');
+ assert.match(healed,/^## Resolution — superseded by #491\n\nKept by a person\.\n\n<!-- iteris:description:start -->\n## Summary\n- Real description\.\n<!-- iteris:description:end -->\n\n<!-- iteris:review:start -->\n## Iteris review\n\n\*\*PASSED\*\* — Required reviews completed\.\nReviewed commit: `abc`\.\n\n<details>\n<summary>Review details<\/summary>\n\n### Acceptance/);
+ assert.doesNotMatch(healed,/## Completion requirements|## Changes\n- a\.ts|creating-pr/);
+ assert.match(healed,/Implements custom task: Feature\n\n<!-- iteris:lifecycle:start -->\n## Task completion\n<details>\n<summary>Iteris's record when it last updated this pull request: complete<\/summary>\n\nState: \*\*complete\*\*/);
+ assert.equal(hasPlaceholderDescription(healed),false);assert.equal(healPublishedBody(healed,'## Summary\n- Real description.'),healed);
+ assert.equal(hasPlaceholderDescription(`## Summary\n- Written by a model.\n\n${reviewSection(review)}`),false);assert.equal(hasPlaceholderDescription('## Completion requirements\nA person wrote this.'),false);
+ const pulls={list(){},listCommits(){},listFiles(){},get:async()=>{throw new Error('406 diff too large');}};
+ const octokit={pulls,paginate:async method=>method===pulls.list?[{number:1,html_url:'u1',title:'Healed',body:healed,state:'closed',merged_at:'2026-10-01'},{number:2,html_url:'u2',title:'Stale',body,state:'closed',merged_at:'2026-10-01'},{number:3,html_url:'u3',title:'Empty',body:null,state:'open',merged_at:null}]:method===pulls.listCommits?[{commit:{message:'First change\n\ndetails'}},{commit:{message:'Second change'}}]:[{filename:'a.ts',status:'modified',patch:'+after'}]};
+ assert.deepEqual((await listPlaceholderPrs(config('codex'),octokit)).map(pr=>[pr.number,pr.state]),[[2,'merged']]);
+ assert.deepEqual(await prChanges(config('codex'),2,octokit),{commits:'First change\nSecond change',diff:'--- a.ts (modified)\n+after'});
 });
