@@ -17,16 +17,19 @@ export async function verifyGithubCi(config: IterisConfig, run: TaskRun, octokit
     ];
     const { data: pr } = await octokit.pulls.get({ owner, repo, pull_number: run.publication.number });
     const { data: branch } = await octokit.repos.getBranch({ owner, repo, branch: config.baseBranch });
-    const current = { head: pr.head.sha, base: branch.commit.sha };
+    const live = { head: pr.head.sha, base: branch.commit.sha };
     if (pr.state === 'closed' && !pr.merged)
-        return { ...current, state: 'failed', details: 'PR was closed without merging' };
-    if (current.head !== run.publication.head || current.base !== run.publication.base)
-        return { ...current, state: 'changed', details: 'Published head or current base changed; review and checks must run again' };
+        return { ...live, state: 'failed', details: 'PR was closed without merging' };
+    if (live.head !== run.publication.head)
+        return { ...live, state: 'changed', details: 'Published head changed; review and checks must run again' };
     let required = config.verification.requiredCiChecks;
+    // Whether the repository itself requires a branch to be up to date before merging.
+    let strict = false;
     if (!required) {
         const discovered = new Set<string>();
         if (branch.protected) {
             const { data: protection } = await octokit.repos.getBranchProtection({ owner, repo, branch: config.baseBranch });
+            strict ||= protection.required_status_checks?.strict === true;
             for (const check of protection.required_status_checks?.contexts ?? [])
                 discovered.add(check);
             for (const check of protection.required_status_checks?.checks ?? [])
@@ -37,16 +40,30 @@ export async function verifyGithubCi(config: IterisConfig, run: TaskRun, octokit
         for (const rule of rules as Array<{
             type: string;
             parameters?: {
+                strict_required_status_checks_policy?: boolean;
                 required_status_checks?: Array<{
                     context: string;
                 }>;
             };
         }>)
-            if (rule.type === 'required_status_checks')
+            if (rule.type === 'required_status_checks') {
+                strict ||= rule.parameters?.strict_required_status_checks_policy === true;
                 for (const check of rule.parameters?.required_status_checks ?? [])
                     discovered.add(check.context);
+            }
         required = [...discovered];
     }
+    // An active base moves during every review and CI run. Evidence for the published commit stays
+    // valid while the pull request still merges cleanly, unless the repository demands an up-to-date branch.
+    if (live.base !== run.publication.base && !pr.merged) {
+        if (strict)
+            return { ...live, state: 'changed', details: 'The base moved and the repository requires an up-to-date branch; the base must be merged and verified again' };
+        if (pr.mergeable === false)
+            return { ...live, state: 'changed', details: 'The base moved and now conflicts with the published commit; the base must be merged and verified again' };
+        if (pr.mergeable !== true)
+            return { head: live.head, base: run.publication.base, state: 'waiting', details: 'The base moved; GitHub has not yet reported whether the pull request still merges cleanly' };
+    }
+    const current = { head: live.head, base: run.publication.base };
     if (!required.length)
         return { ...current, state: 'passed', details: 'Required-check discovery succeeded; repository requires no CI checks' };
     const runs = await octokit.paginate(octokit.checks.listForRef, { owner, repo, ref: current.head, per_page: 100 });
@@ -58,7 +75,8 @@ export async function verifyGithubCi(config: IterisConfig, run: TaskRun, octokit
         if (check) {
             const referencedBases = check.pull_requests?.map(pr => pr.base.sha) ?? [];
             const startedAfterReconciliation = freshness === undefined || Date.parse(check.started_at ?? '') >= freshness;
-            const currentBase = startedAfterReconciliation && (!referencedBases.length || referencedBases.includes(current.base));
+            // Only a reconciliation demands CI for one exact base; otherwise a run on the published commit is the evidence.
+            const currentBase = startedAfterReconciliation && (freshness === undefined || !referencedBases.length || referencedBases.includes(current.base));
             return { name, state: !currentBase ? 'waiting' : check.status === 'completed' ? ['success', 'neutral', 'skipped'].includes(check.conclusion ?? '') ? 'passed' : 'failed' : 'waiting' };
         }
         if (freshness !== undefined && (!status || Date.parse(status.updated_at) < freshness))

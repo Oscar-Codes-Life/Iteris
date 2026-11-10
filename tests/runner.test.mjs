@@ -144,10 +144,12 @@ test('an unchanged incomplete review opens its PR on resume without spending ano
  const resultPath=path.join(cwd,'.iteris/tasks',taskKey(ticket(1),cfg),'artifacts/review/result.json');
  const previous=JSON.parse(await readFile(resultPath,'utf8'));
  await writeFile(resultPath,JSON.stringify({...previous,reason:'Cancelled',finishedAt:'2999-01-01T00:00:00.000Z'}));
- execFileSync('git',['--git-dir',remote,'update-ref','refs/heads/main',git('rev-parse','HEAD')]);
  const before=(await readFile(path.join(cwd,'calls.jsonl'),'utf8')).trim().split('\n').map(JSON.parse);
  const api=services();
- await runAllTickets([ticket(1)],cfg,cwd,{onStatusChange(){},onLogLine(){},onComplete(){},onFailure:async(_,state)=>assert.fail(state.failureReason)},undefined,api);
+ // The base moves on the remote while this attempt is already reviewing; an attempt starts from the base it fetched.
+ let moved=false;const head=git('rev-parse','HEAD');
+ await runAllTickets([ticket(1)],cfg,cwd,{onStatusChange(_,state){if(state.status==='reviewing'&&!moved){moved=true;execFileSync('git',['--git-dir',remote,'update-ref','refs/heads/main',head]);}},onLogLine(){},onComplete(){},onFailure:async(_,state)=>assert.fail(state.failureReason)},undefined,api);
+ assert.ok(moved);
  const after=(await readFile(path.join(cwd,'calls.jsonl'),'utf8')).trim().split('\n').map(JSON.parse);
  assert.ok(after.filter(call=>call.prompt.startsWith('ITERIS_REVIEW')).length>before.filter(call=>call.prompt.startsWith('ITERIS_REVIEW')).length);
  assert.equal(after.filter(call=>call.prompt.startsWith('You are an autonomous')).length,1);
@@ -231,4 +233,54 @@ test('oversized trusted context stops before any instance runs and continues onc
  cfg.verification.maxContextCharacters=100000;await atomicWriteConfig(cfg,cwd);
  await runAllTickets([ticket(1)],cfg,cwd,callbacks,undefined,api);
  assert.equal(api.created.length,1);assert.equal((await readRun(cwd,taskKey(ticket(1),cfg))).state,'complete');
+});
+test('a task whose remaining evidence needs a device completes with a manual follow-up; required evidence keeps it waiting',async t=>{
+ const {cwd}=await reviewRepository(t);await executable(cwd,'codex',fakeAgent);
+ environment(t,{PATH:`${cwd}:${process.env.PATH}`,FAKE_IMPLEMENT:'1',FAKE_MODE:undefined,REVIEW_SCENARIO:'external',CAPTURE:path.join(cwd,'calls.jsonl')});
+ const cfg=config('codex');await atomicWriteConfig(cfg,cwd);const api=services(),drafts=[];api.draft=async(_cfg,_number,draft)=>{drafts.push(draft);};
+ const callbacks={onStatusChange(){},onLogLine(){},onComplete(){}};
+ await runAllTickets([ticket(1)],cfg,cwd,callbacks,undefined,api);
+ const run=await readRun(cwd,taskKey(ticket(1),cfg));assert.equal(run.state,'complete',run.reason);assert.equal(run.dependencies.length,0);assert.equal(drafts.at(-1),false);
+ const followUp=run.requirements.find(r=>r.id.startsWith('dependency:manual-'));assert.ok(followUp);
+ assert.match(await readFile(path.join(cwd,'.iteris/tasks',run.key,'status.md'),'utf8'),/needs manual verification; not verified by Iteris and not blocking/);
+ const strict={...cfg,workflow:{...cfg.workflow,externalEvidence:'required'}};await atomicWriteConfig(strict,cwd);
+ await runAllTickets([ticket(2)],strict,cwd,callbacks,undefined,api);
+ const waiting=await readRun(cwd,taskKey(ticket(2),strict));assert.equal(waiting.state,'waiting');assert.ok(waiting.dependencies.some(d=>d.kind==='external'||d.id.startsWith('stage:manual-')));
+});
+test('a branch that conflicts with the moved base is merged and resolved by an instance before review',async t=>{
+ const {cwd,remote}=await reviewRepository(t);await executable(cwd,'codex',fakeAgent);const calls=path.join(cwd,'calls.jsonl');
+ const git=(...args)=>execFileSync('git',args,{cwd,stdio:'pipe',encoding:'utf8'}).trim();
+ git('checkout','-qb','iteris/1-ticket-1');await writeFile(path.join(cwd,'feature.txt'),'earlier ticket work\n');git('add','feature.txt');git('commit','-qm','earlier attempt');git('checkout','-q','main');
+ const other=await temporary(t),theirs=(...args)=>execFileSync('git',args,{cwd:other,stdio:'pipe',encoding:'utf8'}).trim();
+ execFileSync('git',['clone','-q',remote,other]);theirs('config','user.email','other@example.com');theirs('config','user.name','Other');
+ await writeFile(path.join(other,'feature.txt'),'upstream change\n');theirs('add','feature.txt');theirs('commit','-qm','upstream');theirs('push','-q','origin','HEAD:main');const upstream=theirs('rev-parse','HEAD');
+ const cfg=config('codex');await atomicWriteConfig(cfg,cwd);const api=services(),callbacks={onStatusChange(){},onLogLine(){},onComplete(){}};
+ // An instance that leaves the conflict unresolved fails the attempt and leaves the branch as it was.
+ environment(t,{PATH:`${cwd}:${process.env.PATH}`,FAKE_IMPLEMENT:'1',FAKE_MODE:undefined,FAKE_MERGE:undefined,CAPTURE:calls});cfg.recovery.enabled=false;await atomicWriteConfig(cfg,cwd);
+ await runAllTickets([ticket(1)],cfg,cwd,callbacks,undefined,api);
+ let run=await readRun(cwd,taskKey(ticket(1),cfg));assert.equal(run.state,'blocked');assert.match(run.reason,/Conflicts with main were not resolved in feature\.txt/);
+ assert.equal(git('status','--porcelain'),'');assert.equal(git('log','-1','--format=%s','iteris/1-ticket-1'),'earlier attempt');assert.throws(()=>git('rev-parse','--verify','MERGE_HEAD'));
+ assert.equal(api.created.length,0);
+ // A resolved merge is committed by the host and the work continues on the current base.
+ process.env.FAKE_MERGE='resolve';cfg.recovery.enabled=true;await atomicWriteConfig(cfg,cwd);
+ await runAllTickets([ticket(1)],cfg,cwd,callbacks,undefined,api);
+ run=await readRun(cwd,taskKey(ticket(1),cfg));assert.equal(run.state,'complete',run.reason);assert.equal(api.created.length,1);
+ git('merge-base','--is-ancestor',upstream,'iteris/1-ticket-1');
+ assert.match(git('log','--merges','--format=%s','iteris/1-ticket-1'),/Merge main into iteris\/1-ticket-1/);
+ assert.ok(!git('show','iteris/1-ticket-1:feature.txt').includes('<<<<<<<'));
+ const merge=(await readFile(calls,'utf8')).trim().split('\n').map(JSON.parse).filter(call=>call.prompt.startsWith('ITERIS_MERGE'));
+ assert.equal(merge.length,2);assert.match(merge[0].prompt,/- feature\.txt/);assert.match(merge[0].prompt,/Do not run git merge/);
+});
+test('a passed review with manual follow-ups is reused while CI runs, then the task completes',async t=>{
+ const {cwd}=await reviewRepository(t);await executable(cwd,'codex',fakeAgent);const calls=path.join(cwd,'calls.jsonl');
+ environment(t,{PATH:`${cwd}:${process.env.PATH}`,FAKE_IMPLEMENT:'1',FAKE_MODE:undefined,REVIEW_SCENARIO:'external',CAPTURE:calls});
+ const cfg=config('codex');await atomicWriteConfig(cfg,cwd);let ci='waiting';
+ const api={...services(),ci:async(_cfg,run)=>({state:ci,details:`unit: ${ci}`,head:run.publication.head,base:run.publication.base})},callbacks={onStatusChange(){},onLogLine(){},onComplete(){}};
+ await runAllTickets([ticket(1)],cfg,cwd,callbacks,undefined,api);
+ let run=await readRun(cwd,taskKey(ticket(1),cfg));assert.equal(run.state,'waiting');assert.deepEqual(run.dependencies.map(d=>d.id),['ci']);
+ const reviews=async()=>(await readFile(calls,'utf8')).trim().split('\n').map(JSON.parse).filter(call=>call.prompt.startsWith('ITERIS_REVIEW')).length,before=await reviews();
+ const {runWorker}=await import('../dist/lifecycle/worker.js'),probe=()=>runWorker({cwd,config:cfg,once:true,force:true,services:api,callbacks,adapter:()=>({refresh:async task=>task})});
+ await probe();assert.equal((await readRun(cwd,run.key)).state,'waiting');
+ ci='passed';await probe();run=await readRun(cwd,run.key);assert.equal(run.state,'complete',run.reason);
+ assert.equal(await reviews(),before);
 });

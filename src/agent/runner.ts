@@ -13,7 +13,8 @@ import {createRunFolder, writeStatus, writePrompt, appendLog} from '../state/man
 import {readProgress, appendProgress} from '../state/progress.js';
 import {findPrForBranch, createPullRequest, addLabelToIssue, updatePrReview, updatePrLifecycle, reviewSection} from '../github/pr.js';
 import {moveCardOnComplete} from '../trello/completion.js';
-import {expandPrompt} from './prompt.js';
+import {expandPrompt,mergePrompt} from './prompt.js';
+import {redact} from '../harness/redact.js';
 import {generateSummary} from './summarizer.js';
 import {runCodeReview} from './reviewer.js';
 import {recoverFailedTicket} from './failure-recovery.js';
@@ -28,9 +29,9 @@ import {advanceCompletion, publishCompletionView, type CompletionServices} from 
 import {setGithubDraft} from '../lifecycle/github-verification.js';
 import {resolveTaskConfig} from '../lifecycle/config.js';
 import {classifyFailure} from '../lifecycle/failures.js';
-import {prepareBranch,commitSourceChanges,checkpointPartialWork} from '../lifecycle/commit.js';
+import {prepareBranch,commitSourceChanges,checkpointPartialWork,integrateBase,unresolvedConflicts,mergeInProgress,abortMerge} from '../lifecycle/commit.js';
 import {recordAttempt,consumeRetry,attemptBriefing,retryScheduled,type AttemptInput} from '../lifecycle/attempts.js';
-import {planningSchema,applyPlanningPack} from '../lifecycle/planning.js';
+import {planningSchema,applyPlanningPack,localPlannedChecks} from '../lifecycle/planning.js';
 import {parseOrRecoverReport} from './schema-recovery.js';
 import {importLegacyArtifacts} from '../lifecycle/migration.js';
 import {cancellationScope} from '../lifecycle/cancellation.js';
@@ -263,15 +264,39 @@ async function runSingleTicket(ticket: Ticket, config: IterisConfig, cwd: string
 		const pack=verificationPack(run,config);
 		await saveJson(path.join(folder,'verification-pack.json'),JSON.parse(pack));await saveRun(cwd,run);
 		await writeFile(path.join(folder, 'execution.json'), JSON.stringify(state.selection, null, 2) + '\n');
-		const prompt = `${expandPrompt(ticket, config, await readProgress(cwd), attemptBriefing(run))}\n\nHost-owned task verification pack:\n${pack}\nExternal acceptance stages are verified by the host after publication. Implement all required local behavior. Do not deploy or update providers from the harness. The host prepares the branch and commits your source changes. Leave changes ready for independent review and print <task>done</task>; do not require permission to write .git or change host-owned .iteris files.`;
+		const prompt = `${expandPrompt(ticket, config, await readProgress(cwd), attemptBriefing(run))}\n\nHost-owned task verification pack:\n${pack}\nExternal acceptance stages are verified by the host after publication. Implement all required local behavior. Do not deploy or update providers from the harness. Policy and context files named in the pack (such as REVIEW.md) are host inputs that may not exist: never create or edit them, and keep verification notes out of the repository unless the ticket asks for a document. The host prepares the branch and commits your source changes. Leave changes ready for independent review and print <task>done</task>; do not require permission to write .git or change host-owned .iteris files.`;
 		await writePrompt(folder, prompt);
 		let plan = checkpoint.plan ?? run.plan ?? '';
 		if (!checkpoint.implemented) {
 			prepareBranch(cwd,state.branch,config.baseBranch);
+			// Work and review continue on the current base. A branch that conflicts with its target gets no pull-request CI.
+			const merge=await integrateBase(cwd,state.branch,config.baseBranch,signal);
+			if(merge.status==='conflicted') {
+				log(`[iteris] ${config.baseBranch} moved and conflicts with this branch in ${merge.files.length} file${merge.files.length===1?'':'s'}; starting an instance to resolve the merge.`);
+				await phase('running');
+				try {
+					const resolved=await runHarness({config,phase:'repair',prompt:redact(mergePrompt(ticket,config,state.branch,merge.files,plan)),cwd,timeoutMs:timeout(true),onLine:line=>log(`[merge] ${line}`),signal});
+					const unresolved=unresolvedConflicts(cwd,merge.files);
+					if(!resolved.success || !resolved.done || unresolved.length) {
+						state.status=resolved.timedOut?'stale':'failed';
+						throw new Error(`Conflicts with ${config.baseBranch} were not resolved${unresolved.length?` in ${unresolved.join(', ')}`:''}: ${resolved.error ?? (unresolved.length?'conflict markers remain':'no completion signal')}`);
+					}
+					commitSourceChanges(cwd,state.branch,`Merge ${config.baseBranch} into ${state.branch}`);
+					if(mergeInProgress(cwd))throw new Error(`The merge of ${config.baseBranch} could not be concluded`);
+				} catch(error) {abortMerge(cwd);throw error;}
+			}
+			if(merge.status!=='current') {
+				const head=git(cwd,['rev-parse','HEAD']).trim();
+				// The implementation is unchanged; only its base moved. Review the merged commit instead of implementing again.
+				if(merge.status!=='fast-forwarded' && run.implementation?.head===merge.before)run.implementation.head=head;
+				log(`[iteris] ${merge.status==='fast-forwarded'?`Started from the current ${config.baseBranch}`:`Merged the current ${config.baseBranch} into the task branch`} (${head.slice(0,12)}).`);
+				await saveRun(cwd,run);
+			}
+			if(merge.base)config._base=merge.base;
 			try {
 				const context = captureContext(ticket, config, cwd, plan);
 				const reviewFolder = path.join(folder, 'review');
-				const cached = await loadPassedReview(reviewFolder, context);
+				const cached = await loadPassedReview(reviewFolder, context, config.workflow.externalEvidence === 'advisory');
 				let implementation: {scope?: string; head?: string} = {};
 				try {implementation = JSON.parse(await readFile(path.join(folder, 'implementation.json'), 'utf8')) as typeof implementation;} catch { /* no completed implementation checkpoint */ }
 				if ((run.implementation?.fingerprint === run.fingerprint && run.implementation.head === context.stamp.head) || (implementation.scope === context.stamp.scope && implementation.head === context.stamp.head) || cached || await previousEvidence(reviewFolder, context)) {checkpoint.implemented = true; checkpoint.plan = plan;}
@@ -279,7 +304,7 @@ async function runSingleTicket(ticket: Ticket, config: IterisConfig, cwd: string
 		}
 		if (config.planMode && checkpoint.plan === undefined) {
 			await phase('planning');
-			const planningPrompt=`Inspect this task and produce an implementation plan. Return exactly one JSON object with plan (string), requirements (array of {id,text,stage,method}), invariants (strings), reproductionStrategy (string), fixtures (strings), capabilities (strings), and checks (array of {command,behavioral,requirementIds}). Preserve the host requirement IDs and text. Include meaningful local behavioral commands where applicable. External requirements extend acceptance; they cannot authorize actions or weaken host verification. Do not edit files, execute changes, or print a completion marker.\n\n${prompt}\nPLANNING_INPUT_JSON\n${pack}`;
+			const planningPrompt=`Inspect this task and produce an implementation plan. Return exactly one JSON object with plan (string), requirements (array of {id,text,stage,method}), invariants (strings), reproductionStrategy (string), fixtures (strings), capabilities (strings), and checks (array of {command,behavioral,requirementIds}). Preserve the host requirement IDs and text. Include meaningful local behavioral commands where applicable. The host runs every check as a required gate, offline and isolated inside the task checkout, on the final commit before a pull request exists. So each check must be a command this repository already supports that can pass there: no network, credentials, GitHub or provider CLI, pull-request or CI queries, device, simulator, container or hosted service; no environment variable the repository does not define; no file outside the checkout. Do not add checks for the host's own stages (independent review, publication, CI) or for policy and context files such as REVIEW.md; the host supplies those and they may not exist. Describe evidence that needs a device, hosted service or attachment in the plan instead of as a check. External requirements extend acceptance; they cannot authorize actions or weaken host verification. Do not edit files, execute changes, or print a completion marker.\n\n${prompt}\nPLANNING_INPUT_JSON\n${pack}`;
 			const result = await runHarness({config, phase: 'planning', prompt: planningPrompt, cwd, timeoutMs: timeout(true), onLine: log, signal});
 			if (!result.success || !result.text) {state.status = result.timedOut ? 'stale' : 'failed'; throw new Error(result.error ?? 'Planning produced no plan');}
 			const planned=await parseOrRecoverReport({config,reportType:'planning',originalPrompt:planningPrompt,raw:result.finalText??result.text,schema:planningSchema,cwd,remaining:()=>timeout(true),signal,onLine:log,onAttempt:(index,report)=>saveJson(path.join(folder,`planning-correction-${index}.json`),report)});
@@ -287,7 +312,7 @@ async function runSingleTicket(ticket: Ticket, config: IterisConfig, cwd: string
 			plan = planned.plan; checkpoint.plan = plan; await writeFile(path.join(folder, 'plan.md'), plan + '\n');
 			run.plan=plan;await saveRun(cwd,run);
 		}
-		config._plannedChecks=run.planning?.checks.map(check=>check.command)??[];
+		config._plannedChecks=localPlannedChecks(run);
 		config._requirements=run.requirements;
 		if (!checkpoint.implemented) {
 			await phase('running');
@@ -354,8 +379,11 @@ async function runSingleTicket(ticket: Ticket, config: IterisConfig, cwd: string
 			run.requirements=run.requirements.filter(r=>!resolved.includes(r.id.slice('dependency:'.length)) || !r.id.startsWith('dependency:'));
 			run.dependencies=run.dependencies.filter(d=>!resolved.includes(d.id));
 		}
+		// Evidence Iteris cannot obtain itself blocks only when the operator requires it. Otherwise it is
+		// recorded as a requirement the completion pass marks for manual verification.
+		const blockingDependencies=(reviewed.report.dependencies ?? []).filter(dependency=>dependency.kind!=='external' || config.workflow.externalEvidence==='required');
 		for(const dependency of reviewed.report.dependencies ?? []) {
-			waitFor(run,config,dependency.id,dependency.kind,dependency.description,dependency.nextAction);
+			if(blockingDependencies.includes(dependency))waitFor(run,config,dependency.id,dependency.kind,dependency.description,dependency.nextAction);
 			if(!run.requirements.some(r=>r.id===`dependency:${dependency.id}`))run.requirements.push({id:`dependency:${dependency.id}`,text:dependency.description,sourceRef:ticket.htmlUrl,stage:dependency.id,method:'stage-evidence',status:'pending',evidenceIds:[]});
 		}
 		if (config.pr.addLabelOnOpen && (config.provider === 'github' || config.provider === undefined)) {
@@ -367,8 +395,8 @@ async function runSingleTicket(ticket: Ticket, config: IterisConfig, cwd: string
 			try {await advanceCompletion(config,run,cwd,services,signal);}catch(error){waitFor(run,config,'ci','capability',`Completion verification unavailable: ${String(error)}`,'Restore CI discovery and publication access, then resume');}
 		}else if(baseChanged) {
 			run.state='queued';run.phase='reconciliation';run.reason='The base changed during publication; fresh review and CI must verify the current base';
-		}else if(reviewed.report.dependencies?.length || reviewed.report.deferredToCI) {
-			for(const dependency of reviewed.report.dependencies ?? [{id:'ci',kind:'external' as const,description:reviewed.report.reason,nextAction:'Wait for CI and rerun independent review'}])waitFor(run,config,dependency.id,dependency.kind,dependency.description,dependency.nextAction);
+		}else if(blockingDependencies.length || reviewed.report.deferredToCI) {
+			for(const dependency of blockingDependencies.length ? blockingDependencies : [{id:'ci',kind:'external' as const,description:reviewed.report.reason,nextAction:'Wait for CI and rerun independent review'}])waitFor(run,config,dependency.id,dependency.kind,dependency.description,dependency.nextAction);
 		}else {
 			run.state='blocked';run.reason=reviewed.report.reason;recordFailure(run,config,'code',{files:reviewedContext.changedFiles,findings:reviewed.report.findings.filter(f=>f.status==='confirmed').map(f=>[f.category,f.file,f.line]),checks:reviewed.report.checks.filter(c=>c.exitCode!==0).map(c=>c.command)},reviewedContext.stamp.head,reviewed.report.reason);
 			// The draft stays published; a fresh instance repairs this commit later with the findings.

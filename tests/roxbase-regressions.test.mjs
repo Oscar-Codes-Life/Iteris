@@ -43,6 +43,8 @@ test('regression: mixed recovery executes local commands and independently revie
 
 test('regression: recovered dependency at unchanged HEAD receives fresh evaluation', async t => {
   const f = await fixture(t, 'recover-evidence', 'changed\n', externalBlocker);
+  // Required evidence is a dependency whose resolution needs a fresh evaluation, never a reused pass.
+  f.cfg.workflow.externalEvidence = 'required';
   environment(t, {AUDIT_EXTERNAL_BLOCKER: '1'});
   const first = await runCodeReview(f.options);
   assert.equal(first.report.dependencies[0].description,'Physical-device evidence is pending');

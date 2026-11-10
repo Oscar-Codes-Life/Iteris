@@ -1,3 +1,4 @@
+import {keepAwake} from './harness/awake.js';
 import {InstanceMonitor} from './ui/InstanceMonitor.js';
 import {VERSION} from './version.js';
 import {reviewBranch} from './review/cli.js';
@@ -151,6 +152,7 @@ async function main() {
 			await monitor.waitUntilExit(); return;
 		}
 		if (process.stdin.isTTY) {
+			keepAwake();
 			const app = render(<App config={config} cwd={process.cwd()} tickets={await unfinishedTickets(process.cwd(), config)} resume />);
 			await app.waitUntilExit(); return;
 		}
@@ -268,6 +270,7 @@ async function run(config: IterisConfig, refresh = false) {
 	const pending = refresh ? undefined : await loadPendingQueue(process.cwd(), config);
 	if (pending?.length) {
 		console.log(`Resuming ${pending.length} ticket${pending.length === 1 ? '' : 's'} from the interrupted queue.`);
+		keepAwake();
 		const {waitUntilExit} = render(<App config={config} tickets={pending} cwd={process.cwd()} />);
 		await waitUntilExit();
 		return;
@@ -295,6 +298,7 @@ async function run(config: IterisConfig, refresh = false) {
 		process.exit(0);
 	}
 
+	keepAwake();
 	const {waitUntilExit} = render(
 		<App config={config} tickets={selected} cwd={process.cwd()} />,
 	);

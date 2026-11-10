@@ -9,7 +9,9 @@ export const reviewConfigSchema = z.object({
 export type ReviewConfig = z.infer<typeof reviewConfigSchema>;
 export const reviewSettings = (value?: Partial<ReviewConfig>) => reviewConfigSchema.parse(value ?? {});
 const text = z.string().trim().min(1).max(12_000);
-const requirement = z.object({requirement: text, status: z.enum(['covered', 'missing', 'unverified']), evidence: text}).strict();
+// external: locally adequate, and the remaining evidence can only be observed outside a checkout
+// (device, hosted service, missing attachment). Recorded for manual verification; never a review gap.
+const requirement = z.object({requirement: text, status: z.enum(['covered', 'missing', 'unverified', 'external']), evidence: text}).strict();
 export const candidateSchema = z.object({
 	category: z.enum(['correctness', 'security', 'acceptance', 'maintainability', 'performance', 'policy']),
 	priority: z.enum(['critical', 'high', 'medium', 'low']),
@@ -31,7 +33,11 @@ export const verificationSchema = z.object({
 	resolved: z.array(z.object({id: text, evidence: text}).strict()),
 }).strict();
 export type Verification = z.infer<typeof verificationSchema>;
-export type CheckResult = {command: string; head: string; exitCode: number | null; output: string; durationMs: number; error?: string; truncated: boolean};
+export type CheckResult = {command: string; head: string; exitCode: number | null; output: string; durationMs: number; error?: string; truncated: boolean;
+	/** A model-suggested command whose tool is not installed here. It produced no evidence and is not a failed check. */
+	unavailable?: boolean};
+/** A check that does not block: it passed, or it is a model suggestion this host cannot start. */
+export const checkOk = (check: Pick<CheckResult, 'exitCode' | 'error' | 'unavailable'>) => check.unavailable === true || (check.exitCode === 0 && !check.error);
 export type ReviewStamp = {head: string; base: string; mergeBase: string; branch: string; scope: string; key: string};
 export type ReviewReport = {
 	version: 1; outcome: 'passed' | 'blocked' | 'incomplete'; reason: string;

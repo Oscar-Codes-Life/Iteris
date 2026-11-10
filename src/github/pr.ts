@@ -38,7 +38,7 @@ export async function createPullRequest(config: IterisConfig, pullRequest: NewPu
 		head: pullRequest.branch,
 		base: config.baseBranch,
 		title: pullRequest.title,
-		body: pullRequest.body,
+		body: fitPrBody(pullRequest.body),
 		draft: config.pr.draft,
 	});
 	return {url: data.html_url, number: data.number};
@@ -67,7 +67,7 @@ export function replaceReviewSection(body: string, report: string): string {
 export async function updatePrReview(config: IterisConfig, number: number, report: string, octokit: Octokit = createOctokit()): Promise<void> {
 	const [owner, repo] = config.repo.split('/') as [string, string];
 	const {data} = await octokit.pulls.get({owner, repo, pull_number: number});
-	const body = replaceReviewSection(data.body ?? '', report);
+	const body = fitPrBody(replaceReviewSection(data.body ?? '', report));
 	if (body !== data.body) await octokit.pulls.update({owner, repo, pull_number: number, body});
 }
 
@@ -79,9 +79,24 @@ export function replaceLifecycleSection(body: string, report: string): string {
 	if (start >= 0 && end >= start) return body.slice(0,start) + section + body.slice(end + LIFECYCLE_END.length);
 	return `${body.trim()}\n\n${section}`;
 }
+/** GitHub rejects a pull request body over 65,536 characters; a large review plus the completion report exceeds it. */
+export const PR_BODY_LIMIT = 65_000;
+const TRUNCATED = "\n\n[Truncated to fit GitHub's size limit; the complete report remains in the local Iteris run.]";
+/** Shrinks the generated sections, keeping their markers so later updates still replace them in place. */
+export function fitPrBody(body: string, limit = PR_BODY_LIMIT): string {
+	for (const [start, end] of [[REVIEW_START, REVIEW_END], [LIFECYCLE_START, LIFECYCLE_END]] as const) {
+		if (body.length <= limit) return body;
+		const from = body.indexOf(start), to = body.indexOf(end, from);
+		if (from < 0 || to < from) continue;
+		const inner = body.slice(from + start.length, to);
+		const keep = Math.max(0, inner.length - (body.length - limit) - TRUNCATED.length - 1);
+		body = body.slice(0, from + start.length) + inner.slice(0, keep) + TRUNCATED + '\n' + body.slice(to);
+	}
+	return body.length <= limit ? body : body.slice(0, limit - TRUNCATED.length) + TRUNCATED;
+}
 export async function updatePrLifecycle(config: IterisConfig, number: number, report: string, octokit: Octokit = createOctokit()): Promise<void> {
 	const [owner,repo] = config.repo.split('/') as [string,string];
 	const {data} = await octokit.pulls.get({owner,repo,pull_number:number});
-	const body = replaceLifecycleSection(data.body ?? '',report);
+	const body = fitPrBody(replaceLifecycleSection(data.body ?? '',report));
 	if (body !== data.body) await octokit.pulls.update({owner,repo,pull_number:number,body});
 }

@@ -6,6 +6,7 @@ import { prepareEnvironment, persistedManifest, resolveExecutable } from './envi
 import { runCommand } from '../review/command.js';
 import { addEvidence } from './requirements.js';
 import { runWorker } from './worker.js';
+import { keepAwake } from '../harness/awake.js';
 import { acquireRun, hasActiveRun } from '../state/active.js';
 import { requestCancellation } from './cancellation.js';
 import { resolveTaskConfig } from './config.js';
@@ -36,6 +37,7 @@ export async function lifecycleCommand(command: string, args: string[], config: 
         process.on('SIGINT', abort);
         process.on('SIGTERM', abort);
         try {
+            keepAwake();
             await runWorker({ config, cwd, once: args.includes('--once'), force: true, signal: controller.signal, callbacks: { onStatusChange(_, state) { console.log(`${state.ticket.title}: ${state.status}${state.failureReason ? ` — ${state.failureReason}` : ''}`); }, onLogLine(_, line) { console.log(line); }, onComplete() { } } });
         }
         finally {

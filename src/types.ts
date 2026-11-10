@@ -60,6 +60,8 @@ export type IterisConfig = {
 	_deadline?: number;
 	_plannedChecks?: string[];
 	_requirements?: import('./lifecycle/state.js').Requirement[];
+	/** Base commit this attempt works and is reviewed against, fixed when the attempt starts. */
+	_base?: string;
 	harness: Harness;
 	harnesses: Record<Harness, HarnessSettings>;
 	setupComplete: boolean;

@@ -8,6 +8,7 @@ import {reviewSettings, type ReviewStamp, type Candidate} from './schema.js';
 import {runCommand} from './command.js';
 import {resolveTaskConfig} from '../lifecycle/config.js';
 import {extractRequirements,applicableChecks} from '../lifecycle/requirements.js';
+import {sourceIdentity} from '../lifecycle/state.js';
 
 export const REVIEW_VERSION = 4;
 export const INLINE_DIFF_LIMIT = 240_000;
@@ -83,7 +84,9 @@ export function captureContext(ticket: Ticket, config: IterisConfig, cwd: string
 	const current = git(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD']).trim();
 	if (current !== branch) throw new Error(`Expected branch ${branch}; found ${current}.`);
 	const head = git(cwd, ['rev-parse', 'HEAD']).trim();
-	const base = resolveBase(config, cwd);
+	// One attempt reviews against one base. Tasks in parallel worktrees share the remote-tracking refs,
+	// so another task's fetch must not change this task's base in the middle of its review.
+	const base = config._base || resolveBase(config, cwd);
 	if (!base) throw new Error(`Cannot resolve review base ${config.baseBranch}.`);
 	const mergeBase = git(cwd, ['merge-base', base, head]).trim();
 	const changedFiles = git(cwd, ['diff', '--name-only', '-z', '--no-renames', mergeBase, head]).split('\0').filter(Boolean);
@@ -91,10 +94,19 @@ export function captureContext(ticket: Ticket, config: IterisConfig, cwd: string
 	const diff = git(cwd, ['diff', '--no-ext-diff', '--no-textconv', '--no-color', '--no-renames', '--unified=5', mergeBase, head]);
 	Object.assign(config,resolveTaskConfig(config,ticket,changedFiles));
 	const policy = trustedPolicy(config, cwd, base);
+	// Policy and context files are host inputs read from the base. A planned command that names one the
+	// base does not have can only pass if the task creates that file, so it is not a project check.
+	const absent = [...new Set([...config.verification.policyFiles,...config.verification.contextFiles])].filter(file => !git(cwd, ['ls-tree', base, '--', file]).trim());
+	const planned = (config._plannedChecks ?? []).filter(command => config.qualityChecks.includes(command) || !absent.some(file => command.includes(file)));
+	// Follow-ups a review recorded are its results. As inputs they would change the scope of the
+	// very review that produced them, and a passed review could never be reused while CI runs.
+	const requirements = (config._requirements ?? extractRequirements(ticket, config)).filter(requirement => !requirement.id.startsWith('dependency:'));
 	const risk = changedFiles.filter(file => /auth|credential|secret|token|migrat|schema|harness|process|permission|concurr|(^|\/)types\./i.test(file));
-	const scope = digest({version: REVIEW_VERSION + 1, base, branch, ticket:{number:ticket.number,title:ticket.title,body:ticket.body,labels:ticket.labels,source:ticket.source,custom:ticket.custom?.fingerprint}, plan, policy, checks: [...config.qualityChecks,...(config._plannedChecks??[])], requirements:(config._requirements??extractRequirements(ticket,config)).map(r=>({id:r.id,text:r.text,stage:r.stage,method:r.method})), verification:config.verification, environment:config._execution?.identity, review: reviewSettings(config.review), harness: config.harness, settings: config.harnesses[config.harness], repo: config.repo, provider: config.provider});
+	// The same task has one identity whether it arrives from the queue or from a saved run.
+	const source = sourceIdentity(ticket, config);
+	const scope = digest({version: REVIEW_VERSION + 1, base, branch, ticket:{number:ticket.number,title:ticket.title,body:ticket.body,labels:ticket.labels,source,custom:ticket.custom?.fingerprint}, plan, policy, checks: [...config.qualityChecks,...planned], requirements:requirements.map(r=>({id:r.id,text:r.text,stage:r.stage,method:r.method})), verification:config.verification, environment:config._execution?.identity, review: reviewSettings(config.review), harness: config.harness, settings: config.harnesses[config.harness], repo: config.repo, provider: source.provider});
 	const key = digest({scope, head, mergeBase});
-	return {stamp: {head, base, mergeBase, branch, scope, key}, ticket, plan, policy, checks: [...new Set([...config.qualityChecks,...(config._plannedChecks??[])])], checkIds:applicableChecks(config,changedFiles).map(c=>c.id), changedFiles, diff, risk, requirements:config._requirements??extractRequirements(ticket,config)};
+	return {stamp: {head, base, mergeBase, branch, scope, key}, ticket, plan, policy, checks: [...new Set([...config.qualityChecks,...planned])], checkIds:applicableChecks(config,changedFiles).map(c=>c.id), changedFiles, diff, risk, requirements};
 }
 export function assertSnapshot(context: ReviewContext, config: IterisConfig, cwd: string): void {
 	const current = captureContext(context.ticket, config, cwd, context.plan, context.stamp.branch);
@@ -146,6 +158,19 @@ export async function publishReviewed(context: ReviewContext, config: IterisConf
 	if (pushed.exitCode !== 0 || pushed.error) throw new Error(pushed.error ?? `Push failed: ${pushed.output}`);
 	return assertPublished(context, config, cwd, signal, allowBaseDrift);
 }
+/** Whether head merges into the remote base without conflicts. Leaves the local tracking refs untouched so the review snapshot stays valid. */
+async function mergesCleanly(cwd: string, baseBranch: string, remoteBase: string, head: string, signal?: AbortSignal): Promise<boolean> {
+	const probe = `refs/iteris/base-probe/${head}`;
+	const run = (args: string[]) => runCommand('git', ['-c', 'core.hooksPath=/dev/null', ...args], {cwd, deadline: Date.now() + 120_000, signal});
+	try {
+		const fetched = await run(['fetch', '--quiet', '--refmap=', 'origin', `+refs/heads/${baseBranch}:${probe}`]);
+		if (fetched.exitCode !== 0 || fetched.error || git(cwd, ['rev-parse', '--verify', probe]).trim() !== remoteBase) return false;
+		const merged = await run(['merge-tree', '--write-tree', remoteBase, head]);
+		return merged.exitCode === 0 && !merged.error;
+	} catch {return false;} finally {
+		try {git(cwd, ['update-ref', '-d', probe]);} catch { /* never created */ }
+	}
+}
 export async function assertPublished(context: ReviewContext, config: IterisConfig, cwd: string, signal?: AbortSignal, allowBaseDrift = false): Promise<boolean> {
 	assertSnapshot(context, config, cwd);
 	const remote = await runCommand('git', ['ls-remote', '--exit-code', 'origin', `refs/heads/${context.stamp.branch}`, `refs/heads/${config.baseBranch}`], {cwd, deadline: Date.now() + 30_000, signal});
@@ -154,7 +179,13 @@ export async function assertPublished(context: ReviewContext, config: IterisConf
 	const remoteBase = refs.get(`refs/heads/${config.baseBranch}`);
 	if (!remoteBase) throw new Error('Remote base branch is missing.');
 	const baseChanged = remoteBase !== context.stamp.base;
-	if (baseChanged && !allowBaseDrift) throw new Error('Remote base changed. Fetch the base and rerun review before opening the PR.');
+	if (baseChanged && !allowBaseDrift) {
+		// On an active repository the base moves during every review. The reviewed commit stays valid
+		// while it still merges cleanly; hosted CI then runs against the merge. Only a conflict needs a new attempt.
+		if (!await mergesCleanly(cwd, config.baseBranch, remoteBase, context.stamp.head, signal)) throw new Error('Remote base changed and conflicts with the reviewed commit. Fetch the base and rerun review before opening the PR.');
+		assertSnapshot(context, config, cwd);
+		return false;
+	}
 	assertSnapshot(context, config, cwd);
 	return baseChanged;
 }

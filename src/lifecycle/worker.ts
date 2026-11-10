@@ -21,6 +21,7 @@ import { ticketBranch } from '../types.js';
 import { importLegacyArtifacts } from './migration.js';
 import { cancellationScope, cancellationRequested } from './cancellation.js';
 import { checkpointPartialWork } from './commit.js';
+import { localPlannedChecks } from './planning.js';
 import { recordAttempt, consumeRetry, latestAttempt, attemptBriefing, resumableBlocked, type AttemptInput } from './attempts.js';
 import type { TicketState } from '../types.js';
 export type WorkerOptions = {
@@ -78,7 +79,7 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
                 if (signal?.aborted)
                     return;
                 const cancellation = await cancellationScope(cwd, run.key, signal), taskSignal = cancellation.signal;
-                const snapshot = { ...config, provider: run.source.provider, _requirements: run.requirements, _plannedChecks: run.planning?.checks.map(check => check.command) ?? [] };
+                const snapshot = { ...config, provider: run.source.provider, _requirements: run.requirements, _plannedChecks: localPlannedChecks(run) };
                 const root = cwd;
                 const notify = async (state: TicketState) => {
                     callbacks.onStatusChange(state.ticket.number, state);
@@ -182,8 +183,21 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
                         }
                         let passed = false;
                         if (run.publication && run.fingerprint === taskFingerprint(ticket)) {
-                            const context = captureContext(ticket, snapshot, cwd, run.plan ?? await import('../review/context.js').then(m => m.savedPlan(run.artifacts)), run.branch);
-                            passed = !!await loadPassedReview(path.join(run.artifacts, 'review'), context);
+                            // The published commit was reviewed against its published base. A base that moved on
+                            // since then is judged by the completion pass (still mergeable or not), not by re-reviewing.
+                            const pinned = snapshot as typeof snapshot & { _base?: string };
+                            try {
+                                git(cwd, ['cat-file', '-e', `${run.publication.base}^{commit}`]);
+                                pinned._base = run.publication.base;
+                            }
+                            catch { /* unknown base object: fall back to the tracking ref */ }
+                            try {
+                                const context = captureContext(ticket, snapshot, cwd, run.plan ?? await import('../review/context.js').then(m => m.savedPlan(run.artifacts)), run.branch);
+                                passed = !!await loadPassedReview(path.join(run.artifacts, 'review'), context, snapshot.workflow.externalEvidence === 'advisory');
+                            }
+                            finally {
+                                delete pinned._base;
+                            }
                         }
                         if (passed && !run.dependencies.some(d => d.kind === 'test')) {
                             clearVerifiedLocalDependencies(run);

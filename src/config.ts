@@ -53,7 +53,7 @@ function validate(data: unknown): IterisConfig {
 	const result = configSchema.safeParse(data);
 	if (!result.success) throw new Error(`.iteris.json validation failed:\n${result.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('\n')}`);
 	const validated=result.data as IterisConfig;
-	delete validated._execution;delete validated._deadline;delete validated._plannedChecks;delete validated._requirements;
+	delete validated._execution;delete validated._deadline;delete validated._plannedChecks;delete validated._requirements;delete validated._base;
 	return validated;
 }
 

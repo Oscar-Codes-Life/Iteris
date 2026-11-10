@@ -4,7 +4,7 @@ import {readFile,writeFile,mkdir,readdir,realpath} from 'node:fs/promises';
 import path from 'node:path';
 import {configSchema,loadConfig,atomicWriteConfig} from '../dist/config.js';
 import {ticketBranch} from '../dist/types.js';
-import {ensureRun,saveRun,readRun,listRuns,taskKey,waitFor,recordFailure} from '../dist/lifecycle/state.js';
+import {ensureRun,saveRun,readRun,listRuns,taskKey,waitFor,recordFailure,renderRun,MANUAL_FOLLOW_UP} from '../dist/lifecycle/state.js';
 import {extractRequirements,addEvidence,reconcileEvidence,readyToComplete} from '../dist/lifecycle/requirements.js';
 import {resolveTaskConfig,commandSchema} from '../dist/lifecycle/config.js';
 import {prepareEnvironment,persistedManifest,executeCommand} from '../dist/lifecycle/environment.js';
@@ -115,8 +115,19 @@ test('explicit CI checks assess the current commit and fail when required eviden
  assert.equal((await verifyGithubCi(cfg,run,api)).state,'failed');
 });
 test('missing hardware waits with a specific next action; evidence for another commit is invalid',async t=>{
- const {cwd,cfg,run}=await pendingRun(t,'Implement feature\nVerify on a physical device');await advanceCompletion(cfg,run,cwd,completionServices);assert.equal(run.state,'waiting');assert.ok(run.dependencies.some(d=>d.id==='stage:device'));
+ const {cwd,cfg,run}=await pendingRun(t,'Implement feature\nVerify on a physical device');cfg.workflow.externalEvidence='required';await advanceCompletion(cfg,run,cwd,completionServices);assert.equal(run.state,'waiting');assert.ok(run.dependencies.some(d=>d.id==='stage:device'));
  const device=run.requirements.find(r=>r.stage==='device');addEvidence(run,device.id,'old-commit','submitted','device passed',true,'base-a');reconcileEvidence(run,'commit-a','base-a');assert.equal(device.status,'pending');
+});
+test('evidence nothing configured can observe is listed for manual verification and does not hold the task',async t=>{
+ const {cwd,cfg,run}=await pendingRun(t,'Implement feature\nVerify on a physical device');assert.equal(cfg.workflow.externalEvidence,'advisory');
+ waitFor(run,cfg,'stage:device','capability','Evidence unavailable for device','submit evidence');
+ await advanceCompletion(cfg,run,cwd,completionServices);
+ assert.equal(run.state,'complete');assert.equal(run.dependencies.length,0);assert.equal(run.publication.draft,false);
+ const device=run.requirements.find(r=>r.stage==='device');assert.equal(run.evidence.findLast(e=>e.requirementId===device.id).provenance,MANUAL_FOLLOW_UP);
+ const view=renderRun(run);assert.match(view,/- \[ \] Verify on a physical device .* needs manual verification/);assert.match(view,/needs manual verification: 1/);assert.match(view,/Verified completion: yes/);
+ // A configured stage is the operator's requirement and keeps blocking in either mode.
+ const strict=await pendingRun(t,'Implement feature\nVerify on a physical device');strict.cfg.verification.stages=[{id:'device',kind:'device',required:true,idempotent:true,observationSeconds:0}];
+ await advanceCompletion(strict.cfg,strict.run,strict.cwd,completionServices);assert.equal(strict.run.state,'waiting');
 });
 test('interrupted non-idempotent deployment is probed before repetition and waits when ambiguous',async t=>{
  const {cwd,cfg,run}=await pendingRun(t,'Implement feature\nDeploy to the configured environment');cfg.integrations.externalActions=['deploy'];cfg.verification.stages=[{id:'deploy',kind:'deployment',required:true,idempotent:false,observationSeconds:0,execute:command("require('node:fs').writeFileSync('.iteris/deployed','yes');console.log('{}')"),verify:command("process.exit(1)")}];
@@ -138,4 +149,20 @@ test('foreground once refreshes unavailable dependencies and preserves the task 
 test('legacy done with incomplete review imports unfinished and preserves original artifacts',async t=>{
  const {cwd,git}=await reviewRepository(t),cfg=config('codex'),task={...ticket(),source:undefined};git('checkout','-qb','iteris/1-feature');await writeFile(path.join(cwd,'feature.txt'),'changed\n');git('add','feature.txt');git('commit','-qm','change');const head=git('rev-parse','HEAD'),legacy=path.join(cwd,'.iteris/runs/1-feature');await mkdir(path.join(legacy,'review'),{recursive:true});await writeFile(path.join(legacy,'review/context.json'),JSON.stringify({ticket:task,stamp:{head,branch:'iteris/1-feature'}}));await writeFile(path.join(legacy,'review/result.json'),JSON.stringify({outcome:'incomplete',reason:'device unavailable'}));await writeFile(path.join(legacy,'status.md'),'**Status**: done\n**PR**: https://github.com/org/repo/pull/42\n');
  const run=await importLegacyArtifacts(cwd,task,cfg,path.join(cwd,'.iteris/tasks',taskKey(task,cfg),'artifacts'));assert.equal(run.state,'queued');assert.equal(run.implementation.head,head);assert.equal(run.publication.number,42);assert.match(await readFile(path.join(legacy,'status.md'),'utf8'),/done/);assert.equal(readyToComplete(run),false);
+});
+test('a base that moved after publication keeps CI evidence while the pull request still merges cleanly',async t=>{
+ const {cfg,run}=await pendingRun(t);let mergeable=true,strict=false,required=['unit'];
+ const api={pulls:{get:async()=>({data:{state:'open',mergeable,head:{sha:'commit-a'}}})},repos:{getBranch:async()=>({data:{protected:false,commit:{sha:'base-moved'}}}),listCommitStatusesForRef(){}},checks:{listForRef(){}},
+  request:async()=>({data:[{type:'required_status_checks',parameters:{strict_required_status_checks_policy:strict,required_status_checks:[{context:'unit'}]}}]}),
+  paginate:async method=>method===api.checks.listForRef?[{name:'unit',status:'completed',conclusion:'success',started_at:new Date().toISOString(),pull_requests:[{base:{sha:'some-earlier-base'}}]}]:[]};
+ cfg.verification.requiredCiChecks=required;
+ // Evidence stays tied to the published base; the moved base alone changes nothing.
+ assert.deepEqual(await verifyGithubCi(cfg,run,api),{head:'commit-a',base:'base-a',state:'passed',details:'unit: passed'});
+ mergeable=null;assert.equal((await verifyGithubCi(cfg,run,api)).state,'waiting');
+ mergeable=false;const conflict=await verifyGithubCi(cfg,run,api);assert.equal(conflict.state,'changed');assert.equal(conflict.base,'base-moved');assert.match(conflict.details,/conflicts with the published commit/);
+ // A repository that requires up-to-date branches still invalidates on any base movement.
+ mergeable=true;strict=true;delete cfg.verification.requiredCiChecks;const demanded=await verifyGithubCi(cfg,run,api);assert.equal(demanded.state,'changed');assert.match(demanded.details,/requires an up-to-date branch/);
+ strict=false;assert.equal((await verifyGithubCi(cfg,run,api)).state,'passed');
+ // A new published head is always a change.
+ const moved={...api,pulls:{get:async()=>({data:{state:'open',mergeable:true,head:{sha:'commit-b'}}})}};assert.equal((await verifyGithubCi(cfg,run,moved)).state,'changed');
 });

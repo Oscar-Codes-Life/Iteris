@@ -1,7 +1,7 @@
 import {completionServices} from './helpers.mjs';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdir, readFile, writeFile, readdir, rm} from 'node:fs/promises';
+import {mkdir, readFile, writeFile, readdir, rm, appendFile} from 'node:fs/promises';
 import path from 'node:path';
 import {runCodeReview} from '../dist/agent/reviewer.js';
 import {captureContext, createSnapshot, assertPublished, INLINE_DIFF_LIMIT, reviewDiffParts} from '../dist/review/context.js';
@@ -9,7 +9,10 @@ import {reviewPrompt, verificationPrompt, repairPrompt, recoveryPrompt} from '..
 import {invocation} from '../dist/harness/process.js';
 import {runAllTickets} from '../dist/agent/runner.js';
 import {atomicWriteConfig, configSchema} from '../dist/config.js';
-import {temporary, reviewRepository, environment, executable, fakeAgent, config} from './helpers.mjs';
+import {temporary, reviewRepository, environment, executable, fakeAgent, config, setupIsolationFixture} from './helpers.mjs';
+import {localPlannedChecks} from '../dist/lifecycle/planning.js';
+import {runRecoveryCheck} from '../dist/lifecycle/local-check.js';
+import {fitPrBody, PR_BODY_LIMIT, reviewSection, replaceReviewSection, replaceLifecycleSection, REVIEW_START, REVIEW_END, LIFECYCLE_START, LIFECYCLE_END} from '../dist/github/pr.js';
 const ticket={number:1,title:'Feature',body:'Implement feature. Handle retries without duplicate writes.',slug:'feature',labels:[],htmlUrl:'https://example.com/1'};
 async function fixture(t, {harness='codex', content='changed\n', scenario, mode='normal'}={}) {
  const repo=await reviewRepository(t),{cwd,git}=repo;
@@ -188,8 +191,15 @@ test('a changed remote base prevents publication readiness even if local trackin
  const {execFileSync}=await import('node:child_process');const f=await fixture(t);
  const context=captureContext(ticket,f.cfg,f.cwd);f.git('push','-q','origin','HEAD:refs/heads/iteris/1-feature');
  await assertPublished(context,f.cfg,f.cwd);
- execFileSync('git',['--git-dir',f.remote,'update-ref','refs/heads/main',context.stamp.head]);
- await assert.rejects(assertPublished(context,f.cfg,f.cwd),/Remote base changed/);
+ // Someone else merges to the base while the review runs. Local tracking refs stay stale.
+ const other=await temporary(t),push=(file,content)=>{execFileSync('git',['clone','-q',f.remote,other+'/'+file]);const cwd=other+'/'+file,git=(...args)=>execFileSync('git',args,{cwd,stdio:'pipe'});git('config','user.email','other@example.com');git('config','user.name','Other');execFileSync('node',['-e',`require('node:fs').writeFileSync(${JSON.stringify(cwd+'/'+file)},${JSON.stringify(content)})`]);git('add',file);git('commit','-qm','upstream '+file);git('push','-q','origin','HEAD:main');};
+ push('unrelated.txt','upstream\n');
+ // A base that moved but still merges cleanly keeps the reviewed commit publishable.
+ assert.equal(await assertPublished(context,f.cfg,f.cwd),false);
+ assert.equal(await assertPublished(context,f.cfg,f.cwd,undefined,true),true);
+ assert.equal(f.git('for-each-ref','refs/iteris'),'');assert.equal(f.git('rev-parse','refs/remotes/origin/main'),context.stamp.base);
+ push('feature.txt','conflicting upstream change\n');
+ await assert.rejects(assertPublished(context,f.cfg,f.cwd),/Remote base changed and conflicts/);
  assert.equal(await assertPublished(context,f.cfg,f.cwd,undefined,true),true);
 });
 test('PR evidence updates preserve authored content and do not append duplicate sections',async()=>{
@@ -459,4 +469,68 @@ test('ambiguous duplicate status fails closed', async t => {
  const result = await runCodeReview(f.options);
  assert.equal(result.report.outcome, 'blocked');
  assert.equal(result.report.findings.filter(f=>f.status==='confirmed'&&!f.duplicateOf).length,2);
+});
+test("the host's own gates reported unverified by reviewers are not review gaps",async t=>{
+ const f=await fixture(t,{scenario:'host-gates'}),result=await runCodeReview(f.options);
+ assert.equal(result.report.outcome,'passed',result.error);
+ assert.deepEqual(result.report.requirements.map(r=>r.requirement),['Implement feature',ticket.body]);
+ const calls=await f.calls(),verify=calls.find(c=>c.prompt.startsWith('ITERIS_REVIEW verify'));
+ assert.deepEqual(JSON.parse(verify.prompt.split('INPUT_JSON\n')[1]).requiredRequirements,['Implement feature. Handle retries without duplicate writes.','Implement feature']);
+ for(const call of calls)assert.match(call.prompt,/Do not list the host gates/);
+});
+test('evidence that needs a device or hosted service passes the review as a manual follow-up',async t=>{
+ const f=await fixture(t,{scenario:'external'}),result=await runCodeReview(f.options);
+ assert.equal(result.report.outcome,'passed',result.error);assert.equal(result.report.gaps.length,0);
+ assert.ok(result.report.dependencies.length>0);assert.ok(result.report.dependencies.every(d=>d.kind==='external'&&d.id.startsWith('manual-')));
+ assert.match(result.text,/### Needs manual verification/);
+ // Advisory follow-ups do not invalidate the pass; required evidence always gets a fresh evaluation.
+ const count=(await f.calls()).length;assert.equal((await runCodeReview(f.options)).report.outcome,'passed');assert.equal((await f.calls()).length,count);
+ f.cfg.workflow.externalEvidence='required';assert.equal((await runCodeReview(f.options)).report.outcome,'passed');assert.ok((await f.calls()).length>count);
+});
+test('a suggested check whose tool is not installed is absent evidence, while a failing one still blocks',async t=>{
+ const f=await fixture(t);await setupIsolationFixture(f.cwd);await appendFile(path.join(f.cwd,'.git/info/exclude'),'sandbox-exec\nbwrap\n');
+ f.cfg._plannedChecks=['iteris-tool-that-is-not-installed --version'];
+ const result=await runCodeReview(f.options);assert.equal(result.report.outcome,'passed',result.error);
+ const check=result.report.checks.find(c=>c.command.startsWith('iteris-tool'));assert.equal(check.exitCode,127);assert.equal(check.unavailable,true);
+ assert.match(result.text,/not run, tool unavailable on this host/);
+ f.cfg._plannedChecks=['exit 3'];const failing=await runCodeReview(f.options);assert.equal(failing.report.outcome,'blocked');
+ // A configured check is the operator's gate: missing tooling there is a failure.
+ f.cfg._plannedChecks=[];f.cfg.qualityChecks=['iteris-tool-that-is-not-installed --version'];
+ assert.equal((await runCodeReview(f.options)).report.outcome,'blocked');
+});
+test('planned checks for host-owned stages or absent policy files are not local gates',async t=>{
+ const requirements=[{id:'local-checks',stage:'local'},{id:'independent-review',stage:'review'},{id:'publication',stage:'publication'},{id:'required-ci',stage:'ci'},{id:'acceptance-1',stage:'local'},{id:'acceptance-2',stage:'device'}];
+ const check=(command,...requirementIds)=>({command,behavioral:false,requirementIds});
+ assert.deepEqual(localPlannedChecks({requirements,planning:{checks:[check('npm test','local-checks','required-ci'),check('gh pr view','publication'),check('gh pr checks --watch','required-ci'),check('test -s REVIEW.md','independent-review'),check('maestro test flow.yaml','acceptance-2'),check('npm run lint'),check('jest feature','acceptance-1')]}}),['npm test','npm run lint','jest feature']);
+ const f=await fixture(t);f.cfg._plannedChecks=['test -f REVIEW.md','./node_modules/.bin/prettier --check REVIEW.md','printf ok'];
+ assert.deepEqual(captureContext(ticket,f.cfg,f.cwd).checks,['true','printf ok']);
+ f.git('checkout','-q','main');await writeFile(path.join(f.cwd,'REVIEW.md'),'Never leak credentials.');f.git('add','REVIEW.md');f.git('commit','-qm','policy');f.git('push','-q','origin','main');f.git('checkout','-q','iteris/1-feature');f.git('merge','-q','main','-m','sync');
+ assert.deepEqual(captureContext(ticket,f.cfg,f.cwd).checks,['true','test -f REVIEW.md','./node_modules/.bin/prettier --check REVIEW.md','printf ok']);
+});
+test('isolated checks can run git',{skip:process.platform!=='darwin'},async t=>{
+ const f=await fixture(t),base=f.git('rev-parse','main');
+ const result=await runRecoveryCheck(`git diff --check ${base} HEAD && git status --porcelain=v1 && git rev-parse HEAD`,f.cwd,f.cfg,Date.now()+30_000);
+ assert.equal(result.exitCode,0,result.output);assert.match(result.output,new RegExp(f.git('rev-parse','HEAD')));
+});
+test('review phases scale with the task allowance unless a review timeout is configured',async t=>{
+ const lines=[],f=await fixture(t);f.options.onLogLine=line=>lines.push(line);
+ f.cfg.timeout=7200;await runCodeReview(f.options);assert.ok(lines.some(line=>/Checks: time allowance 1800s/.test(line)),lines.join('\n'));
+ lines.length=0;f.cfg.timeout=1200;f.git('commit','--allow-empty','-qm','next');await runCodeReview(f.options);assert.ok(lines.some(line=>/Checks: time allowance 900s/.test(line)));
+ lines.length=0;f.cfg.timeout=7200;f.cfg.review.timeout=600;f.git('commit','--allow-empty','-qm','again');await runCodeReview(f.options);assert.ok(lines.some(line=>/Checks: time allowance 600s/.test(line)));
+});
+test('an oversized pull request body is shortened inside its generated sections',()=>{
+ const review='r'.repeat(55_000),lifecycle='l'.repeat(30_000);
+ const body=replaceLifecycleSection(`## Summary\nFeature\n\n${reviewSection(review)}\n\nCloses #1`,lifecycle);assert.ok(body.length>PR_BODY_LIMIT);
+ const fitted=fitPrBody(body);assert.ok(fitted.length<=PR_BODY_LIMIT);
+ for(const marker of [REVIEW_START,REVIEW_END,LIFECYCLE_START,LIFECYCLE_END])assert.equal(fitted.split(marker).length,2,marker);
+ assert.match(fitted,/Truncated to fit GitHub's size limit/);assert.match(fitted,/Closes #1/);assert.ok(fitted.includes(lifecycle));
+ assert.equal(fitPrBody('short'),'short');assert.ok(fitPrBody('x'.repeat(80_000)).length<=PR_BODY_LIMIT);
+ assert.equal(replaceReviewSection(fitted,'new review').split(REVIEW_START).length,2);
+});
+test('an attempt keeps the base it started from when another task fetches a newer one',async t=>{
+ const f=await fixture(t),context=captureContext(ticket,f.cfg,f.cwd);
+ f.git('checkout','-q','main');await writeFile(path.join(f.cwd,'other.txt'),'newer base\n');f.git('add','other.txt');f.git('commit','-qm','newer base');f.git('push','-q','origin','main');f.git('checkout','-q','iteris/1-feature');
+ assert.notEqual(captureContext(ticket,f.cfg,f.cwd).stamp.key,context.stamp.key);
+ f.cfg._base=context.stamp.base;const pinned=captureContext(ticket,f.cfg,f.cwd);
+ assert.equal(pinned.stamp.base,context.stamp.base);assert.equal(pinned.stamp.key,context.stamp.key);
 });

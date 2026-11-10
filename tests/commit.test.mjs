@@ -55,3 +55,31 @@ test('a metadata-only working tree does not create an empty commit',async t=>{
  const {cwd,git}=await reviewRepository(t);const before=git('rev-parse','HEAD');await mkdir(path.join(cwd,'.iteris'));await writeFile(path.join(cwd,'.iteris','state.json'),'state');
  commitSourceChanges(cwd,'main','nothing to commit');assert.equal(git('rev-parse','HEAD'),before);
 });
+
+// Someone else merges to the base on the remote; this checkout's refs stay stale until Iteris fetches.
+async function upstream(t,remote,file,content){
+ const {execFileSync}=await import('node:child_process'),{temporary}=await import('./helpers.mjs');
+ const cwd=await temporary(t),git=(...args)=>execFileSync('git',args,{cwd,stdio:'pipe',encoding:'utf8'}).trim();
+ execFileSync('git',['clone','-q',remote,cwd]);git('config','user.email','other@example.com');git('config','user.name','Other');
+ await writeFile(path.join(cwd,file),content);git('add',file);git('commit','-qm',`upstream ${file}`);git('push','-q','origin','HEAD:main');return git('rev-parse','HEAD');
+}
+test('a task branch is brought up to date with a base that moved',async t=>{
+ const {integrateBase,mergeInProgress,abortMerge,unresolvedConflicts,checkpointPartialWork}=await import('../dist/lifecycle/commit.js');
+ const {cwd,git,remote}=await reviewRepository(t);
+ // A new branch cut from a stale local base starts from the current base instead.
+ const first=await upstream(t,remote,'other.txt','one\n');git('checkout','-qb','iteris/1-feature');
+ const forwarded=await integrateBase(cwd,'iteris/1-feature','main');assert.equal(forwarded.status,'fast-forwarded');assert.equal(git('rev-parse','HEAD'),first);
+ assert.equal((await integrateBase(cwd,'iteris/1-feature','main')).status,'current');
+ // With task commits, a base that moved without touching the same lines is merged by the host.
+ await writeFile(path.join(cwd,'feature.txt'),'ticket change\n');git('add','feature.txt');git('commit','-qm','implement');const implemented=git('rev-parse','HEAD');
+ const second=await upstream(t,remote,'other.txt','two\n');
+ const merged=await integrateBase(cwd,'iteris/1-feature','main');assert.equal(merged.status,'merged');assert.equal(merged.before,implemented);assert.equal(merged.base,second);
+ assert.deepEqual(git('rev-list','--parents','-n','1','HEAD').split(' ').slice(1),[implemented,second]);assert.equal(git('status','--porcelain'),'');
+ // Overlapping changes stop on conflicts for an instance to resolve; an interrupted resolution is never committed.
+ await upstream(t,remote,'feature.txt','upstream change\n');const before=git('rev-parse','HEAD');
+ const conflicted=await integrateBase(cwd,'iteris/1-feature','main');assert.equal(conflicted.status,'conflicted');assert.deepEqual(conflicted.files,['feature.txt']);
+ assert.ok(mergeInProgress(cwd));assert.deepEqual(unresolvedConflicts(cwd,conflicted.files),['feature.txt']);
+ assert.equal(checkpointPartialWork(cwd,'iteris/1-feature','Checkpoint'),false);
+ assert.equal(mergeInProgress(cwd),false);assert.equal(git('rev-parse','HEAD'),before);assert.equal(git('status','--porcelain'),'');assert.equal(await readFile(path.join(cwd,'feature.txt'),'utf8'),'ticket change\n');
+ abortMerge(cwd);
+});

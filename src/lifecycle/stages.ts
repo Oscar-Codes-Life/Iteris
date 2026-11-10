@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { IterisConfig } from '../types.js';
-import { saveRun, waitFor, renderRun, type TaskRun, type ExternalAction } from './state.js';
+import { saveRun, waitFor, renderRun, MANUAL_FOLLOW_UP, type TaskRun, type ExternalAction } from './state.js';
 import { addEvidence, reconcileEvidence, readyToComplete, extractRequirements } from './requirements.js';
 import { executeCommand } from './environment.js';
 import { sourceAdapter } from './adapters.js';
@@ -193,6 +193,13 @@ export async function advanceCompletion(config: IterisConfig, run: TaskRun, cwd:
     }
     for (const stage of new Set(run.requirements.filter(r => !['local', 'review', 'publication', 'ci'].includes(r.stage) && r.status !== 'verified').map(r => r.stage))) {
         const configured = config.verification.stages.find(s => s.id === stage || s.kind === stage);
+        if (!configured && config.workflow.externalEvidence === 'advisory') {
+            // Nothing configured can observe this stage. It is listed for a person to verify and does not hold the task.
+            for (const requirement of run.requirements.filter(r => r.stage === stage && r.status !== 'verified'))
+                addEvidence(run, requirement.id, head, MANUAL_FOLLOW_UP, 'Not verified by Iteris; listed for manual verification', true, base);
+            run.dependencies = run.dependencies.filter(d => d.id !== stage && d.id !== `stage:${stage}`);
+            continue;
+        }
         if (priorActions.has(configured?.id ?? stage))
             continue;
         try {

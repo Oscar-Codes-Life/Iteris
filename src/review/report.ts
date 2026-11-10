@@ -3,7 +3,7 @@ import {randomUUID} from 'node:crypto';
 import path from 'node:path';
 import {redact} from '../harness/redact.js';
 import {z} from 'zod';
-import {blocks, candidateSchema, verificationSchema, type ReviewReport, type ReviewResult} from './schema.js';
+import {blocks, candidateSchema, verificationSchema, checkOk, type ReviewReport, type ReviewResult} from './schema.js';
 import type {ReviewContext} from './context.js';
 
 export async function saveJson(file: string, value: unknown): Promise<void> {
@@ -25,7 +25,7 @@ export async function saveCheckpoint(directory: string, key: string, value: unkn
 	await saveJson(path.join(directory, 'checkpoints', `${key}.json`), {key, value});
 }
 
-export const checksSchema = z.array(z.object({command: z.string(), head: z.string(), exitCode: z.number().nullable(), output: z.string(), durationMs: z.number(), error: z.string().optional(), truncated: z.boolean()}));
+export const checksSchema = z.array(z.object({command: z.string(), head: z.string(), exitCode: z.number().nullable(), output: z.string(), durationMs: z.number(), error: z.string().optional(), truncated: z.boolean(), unavailable: z.boolean().optional()}));
 const inline = (value: string) => value.replace(/[\r\n]+/g, ' ').replaceAll('`', "'").replace(/[<>]/g, '');
 export function renderReport(report: ReviewReport): string {
 	return [
@@ -34,11 +34,12 @@ export function renderReport(report: ReviewReport): string {
 		`Reviewer: ${inline(report.selection.harness)} / ${inline(report.selection.model ?? 'default')} / ${inline(report.selection.effort ?? 'default')}. Usage/cost: unavailable.`, '',
 		'### Acceptance', '', ...report.requirements.map(item => `- **${item.status}** ${inline(item.requirement)} — ${inline(item.evidence)}`),
 		...(report.requirements.length ? [] : ['- Not verified.']), '', '### Checks', '',
-		...report.checks.map(check => `- \`${inline(check.command)}\`: ${check.error ? inline(check.error) : `exit ${check.exitCode}`} (${check.durationMs} ms), commit \`${check.head}\`.`),
+		...report.checks.map(check => `- \`${inline(check.command)}\`: ${check.unavailable ? 'not run, tool unavailable on this host' : check.error ? inline(check.error) : `exit ${check.exitCode}`} (${check.durationMs} ms), commit \`${check.head}\`.`),
 		...(report.checks.length ? [] : ['- No executable checks run; see outcome and repository configuration.']), '', '### Findings', '',
 		...report.findings.filter(f => f.status !== 'rejected').map(f => `- **${f.status}${blocks(f) ? ' / blocker' : ''} / ${f.priority}** ${inline(f.title)} — \`${inline(f.file)}:${f.line}\` (${f.side}, \`${f.head}\`). ${inline(f.verification ?? f.evidence)}${f.fixedAt ? ` Fixed at \`${f.fixedAt}\`.` : ''}`),
 		...(report.findings.some(f => f.status !== 'rejected') ? [] : ['- No confirmed findings.']), '',
 		'### Unverified areas', '', ...report.gaps.map(gap => `- ${inline(gap)}`), ...(report.gaps.length ? [] : ['- None reported by the required reviewers.']),
+		...(report.dependencies?.some(d => d.kind === 'external') ? ['', '### Needs manual verification', '', ...report.dependencies.filter(d => d.kind === 'external').map(d => `- ${inline(d.description)} Next: ${inline(d.nextAction)}`)] : []),
 		'', 'Automated readiness evidence; human merge approval is still required.',
 	].join('\n');
 }
@@ -51,14 +52,18 @@ export async function finishReport(directory: string, attempt: string, report: R
 	const success = report.outcome === 'passed';
 	return {report, text, success, done: success, timedOut: /deadline|timed out/i.test(report.reason), error: success ? undefined : report.reason};
 }
-export async function loadPassedReview(directory: string, context: ReviewContext): Promise<ReviewResult | undefined> {
+/**
+ * allowExternal: follow-ups that need manual verification do not invalidate a passed review.
+ * Without it they are dependencies whose resolution needs a fresh evaluation.
+ */
+export async function loadPassedReview(directory: string, context: ReviewContext, allowExternal = false): Promise<ReviewResult | undefined> {
 	try {
 		const report = storedReportSchema.parse(JSON.parse(await readFile(path.join(directory, 'result.json'), 'utf8')));
 		if (report.version !== 1 || report.outcome !== 'passed' || report.stamp?.key !== context.stamp.key || report.stamp.head !== context.stamp.head) return;
 		// Recovery may append checks; configured checks must still be present in order.
 		if (report.checks.length < context.checks.length || context.checks.some((command, index) => report.checks[index]?.command !== command)) return;
 		if(context.checkIds.some(id=>!report.checks.some(check=>check.command===`check:${id}`)))return;
-		if (report.dependencies?.length || report.gaps.length || report.findings.some(blocks) || !report.requirements.length || report.requirements.some(r => r.status !== 'covered') || report.checks.some(c => c.head !== context.stamp.head || c.exitCode !== 0 || c.error)) return;
+		if (report.dependencies?.some(d => d.kind !== 'external' || !allowExternal) || report.gaps.length || report.findings.some(blocks) || !report.requirements.length || report.requirements.some(r => r.status !== 'covered' && r.status !== 'external') || report.checks.some(c => c.head !== context.stamp.head || !checkOk(c))) return;
 		return {report, text: renderReport(report), success: true, done: true, timedOut: false};
 	} catch {return;}
 }

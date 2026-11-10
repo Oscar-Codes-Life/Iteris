@@ -6,7 +6,10 @@ export const commandSchema = commandVariant.extend({ cwd: z.string().default('.'
 export type Command = z.infer<typeof commandSchema>;
 export const checkSchema = z.object({ id, command: commandSchema, paths: z.array(z.string()).default([]), behavioral: z.boolean().default(false) }).strict();
 export const stageSchema = z.object({ id, kind: z.enum(['ci', 'deployment', 'device', 'provider', 'monitoring', 'merge']), required: z.boolean().default(true), execute: commandSchema.optional(), verify: commandSchema.optional(), idempotent: z.boolean().default(false), observationSeconds: z.number().nonnegative().default(0) }).strict();
-const workflow = z.object({ boundary: z.literal('verified-pr').default('verified-pr'), unfinishedDraft: z.literal(true).default(true) }).strict().default({});
+// externalEvidence: what happens to evidence Iteris cannot obtain from a local checkout and that no
+// configured stage verifies (device sessions, hosted services, missing attachments).
+// advisory lists it in the PR for manual verification; required keeps the task waiting for it.
+const workflow = z.object({ boundary: z.literal('verified-pr').default('verified-pr'), unfinishedDraft: z.literal(true).default(true), externalEvidence: z.enum(['advisory', 'required']).default('advisory') }).strict().default({});
 const verification = z.object({ checks: z.array(checkSchema).default([]), policyFiles: z.array(z.string()).default(['REVIEW.md']), contextFiles: z.array(z.string()).default(['AGENTS.md']), maxContextCharacters: z.number().int().min(1000).max(1000000).default(40000), fixtures: z.array(z.string()).default([]), stages: z.array(stageSchema).default([]), requiredCiChecks: z.array(z.string()).optional() }).strict().default({});
 const environment = z.object({ runtimes: z.array(z.object({ id, executable: z.string().min(1), versionArgs: z.array(z.string()).default(['--version']), versionPattern: z.string().optional(), setup: commandSchema.optional() }).strict()).default([]), env: z.record(z.string()).default({}), probes: z.array(checkSchema).default([]), setup: z.array(commandSchema).default([]) }).strict().default({});
 // attempts: immediate in-process repairs per failure within one task timeout.

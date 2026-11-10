@@ -4,6 +4,7 @@ import { tmpdir, homedir } from 'node:os';
 import type { IterisConfig } from '../types.js';
 import { runCommand } from '../review/command.js';
 import { resolveExecutable, CapabilityUnavailable } from './environment.js';
+import { SANDBOX_DEVICES } from './isolation.js';
 /** Model-suggested commands are local evidence, never authorization to act externally. */
 export async function runRecoveryCheck(command: string, cwd: string, config: IterisConfig, deadline: number, signal?: AbortSignal) {
     const env: NodeJS.ProcessEnv = { ...process.env, ...config._execution?.env, PATH: config._execution?.path ?? process.env['PATH'] };
@@ -18,7 +19,7 @@ export async function runRecoveryCheck(command: string, cwd: string, config: Ite
         const temporary = await realpath(tmpdir());
         const protectedPaths = [path.join(root, '.iteris', 'tasks'), path.join(root, '.iteris', 'active.json'), path.join(root, '.iteris.json')];
         const secrets = ['.aws', '.ssh', '.config/gh', '.git-credentials', '.npmrc'].map(file => path.join(homedir(), file));
-        const profile = `(version 1)(allow default)(deny network*)(deny file-write*)(allow file-write* (subpath ${JSON.stringify(root)}) (subpath ${JSON.stringify(temporary)}))${protectedPaths.map(file => `(deny file-write* (subpath ${JSON.stringify(file)}))`).join('')}${secrets.map(file => `(deny file-read* (subpath ${JSON.stringify(file)}))`).join('')}`;
+        const profile = `(version 1)(allow default)(deny network*)(deny file-write*)(allow file-write* (subpath ${JSON.stringify(root)}) (subpath ${JSON.stringify(temporary)}))${SANDBOX_DEVICES}${protectedPaths.map(file => `(deny file-write* (subpath ${JSON.stringify(file)}))`).join('')}${secrets.map(file => `(deny file-read* (subpath ${JSON.stringify(file)}))`).join('')}`;
         const result = await runCommand(executable, ['-p', profile, '/bin/sh', '-c', command], { cwd, deadline, signal, env });
         if (result.exitCode !== 0 && /sandbox_init.*not permitted|sandbox.*not supported/i.test(result.output))
             throw new CapabilityUnavailable('local-check-isolation', result.output, 'Provide local command isolation or configure this command as an explicitly trusted check');

@@ -3,6 +3,14 @@ import type { TaskRun } from './state.js';
 import { hash } from './state.js';
 export const planningSchema = z.object({ plan: z.string().min(1), requirements: z.array(z.object({ id: z.string(), text: z.string().min(1), stage: z.string().min(1), method: z.string().min(1) }).strict()), invariants: z.array(z.string()), reproductionStrategy: z.string().min(1), fixtures: z.array(z.string()), capabilities: z.array(z.string()), checks: z.array(z.object({ command: z.string().min(1), behavioral: z.boolean(), requirementIds: z.array(z.string()) }).strict()).max(20) }).strict();
 export type PlanningPack = z.infer<typeof planningSchema>;
+/**
+ * Planned commands the host runs as local gates. A command that only serves a host-owned later
+ * stage (review, publication, CI, deployment, device) cannot pass before that stage exists and is not local evidence.
+ */
+export function localPlannedChecks(run: Pick<TaskRun, 'requirements' | 'planning'>): string[] {
+    const local = new Set(run.requirements.filter(requirement => requirement.stage === 'local').map(requirement => requirement.id));
+    return (run.planning?.checks ?? []).filter(check => !check.requirementIds.length || check.requirementIds.some(id => local.has(id))).map(check => check.command);
+}
 export function applyPlanningPack(run: TaskRun, pack: PlanningPack): void {
     const aliases = new Map<string, string>();
     for (const requirement of pack.requirements) {

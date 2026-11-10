@@ -3,6 +3,11 @@ import { realpath, access } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { runCommand } from '../review/command.js';
 import { resolveExecutable, CapabilityUnavailable } from './environment.js';
+/**
+ * Device files every ordinary tool opens for writing. Without them Git stops with
+ * "could not open '/dev/null' for reading and writing" and each git check exits 128.
+ */
+export const SANDBOX_DEVICES = '(allow file-write* (literal "/dev/null") (literal "/dev/zero") (literal "/dev/tty") (literal "/dev/stdout") (literal "/dev/stderr") (literal "/dev/dtracehelper") (regex #"^/dev/fd/[0-9]+$") (regex #"^/dev/ttys[0-9]+$"))';
 /** Configured setup may use the network, but cannot mutate global installations. */
 export async function runProjectSetup(executable: string, args: string[], options: {
     root: string;
@@ -22,7 +27,7 @@ export async function runProjectSetup(executable: string, args: string[], option
         const temporary = await realpath(tmpdir());
         const protectedPaths = [path.join(options.root, '.iteris', 'tasks'), path.join(options.root, '.iteris', 'active.json'), path.join(options.root, '.iteris.json')];
         const secrets = ['.aws', '.ssh', '.config/gh', '.git-credentials'].map(file => path.join(homedir(), file));
-        const profile = `(version 1)(allow default)(deny file-write*)(allow file-write* (subpath ${JSON.stringify(options.root)}) (subpath ${JSON.stringify(temporary)}))${protectedPaths.map(file => `(deny file-write* (subpath ${JSON.stringify(file)}))`).join('')}${secrets.map(file => `(deny file-read* (subpath ${JSON.stringify(file)}))`).join('')}`;
+        const profile = `(version 1)(allow default)(deny file-write*)(allow file-write* (subpath ${JSON.stringify(options.root)}) (subpath ${JSON.stringify(temporary)}))${SANDBOX_DEVICES}${protectedPaths.map(file => `(deny file-write* (subpath ${JSON.stringify(file)}))`).join('')}${secrets.map(file => `(deny file-read* (subpath ${JSON.stringify(file)}))`).join('')}`;
         result = await runCommand(sandbox, ['-p', profile, ...command], { ...options, env, shell: false });
     }
     else if (process.platform === 'linux') {

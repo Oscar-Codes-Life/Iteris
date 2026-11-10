@@ -11,7 +11,7 @@ import {captureContext, assertSnapshot, createSnapshot, digest, validateLocation
 import {runCommand} from '../review/command.js';
 import {reviewPrompt, verificationPrompt, repairPrompt, recoveryPrompt} from '../review/prompts.js';
 import {saveJson, finishReport, loadPassedReview, previousEvidence, loadCheckpoint, saveCheckpoint, checksSchema} from '../review/report.js';
-import {reviewSettings, passSchema, verificationSchema, recoverySchema, blocks, type ReviewPass, type Finding, type ReviewReport, type ReviewResult} from '../review/schema.js';
+import {reviewSettings, passSchema, verificationSchema, recoverySchema, blocks, checkOk, type ReviewPass, type Finding, type ReviewReport, type ReviewResult} from '../review/schema.js';
 import {applicableChecks} from '../lifecycle/requirements.js';
 import {executeCommand,CapabilityUnavailable} from '../lifecycle/environment.js';
 import {runRecoveryCheck} from '../lifecycle/local-check.js';
@@ -31,7 +31,9 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 	const attempt = path.join(directory, 'attempts', randomUUID());
 	await mkdir(attempt, {recursive: true});
 	const started = Date.now();
-	const phaseBudget = Math.min(config.timeout, settings.timeout ?? (settings.mode === 'deep' ? 1800 : 900)) * 1000;
+	// Each phase gets a quarter of the task allowance unless configured: a fixed 15 minutes
+	// cannot hold a large repository's full test suite or a high-effort reviewer.
+	const phaseBudget = Math.min(config.timeout, settings.timeout ?? Math.max(settings.mode === 'deep' ? 1800 : 900, Math.floor(config.timeout / 4))) * 1000;
 	const overallDeadline = config._deadline ?? started + config.timeout * 1000;
 	const repairDeadline = overallDeadline - config.timeout * 1000 * config.recovery.finalVerificationReserve;
 	let deadline = Math.min(started + phaseBudget, overallDeadline);
@@ -58,7 +60,19 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 		await saveJson(path.join(roundFolder, `${name}-process.json`), result);
 		return parsed;
 	};
-	const finish = () => finishReport(directory, attempt, report);
+	type Dependency = NonNullable<ReviewReport['dependencies']>[number];
+	// Host facts (missing isolation) stay blocking. Model-raised evidence that needs a device, hosted
+	// service or missing attachment is a follow-up; workflow.externalEvidence decides whether it blocks.
+	const capability: Dependency[] = [];
+	const raised = new Map<string, Dependency>();
+	const advisory = config.workflow.externalEvidence === 'advisory';
+	const finish = () => {
+		const manual = report.requirements.filter(item => item.status === 'external').map((item): Dependency => ({id: `manual-${digest(item.requirement).slice(0, 12)}`, kind: 'external',
+			description: `${item.requirement} — ${item.evidence}`.slice(0, 1500), nextAction: 'Verify manually outside the local checkout'}));
+		const all = new Map([...capability, ...raised.values(), ...manual].map(dependency => [dependency.id, dependency]));
+		if (all.size) report.dependencies = [...all.values()]; else delete report.dependencies;
+		return finishReport(directory, attempt, report);
+	};
 	try {
 		let previousBlockers: Finding[] = [];
 		const repairAttempts = new Map<string, number>();
@@ -79,6 +93,12 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 			const requiredRequirements = new Set(unresolvedRequirements);
 			const context = captureContext(ticket, config, cwd, options.plan, options.branch);
 			for(const requirement of context.requirements.filter(r=>r.stage==='local' && r.id!=='local-checks'))requiredRequirements.add(requirement.text);
+			// The host decides its own gates and later stages from its own evidence. A reviewer's
+			// opinion of them (always "unverified" before publication) is never a review gap.
+			const hostOwned = new Set(context.requirements.filter(r => r.stage !== 'local' || r.id === 'local-checks').map(r => r.text));
+			const own = <T extends {requirement: string}>(items: T[]) => items.filter(item => !hostOwned.has(item.requirement));
+			const required = () => [...requiredRequirements].filter(text => !hostOwned.has(text));
+			const followUps = () => [...raised.values()].map(dependency => dependency.description);
 			let resume = false;
 			const supplementalKey = digest(['supplemental-checks', context.stamp.scope]);
 			report.stamp = context.stamp;
@@ -86,7 +106,7 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 				budgetKey=digest(['repair-budget',context.stamp.scope]);
 				const budget=await loadCheckpoint(directory,budgetKey,z.object({spent:z.number().int().nonnegative(),attempts:z.record(z.number().int().nonnegative())}));
 				if(budget){codeSpent=budget.spent;for(const [key,attempts] of Object.entries(budget.attempts))repairAttempts.set(key,attempts);}
-				const cached = await loadPassedReview(directory, context);
+				const cached = await loadPassedReview(directory, context, advisory);
 				if (cached && (config.qualityChecks.length || context.checkIds.length || settings.allowNoChecks)) {log(`Reusing verified review of ${context.stamp.head}`); return cached;}
 			}
 			if (round === 0) {
@@ -95,7 +115,7 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 					resume = !audit && previous.outcome === 'incomplete';
 					report.findings = previous.findings;
 					previousBlockers = previous.findings.filter(blocks);
-					for (const requirement of previous.requirements.filter(item => item.status !== 'covered')) requiredRequirements.add(requirement.requirement);
+					for (const requirement of own(previous.requirements).filter(item => item.status !== 'covered')) requiredRequirements.add(requirement.requirement);
 				}
 				// Also resume after a process crash before result.json could be written.
 				if (!previous && !audit) resume = true;
@@ -113,26 +133,32 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 			log(`Round ${round + 1}: checking ${context.stamp.head.slice(0, 12)}`);
 			const commands = [...context.checks, ...[...additionalChecks].filter(command => !context.checks.includes(command)), ...namedChecks.map(check => `check:${check.id}`)];
 			const checksKey = digest(['checks', context.stamp.key, commands]);
-			const cachedChecks = resume ? await loadCheckpoint(directory, checksKey, checksSchema) : undefined;
-			if (cachedChecks && cachedChecks.length === commands.length && cachedChecks.every((check, index) => check.command === commands[index] && check.head === context.stamp.head && check.exitCode === 0 && !check.error)) {
+			// Later rounds on an unchanged commit and command list reuse the same host evidence.
+			const cachedChecks = resume || round > 0 ? await loadCheckpoint(directory, checksKey, checksSchema) : undefined;
+			if (cachedChecks && cachedChecks.length === commands.length && cachedChecks.every((check, index) => check.command === commands[index] && check.head === context.stamp.head && checkOk(check))) {
 				report.checks = cachedChecks;
 				log(`Reusing successful checks for ${context.stamp.head.slice(0, 12)}`);
 			} else for (const command of commands) {
 				remaining();
 				const named = namedChecks.find(check => command === `check:${check.id}`);
 				let result;
-				try{result = named ? await executeCommand(named.command, cwd, {...config, _deadline:deadline}, signal) : config._plannedChecks?.includes(command) || (additionalChecks.has(command) && !config.qualityChecks.includes(command)) ? await runRecoveryCheck(command,cwd,config,deadline,signal) : await runCommand(command, [], {cwd, deadline, signal, shell: true, env:{...process.env,...config._execution?.env,PATH:config._execution?.path ?? process.env['PATH']}});}
-				catch(error){if(!(error instanceof CapabilityUnavailable))throw error;report.dependencies=[...(report.dependencies??[]),{id:error.dependency,kind:'capability',description:error.message,nextAction:error.nextAction}];result={exitCode:null,output:'',durationMs:0,truncated:false,error:error.message};}
+				// Commands proposed by a planner or recovery instance run isolated; configured checks are trusted.
+				const suggested = !named && (config._plannedChecks?.includes(command) || (additionalChecks.has(command) && !config.qualityChecks.includes(command)));
+				try{result = named ? await executeCommand(named.command, cwd, {...config, _deadline:deadline}, signal) : suggested ? await runRecoveryCheck(command,cwd,config,deadline,signal) : await runCommand(command, [], {cwd, deadline, signal, shell: true, env:{...process.env,...config._execution?.env,PATH:config._execution?.path ?? process.env['PATH']}});}
+				catch(error){if(!(error instanceof CapabilityUnavailable))throw error;if(!capability.some(d=>d.id===error.dependency))capability.push({id:error.dependency,kind:'capability',description:error.message,nextAction:error.nextAction});result={exitCode:null,output:'',durationMs:0,truncated:false,error:error.message};}
 				const {stdout:_stdout,stderr:_stderr,...checkResult}=result;
-				report.checks.push({command, head: context.stamp.head, ...checkResult});
+				// A suggested command whose tool is not installed here (adb, a device runner) never started.
+				// That is absent evidence for the reviewers to weigh, not a failing project check.
+				const unavailable = suggested && !config.qualityChecks.includes(command) && !result.error && (result.exitCode === 127 || result.exitCode === 126);
+				report.checks.push({command, head: context.stamp.head, ...checkResult, ...(unavailable ? {unavailable: true} : {})});
 				await saveJson(path.join(roundFolder, 'checks.json'), report.checks);
-				log(`${command}: ${result.error ?? `exit ${result.exitCode}`}`);
+				log(`${command}: ${unavailable ? `not run, tool unavailable on this host (exit ${result.exitCode})` : result.error ?? `exit ${result.exitCode}`}`);
 				assertSnapshot(context, config, cwd);
 				if(signal?.aborted)throw new Error('Cancelled');
 			}
 			await saveJson(path.join(roundFolder, 'checks.json'), report.checks);
 			await saveJson(path.join(directory, 'checks.json'), report.checks);
-			if (!audit && report.checks.every(check => check.exitCode === 0 && !check.error)) await saveCheckpoint(directory, checksKey, report.checks);
+			if (!audit && report.checks.every(checkOk)) await saveCheckpoint(directory, checksKey, report.checks);
 			assertSnapshot(context, config, cwd);
 			beginPhase('Investigation');
 			const snapshot = await createSnapshot(cwd, context.stamp.head, deadline, signal, context.diff);
@@ -141,8 +167,8 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 			try {
 				const runPass = async (lens: 'correctness' | 'maintainability' | 'risk') => {
 					const key = digest(['investigation', context.stamp.key, lens, report.checks]);
-					let cached = resume ? await loadCheckpoint(directory, key, passSchema) : undefined;
-					if(cached && (!cached.complete || cached.gaps.length || cached.requirements.some(r=>r.status==='unverified') || context.changedFiles.some(file=>!cached!.inspectedFiles.includes(file))))cached=undefined;
+					let cached = resume || round > 0 ? await loadCheckpoint(directory, key, passSchema) : undefined;
+					if(cached && (!cached.complete || cached.gaps.length || own(cached.requirements).some(r=>r.status==='unverified') || context.changedFiles.some(file=>!cached!.inspectedFiles.includes(file))))cached=undefined;
 					try {for (const candidate of cached?.findings ?? []) validateLocation(candidate, context, cwd);} catch {cached = undefined;}
 					if (cached && cached.head === context.stamp.head) {
 						log(`Reusing ${lens} investigation for ${context.stamp.head.slice(0, 12)}`);
@@ -150,19 +176,19 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 						return cached;
 					}
 					log(`Investigating ${lens}`);
-					const pass = await runStructuredReview(lens, reviewPrompt(lens, context, report.checks), passSchema, snapshot.cwd, roundFolder);
+					const pass = await runStructuredReview(lens, reviewPrompt(lens, context, report.checks, followUps()), passSchema, snapshot.cwd, roundFolder);
 					if (pass.head !== context.stamp.head) throw new Error(`${lens} review returned the wrong commit.`);
 					for (const candidate of pass.findings) validateLocation(candidate, context, cwd);
 					await saveJson(path.join(roundFolder, `${lens}.json`), pass);
-					if (!audit && pass.complete && !pass.gaps.length && pass.requirements.every(r=>r.status!=='unverified')) await saveCheckpoint(directory, key, pass);
+					if (!audit && pass.complete && !pass.gaps.length && own(pass.requirements).every(r=>r.status!=='unverified')) await saveCheckpoint(directory, key, pass);
 					return pass;
 				};
 				const lenses: Array<'correctness' | 'maintainability' | 'risk'> = ['correctness', 'maintainability'];
 				if (settings.mode === 'deep' || context.risk.length) {report.mode = 'deep'; lenses.push('risk');}
 				// All required investigators start together. Drain all before disposing their snapshot.
 				const investigated = await Promise.allSettled(lenses.map(runPass));
-				if (investigated[0]?.status === 'fulfilled') for (const requirement of investigated[0].value.requirements) requiredRequirements.add(requirement.requirement);
-				report.requirements = investigated.flatMap(result => result.status === 'fulfilled' ? result.value.requirements : []);
+				if (investigated[0]?.status === 'fulfilled') for (const requirement of own(investigated[0].value.requirements)) requiredRequirements.add(requirement.requirement);
+				report.requirements = own(investigated.flatMap(result => result.status === 'fulfilled' ? result.value.requirements : []));
 				passes = investigated.map(result => {if (result.status === 'rejected') throw result.reason; return result.value;});
 				const unique = new Map<string, Finding>();
 				for (const candidate of passes.flatMap(pass => pass.findings)) {
@@ -179,14 +205,14 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 				if (gaps.length) throw new ReviewGap(gaps.join('; '));
 				assertSnapshot(context, config, cwd);
 				beginPhase('Verification');
-				const verification = await runStructuredReview('verification', verificationPrompt(context, report.checks, passes, candidates, previousBlockers, [...requiredRequirements]), verificationSchema, snapshot.cwd, roundFolder);
+				const verification = await runStructuredReview('verification', verificationPrompt(context, report.checks, passes, candidates, previousBlockers, required(), followUps()), verificationSchema, snapshot.cwd, roundFolder);
 				await saveJson(path.join(roundFolder, 'verification.json'), verification);
 				if (verification.head !== context.stamp.head) throw new Error('Verifier returned the wrong commit.');
-				for (const requirement of verification.requirements) requiredRequirements.add(requirement.requirement);
-				report.requirements = verification.requirements;
+				for (const requirement of own(verification.requirements)) requiredRequirements.add(requirement.requirement);
+				report.requirements = own(verification.requirements);
 				if (!verification.complete || verification.gaps.length) throw new ReviewGap(`Verification incomplete: ${verification.gaps.join('; ') || 'missing coverage'}`);
 				if (verification.decisions.length !== candidates.length || new Set(verification.decisions.map(d => d.id)).size !== candidates.length || verification.decisions.some(d => !candidates.some(f => f.id === d.id))) throw new Error('Verifier must decide every candidate exactly once.');
-				if ([...requiredRequirements].some(req => !verification.requirements.some(v => v.requirement === req))) throw new Error('Verifier omitted an acceptance requirement.');
+				if (required().some(req => !verification.requirements.some(v => v.requirement === req))) throw new Error('Verifier omitted an acceptance requirement.');
 				for (const decision of verification.decisions) {
 					const finding = candidates.find(f => f.id === decision.id)!;
 					let duplicateOf = decision.duplicateOf;
@@ -257,11 +283,17 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 				commitSourceChanges(cwd,context.stamp.branch,'Recover project verification');
 				const next = captureContext(ticket, config, cwd, options.plan, options.branch);
 				if (next.stamp.base !== context.stamp.base) throw new Error('Base changed during recovery; restart review.');
-				report.dependencies = recovery.dependencies?.length ? recovery.dependencies : recovery.blockedReason ? [{id:namesCiGate(recovery.blockedReason)?'ci':'recovery-capability',kind:'external',description:recovery.blockedReason,nextAction:'Refresh the dependency or configure a verification probe, then resume'}] : [];
+				// A model cannot declare a host capability missing; whatever it names is an external follow-up.
+				const known = raised.size;
+				for (const dependency of recovery.dependencies?.length ? recovery.dependencies : recovery.blockedReason ? [{id:namesCiGate(recovery.blockedReason)?'ci':'recovery-capability',kind:'external' as const,description:recovery.blockedReason,nextAction:'Refresh the dependency or configure a verification probe, then resume'}] : [])
+					raised.set(dependency.id, {...dependency, kind: 'external'});
 				if (recovery.deferredToCI || namesCiGate(recovery.blockedReason ?? '')) report.deferredToCI = true;
 				const checkCount = additionalChecks.size;
 				for (const command of recovery.checks) additionalChecks.add(command);
-				if (next.stamp.head === context.stamp.head && additionalChecks.size === checkCount) {
+				// Newly recorded follow-ups are handed to the reviewers once, so the next round judges
+				// only what a local checkout can show instead of ending on the same gap.
+				const acknowledged = advisory && raised.size > known && !report.deferredToCI;
+				if (next.stamp.head === context.stamp.head && additionalChecks.size === checkCount && !acknowledged) {
 					report.reason += recovery.blockedReason ? ` External evidence pending: ${recovery.blockedReason}` : ' Recovery produced no new commit or check command.';
 					log(report.reason); return finish();
 				}
@@ -269,8 +301,8 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 				continue;
 			}
 			previousBlockers = candidates.filter(blocks);
-			const failedChecks = report.checks.filter(check => check.exitCode !== 0);
-			if(failedChecks.some(check=>check.exitCode===null) && report.dependencies?.some(d=>d.kind==='capability')){report.outcome='incomplete';report.reason='Local checks await the recorded execution capability';return finish();}
+			const failedChecks = report.checks.filter(check => check.exitCode !== 0 && !check.unavailable);
+			if(failedChecks.some(check=>check.exitCode===null) && capability.length){report.outcome='incomplete';report.reason='Local checks await the recorded execution capability';return finish();}
 			const missing = report.requirements.filter(r => r.status === 'missing');
 			unresolvedRequirements = new Set(report.requirements.filter(item => item.status !== 'covered').map(item => item.requirement));
 			if (!previousBlockers.length && !failedChecks.length && !missing.length) {
@@ -306,7 +338,7 @@ function namesCiGate(reason: string): boolean {
 }
 
 function ciDeferralReady(report: ReviewReport, candidates: Finding[]): boolean {
-	return candidates.length === 0 && report.requirements.length > 0 && report.checks.every(check => check.exitCode === 0 && !check.error) &&
+	return candidates.length === 0 && report.requirements.length > 0 && report.checks.every(checkOk) &&
 		!report.gaps.some(gap => /missing file coverage|omitted ticket acceptance criteria|reviewer reported incomplete coverage/i.test(gap)) &&
 		!report.findings.some(finding => finding.status === 'candidate' || blocks(finding)) &&
 		!report.requirements.some(requirement => requirement.status === 'missing');

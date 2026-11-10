@@ -4,7 +4,21 @@ User-visible changes are recorded here. Iteris uses [Semantic Versioning](https:
 
 ## [Unreleased]
 
+### Changed
+
+- **Evidence Iteris cannot obtain itself no longer holds a task by default.** A device session, a hosted service or an attachment the ticket did not supply is listed in the review and the PR as *needs manual verification*, and the task completes once local checks, independent review and required CI pass. Set `workflow.externalEvidence` to `required` to keep the earlier behavior of waiting for submitted evidence. Stages declared in `verification.stages` block in either mode.
+- Each attempt merges the current base into the task branch before work continues, with an instance resolving conflicts. A base that moves afterwards invalidates a published, reviewed commit only when it no longer merges cleanly or the repository requires an up-to-date branch.
+- Review phases are allowed a quarter of `timeout` instead of a fixed 15 minutes, unless `review.timeout` is set.
+- On macOS the queue holds a power assertion (`caffeinate`) while it runs, so an idle Mac does not sleep and silently stop it.
+
 ### Fixed
+
+- Every `git` command in an isolated check failed with exit 128 because the sandbox denied `/dev/null`. Planned checks such as `git diff --check` could never pass, so no review could.
+- Reviewers reported the host's own gates (publication, required CI, local checks) as unverified before a pull request existed, and each such entry made the review incomplete. The host now ignores reviewer opinions of requirements it decides itself.
+- Planned checks for host-owned stages (`gh pr view`, `gh pr checks`), for a `REVIEW.md` the base does not have, or needing a tool that is not installed (`adb`, `maestro`) were run as required gates and failed every review. Instances also created `REVIEW.md` to satisfy them.
+- Task branches were cut from a stale local base and never updated. Their pull requests conflicted with the target, GitHub ran no pull-request checks on them, and required CI could never report.
+- A parallel task fetching the base changed the review snapshot of the other tasks mid-review.
+- A pull request body over GitHub's 65,536-character limit failed publication; the generated sections are now shortened in place.
 
 - Trusted review context larger than `verification.maxContextCharacters` is detected before any instance starts. Previously every attempt implemented the task, failed when preparing the review, and was retried indefinitely. The task now waits with the configured and actual sizes, and continues once the limit is raised.
 - A task whose worktree directory was deleted (for example by removing `.iteris/`) is checked out again from its branch. Previously every attempt failed with `ENOENT` while preparing the workspace.
