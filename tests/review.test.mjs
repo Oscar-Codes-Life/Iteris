@@ -12,7 +12,8 @@ import {atomicWriteConfig, configSchema} from '../dist/config.js';
 import {temporary, reviewRepository, environment, executable, fakeAgent, config, setupIsolationFixture} from './helpers.mjs';
 import {localPlannedChecks,localEvidenceCommand} from '../dist/lifecycle/planning.js';
 import {runRecoveryCheck} from '../dist/lifecycle/local-check.js';
-import {fitPrBody, PR_BODY_LIMIT, reviewSection, replaceReviewSection, replaceLifecycleSection, REVIEW_START, REVIEW_END, LIFECYCLE_START, LIFECYCLE_END} from '../dist/github/pr.js';
+import {listRuns} from '../dist/lifecycle/state.js';
+import {fitPrBody, PR_BODY_LIMIT, reviewSection, replaceReviewSection, replaceLifecycleSection, replaceDescriptionSection, descriptionSection, REVIEW_START, REVIEW_END, LIFECYCLE_START, LIFECYCLE_END} from '../dist/github/pr.js';
 const ticket={number:1,title:'Feature',body:'Implement feature. Handle retries without duplicate writes.',slug:'feature',labels:[],htmlUrl:'https://example.com/1'};
 async function fixture(t, {harness='codex', content='changed\n', scenario, mode='normal'}={}) {
  const repo=await reviewRepository(t),{cwd,git}=repo;
@@ -208,6 +209,12 @@ test('PR evidence updates preserve authored content and do not append duplicate 
  const next=replaceReviewSection(original,'new');assert.equal(next,`Author summary\n\n${reviewSection('new')}\n\nCloses #1`);assert.equal(replaceReviewSection(next,'new'),next);
  let body=original,updates=0;const octokit={pulls:{get:async()=>({data:{body}}),update:async input=>{updates++;body=input.body;}}};
  await updatePrReview(config(),4,'new',octokit);await updatePrReview(config(),4,'new',octokit);assert.equal(updates,1);assert.equal(body,next);
+});
+test('a pull request opened before review passed gets its description once the review passes',async t=>{
+ const f=await fixture(t);f.cfg.planMode=false;await atomicWriteConfig(f.cfg,f.cwd);const written=[];
+ await runAllTickets([ticket],f.cfg,f.cwd,{onStatusChange(){},onLogLine(){},onComplete(){},onFailure:async(_,s)=>assert.fail(s.failureReason)},undefined,{...completionServices,findPr:async()=>({url:'https://example.com/pr',number:9}),createPr:async()=>assert.fail('must reuse PR'),updateReview:async()=>{},updateSections:async(_,number,sections)=>{assert.equal(number,9);written.push(sections);},addLabel:async()=>{},moveCard:async()=>{}});
+ assert.equal(written.length,1);assert.deepEqual(Object.keys(written[0]),['description']);assert.match(written[0].description,/^## Summary\n- Adds useful behavior\./);
+ const run=(await listRuns(f.cwd))[0];assert.equal(run.publication.described,run.publication.head);
 });
 test('existing PR receives updated review evidence without regenerating its description',async t=>{
  const f=await fixture(t);f.cfg.planMode=false;await atomicWriteConfig(f.cfg,f.cwd);let report='';
@@ -482,7 +489,7 @@ test('evidence that needs a device or hosted service passes the review as a manu
  const f=await fixture(t,{scenario:'external'}),result=await runCodeReview(f.options);
  assert.equal(result.report.outcome,'passed',result.error);assert.equal(result.report.gaps.length,0);
  assert.ok(result.report.dependencies.length>0);assert.ok(result.report.dependencies.every(d=>d.kind==='external'&&d.id.startsWith('manual-')));
- assert.match(result.text,/### Needs manual verification/);
+ assert.match(result.text,/<summary>Acceptance: [^<]*\bexternal<\/summary>/);assert.doesNotMatch(result.text,/### Needs manual verification/);
  // Advisory follow-ups do not invalidate the pass; required evidence always gets a fresh evaluation.
  const count=(await f.calls()).length;assert.equal((await runCodeReview(f.options)).report.outcome,'passed');assert.equal((await f.calls()).length,count);
  f.cfg.workflow.externalEvidence='required';assert.equal((await runCodeReview(f.options)).report.outcome,'passed');assert.ok((await f.calls()).length>count);
@@ -561,4 +568,11 @@ test('suggested commands that start a server or need a device or the code host a
  // The repository owner's own command always runs.
  const owner=await fixture(t);owner.cfg.qualityChecks=['npm start -- --port 8081'];
  assert.notEqual((await runCodeReview(owner.options)).report.checks.find(c=>c.command.startsWith('npm start')).exitCode,null);
+});
+test('a rewritten description replaces its own section, or everything Iteris wrote above the review in older bodies',()=>{
+ const review=reviewSection('review'),next='## Summary\n- Real description.';
+ assert.equal(replaceDescriptionSection(`${descriptionSection('placeholder')}\n\n${review}\n\nCloses #1`,next),`${descriptionSection(next)}\n\n${review}\n\nCloses #1`);
+ const legacy=`## Summary\nTitle\n\n## Changes\n- a.ts\n\n## Completion requirements\n- [ ] stale (acceptance-1; local)\n\n${review}\n\nCloses #1`;
+ const rewritten=replaceDescriptionSection(legacy,next);assert.equal(rewritten,`${descriptionSection(next)}\n\n${review}\n\nCloses #1`);assert.doesNotMatch(rewritten,/Completion requirements|stale/);
+ assert.equal(replaceDescriptionSection('',next),descriptionSection(next));
 });

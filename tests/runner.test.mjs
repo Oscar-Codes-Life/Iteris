@@ -4,7 +4,7 @@ import {execFileSync} from 'node:child_process';
 import {readFile,writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {atomicWriteConfig,updateConfig,loadConfig} from '../dist/config.js';
-import {generatePrDescription} from '../dist/agent/pr-description.js';
+import {generatePrDescription,prBody,cleanDescription} from '../dist/agent/pr-description.js';
 import {runCodeReview} from '../dist/agent/reviewer.js';
 import {captureContext} from '../dist/review/context.js';
 import {runAllTickets} from '../dist/agent/runner.js';
@@ -22,7 +22,7 @@ test('PR description harness receives the final diff and appends the ticket refe
  await writeFile(path.join(cwd,'feature.txt'),'before\n');execFileSync('git',['add','feature.txt'],{cwd});execFileSync('git',['commit','-qm','base'],{cwd});execFileSync('git',['checkout','-qb','iteris/1-ticket-1'],{cwd});
  await writeFile(path.join(cwd,'feature.txt'),'after\n');execFileSync('git',['add','feature.txt'],{cwd});execFileSync('git',['commit','-qm','change feature'],{cwd});
  await executable(cwd,'codex',fakeAgent);environment(t,{PATH:`${cwd}:${process.env.PATH}`,CAPTURE:path.join(cwd,'calls.jsonl')});
- const result=await generatePrDescription({ticket:ticket(1),config:config('codex'),cwd,review:'npm test passed'});assert.equal(result.success,true);assert.match(result.text,/Closes #1$/);
+ const result=await generatePrDescription({ticket:ticket(1),config:config('codex'),cwd,review:'npm test passed'});assert.equal(result.success,true);assert.match(result.text,/^## Summary/);assert.doesNotMatch(result.text,/Closes #1|iteris:review/);assert.match(prBody(result.text,'review text','Closes #1'),/^<!-- iteris:description:start -->\n## Summary[\s\S]*<!-- iteris:description:end -->\n\n<!-- iteris:review:start -->\nreview text\n<!-- iteris:review:end -->\n\nCloses #1$/);
  const call=JSON.parse((await readFile(path.join(cwd,'calls.jsonl'),'utf8')).trim());assert.match(call.prompt,/change feature/);assert.match(call.prompt,/\+after/);assert.match(call.prompt,/npm test passed/);
 });
 for(const harness of ['claude','codex']) test(`${harness} full ticket lifecycle smoke test`,async t=>{
@@ -283,4 +283,9 @@ test('a passed review with manual follow-ups is reused while CI runs, then the t
  await probe();assert.equal((await readRun(cwd,run.key)).state,'waiting');
  ci='passed';await probe();run=await readRun(cwd,run.key);assert.equal(run.state,'complete',run.reason);
  assert.equal(await reviews(),before);
+});
+test('a generated description loses the remarks, code fence and task reference a model adds around it',()=>{
+ assert.equal(cleanDescription('I’m using the PR skill to focus the description.\n\n## Summary\n- Outcome.\n\nCloses #1','Closes #1'),'## Summary\n- Outcome.');
+ assert.equal(cleanDescription('```markdown\n## Summary\n- Outcome.\n```','Closes #1'),'## Summary\n- Outcome.');
+ assert.equal(cleanDescription('Plain text without headings.','Closes #1'),'Plain text without headings.');
 });

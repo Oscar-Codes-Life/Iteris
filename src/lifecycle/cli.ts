@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { z } from 'zod';
 import type { IterisConfig } from '../types.js';
-import { listRuns, readRun, saveRun, renderRun } from './state.js';
+import { listRuns, readRun, saveRun, renderRun, renderPrCompletion, type TaskRun } from './state.js';
 import { prepareEnvironment, persistedManifest, resolveExecutable } from './environment.js';
 import { runCommand } from '../review/command.js';
 import { addEvidence } from './requirements.js';
@@ -11,8 +11,12 @@ import { acquireRun, hasActiveRun } from '../state/active.js';
 import { requestCancellation } from './cancellation.js';
 import { resolveTaskConfig } from './config.js';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { generatePrDescription } from '../agent/pr-description.js';
+import { updatePrSections } from '../github/pr.js';
+import { loadReportText } from '../review/report.js';
 export async function lifecycleCommand(command: string, args: string[], config: IterisConfig, cwd: string): Promise<boolean> {
-    if (!['status', 'resume', 'doctor', 'evidence', 'cancel'].includes(command))
+    if (!['status', 'resume', 'doctor', 'evidence', 'cancel', 'describe'].includes(command))
         return false;
     if (command === 'status') {
         const runs = args[0] ? [await readRun(cwd, args[0])].filter(Boolean) : await listRuns(cwd, config.repo);
@@ -21,6 +25,49 @@ export async function lifecycleCommand(command: string, args: string[], config: 
                 console.log(`${run.key}\n${renderRun(run)}`);
         if (!runs.length)
             console.log('No persisted task runs.');
+        return true;
+    }
+    if (command === 'describe') {
+        const dryRun = args.includes('--dry-run'), key = args.find(arg => !arg.startsWith('--'));
+        const published = (key ? [await readRun(cwd, key)] : await listRuns(cwd, config.repo)).filter((run): run is TaskRun => !!run?.publication && run.state !== 'cancelled');
+        if (!published.length)
+            console.log(key ? 'That task has no published pull request.' : 'No published task runs.');
+        // The saved run is rewritten, so a running queue must not be writing it at the same time.
+        const release = dryRun ? undefined : await acquireRun(cwd);
+        try {
+            for (const run of published) {
+                const publication = run.publication!, review = await loadReportText(path.join(run.artifacts, 'review'));
+                const label = `${publication.url} — ${run.ticket.title}`;
+                if (!review || review.report.outcome !== 'passed' || review.report.stamp?.head !== publication.head) {
+                    console.log(`${label}\n  Skipped: no passed review for the published commit yet; Iteris writes the description when it passes.`);
+                    continue;
+                }
+                try {
+                    execFileSync('git', ['cat-file', '-e', `${publication.head}^{commit}`], { cwd, stdio: 'ignore' });
+                }
+                catch {
+                    console.log(`${label}\n  Skipped: commit ${publication.head.slice(0, 9)} is not in this checkout; fetch the task branch and retry.`);
+                    continue;
+                }
+                const snapshot = resolveTaskConfig(config, run.ticket);
+                const described = await generatePrDescription({ ticket: run.ticket, config: snapshot, cwd, review: review.text, baseCommit: publication.base, branch: publication.head });
+                if (!described.success || !described.text) {
+                    console.log(`${label}\n  Failed: ${described.error ?? 'the harness produced no description'}`);
+                    continue;
+                }
+                if (dryRun) {
+                    console.log(`${label}\n\n${described.text}\n\n## Task completion\n${renderPrCompletion(run)}\n`);
+                    continue;
+                }
+                await updatePrSections(snapshot, publication.number, { description: described.text, review: review.text, lifecycle: renderPrCompletion(run) });
+                publication.described = publication.head;
+                await saveRun(cwd, run);
+                console.log(`${label}\n  Description rewritten.`);
+            }
+        }
+        finally {
+            await release?.();
+        }
         return true;
     }
     if (command === 'doctor') {

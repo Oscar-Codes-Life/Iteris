@@ -83,6 +83,8 @@ export type TaskRun = {
         head: string;
         base: string;
         draft: boolean;
+        /** Commit the published PR description was written for; absent while the PR carries a placeholder. */
+        described?: string;
     };
     ciFreshness?: {
         head: string;
@@ -263,4 +265,35 @@ export function renderRun(run: TaskRun): string {
     const elapsed = Math.max(0, Date.parse(run.updatedAt) - Date.parse(run.createdAt));
     const verified = run.state === 'complete' && !!run.publication && covered === run.requirements.length && run.requirements.length > 0 && !run.dependencies.length && run.actions.every(a => a.status === 'verified');
     return `# ${run.ticket.title}\n\nState: **${run.state}** · Phase: ${run.phase}\nSource: ${run.source.provider}/${run.source.namespace}/${run.source.id}\n${run.publication ? `PR: ${run.publication.url} (${run.publication.draft ? 'draft' : 'review-ready'})\n` : ''}Verified completion: ${verified ? 'yes' : 'no'}; current-commit evidence: ${covered - manual.size}/${run.requirements.length - manual.size}${manual.size ? `; needs manual verification: ${manual.size}` : ''}; elapsed: ${Math.round(elapsed / 1000)}s.\nReview repairs: ${run.reviewSummary?.repairs ?? 0}; setup/CI attempts: ${run.retries.filter(r => r.kind !== 'code').reduce((sum, r) => sum + r.attempts, 0)}.\n${run.attempts?.length ? `Failed attempts: ${run.attempts.length}; last: ${run.attempts.at(-1)!.phase} — ${run.attempts.at(-1)!.reason.slice(0, 300)}. Journal: attempts.md\n` : ''}\n${run.requirements.map(r => manual.has(r.id) ? `- [ ] ${r.text} (${r.id}; ${r.stage}) — needs manual verification; not verified by Iteris and not blocking` : `- [${r.status === 'verified' ? 'x' : ' '}] ${r.text} (${r.id}; ${r.stage})`).join('\n')}\n\n${run.dependencies.map(d => `- ${d.kind}: ${d.description}\n  Next action: ${d.nextAction}; last probe: ${d.lastProbe ?? 'not yet probed'}; retry: ${d.nextRetryAt}`).join('\n')}\n\n${run.evidence.map(e => `- ${e.provenance === MANUAL_FOLLOW_UP ? 'Manual verification needed' : e.success ? 'Verified' : 'Pending/failed'} ${e.requirementId}: ${e.provenance}, commit ${e.commit}, observed ${e.observedAt}`).join('\n')}\n`;
+}
+/**
+ * Ticket lines that ask for nothing: a bare label ("Acceptance criteria:"), and the task-file instructions Iteris
+ * itself appends for the instance. As requirements they are noise, and the second puts a local path in the pull request.
+ */
+export const notRequirement = (line: string) => /^(?:[-*>]\s*)*[^.!?:]{1,80}:$/.test(line.trim()) || /^(?:[-*>]\s*)*(?:Task file: |Resolve attachment paths relative to this task file\.)/.test(line.trim());
+const HOST_GATES: Record<string, string> = { 'local-checks': 'Local checks pass on the final commit', 'independent-review': 'Independent review covers the final commit', 'publication': 'Pull request is published', 'required-ci': 'Required CI checks pass' };
+/**
+ * What a person reading the pull request needs: where the task stands, what still waits, and what they must
+ * verify themselves. Identifiers, the evidence log and the attempt history stay in the local status.md.
+ */
+export function renderPrCompletion(run: TaskRun): string {
+    const item = (text: string) => text.replace(/[\r\n]+/g, ' ').replace(/^(?:[-*>]\s*)+/, '').replace(/[<>]/g, '').trim();
+    // Runs recorded before such lines were left out of the requirements still carry them.
+    const manualIds = new Set(manualFollowUps(run).map(requirement => requirement.id)), manual = manualFollowUps(run).filter(requirement => !notRequirement(requirement.text));
+    const gates = run.requirements.filter(requirement => requirement.id in HOST_GATES);
+    const others = run.requirements.filter(requirement => !(requirement.id in HOST_GATES) && !manualIds.has(requirement.id) && !notRequirement(requirement.text));
+    const pending = [...gates, ...others].filter(requirement => requirement.status !== 'verified');
+    const commit = (run.publication?.head ?? run.implementation?.head)?.slice(0, 9);
+    // No checklist: a row of boxes reads as unfinished work, and once the task is complete there is nothing left to tick.
+    const headline = run.state === 'complete' ? `**Complete.** Local checks, independent review and required CI passed on commit \`${commit}\`.${manual.length ? ` ${manual.length === 1 ? 'One point' : `${manual.length} points`} below still ${manual.length === 1 ? 'needs' : 'need'} a person to confirm.` : ''}`
+        : run.state === 'cancelled' ? '**Cancelled.**'
+        : `**In progress.** ${run.state === 'blocked' ? 'Iteris has stopped working on this task' : 'Iteris is still working on this task'}${run.reason ? `: ${item(run.reason).slice(0, 300)}` : '.'}`;
+    const outstanding = run.state === 'complete' || run.state === 'cancelled' ? [] : [...gates.filter(requirement => requirement.status !== 'verified').map(requirement => HOST_GATES[requirement.id]!), ...(others.some(requirement => requirement.status !== 'verified') ? [`${others.filter(requirement => requirement.status !== 'verified').length} of ${others.length} ticket requirements`] : [])];
+    return [
+        headline,
+        ...(outstanding.length ? ['', `Not yet verified on commit \`${commit}\`: ${outstanding.join('; ')}.`] : []),
+        ...(manual.length ? ['', '**Please verify by hand** (Iteris cannot observe these, so they do not hold the task):', '', ...manual.map(requirement => `- ${item(requirement.text).slice(0, 600)}`)] : []),
+        ...(run.dependencies.length ? ['', '**Waiting on:**', '', ...run.dependencies.map(dependency => `- ${item(dependency.description).slice(0, 500)} Next: ${item(dependency.nextAction).slice(0, 300)}`)] : []),
+        ...(others.length ? ['', '<details>', `<summary>Ticket requirements reviewed (${others.length})</summary>`, '', ...others.map(requirement => `- ${item(requirement.text)}${pending.includes(requirement) && run.state !== 'complete' ? ' _(not yet verified)_' : ''}`), '', '</details>'] : []),
+    ].join('\n');
 }

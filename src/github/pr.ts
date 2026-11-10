@@ -71,6 +71,29 @@ export async function updatePrReview(config: IterisConfig, number: number, repor
 	if (body !== data.body) await octokit.pulls.update({owner, repo, pull_number: number, body});
 }
 
+export const DESCRIPTION_START = '<!-- iteris:description:start -->';
+export const DESCRIPTION_END = '<!-- iteris:description:end -->';
+export function descriptionSection(description: string): string {return `${DESCRIPTION_START}\n${description.trim()}\n${DESCRIPTION_END}`;}
+export function replaceDescriptionSection(body: string, description: string): string {
+	const section = descriptionSection(description);
+	const start = body.indexOf(DESCRIPTION_START), end = body.indexOf(DESCRIPTION_END, start);
+	if (start >= 0 && end >= start) return body.slice(0, start) + section + body.slice(end + DESCRIPTION_END.length);
+	// Bodies from before these markers: everything above the review section was written by Iteris.
+	const review = body.indexOf(REVIEW_START);
+	return review >= 0 ? `${section}\n\n${body.slice(review)}` : `${section}\n\n${body.trim()}`.trim();
+}
+/** Rewrites the sections given, in one update, leaving the rest of the body as it is. */
+export async function updatePrSections(config: IterisConfig, number: number, sections: {description?: string; review?: string; lifecycle?: string}, octokit: Octokit = createOctokit()): Promise<void> {
+	const [owner, repo] = config.repo.split('/') as [string, string];
+	const {data} = await octokit.pulls.get({owner, repo, pull_number: number});
+	let body = data.body ?? '';
+	if (sections.description !== undefined) body = replaceDescriptionSection(body, sections.description);
+	if (sections.review !== undefined) body = replaceReviewSection(body, sections.review);
+	if (sections.lifecycle !== undefined) body = replaceLifecycleSection(body, sections.lifecycle);
+	body = fitPrBody(body);
+	if (body !== data.body) await octokit.pulls.update({owner, repo, pull_number: number, body});
+}
+
 export const LIFECYCLE_START = '<!-- iteris:lifecycle:start -->';
 export const LIFECYCLE_END = '<!-- iteris:lifecycle:end -->';
 export function replaceLifecycleSection(body: string, report: string): string {

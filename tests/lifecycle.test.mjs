@@ -4,7 +4,7 @@ import {readFile,writeFile,mkdir,readdir,realpath} from 'node:fs/promises';
 import path from 'node:path';
 import {configSchema,loadConfig,atomicWriteConfig} from '../dist/config.js';
 import {ticketBranch} from '../dist/types.js';
-import {ensureRun,saveRun,readRun,listRuns,taskKey,waitFor,recordFailure,renderRun,MANUAL_FOLLOW_UP} from '../dist/lifecycle/state.js';
+import {ensureRun,saveRun,readRun,listRuns,taskKey,waitFor,recordFailure,renderRun,renderPrCompletion,MANUAL_FOLLOW_UP} from '../dist/lifecycle/state.js';
 import {extractRequirements,addEvidence,reconcileEvidence,readyToComplete} from '../dist/lifecycle/requirements.js';
 import {resolveTaskConfig,commandSchema} from '../dist/lifecycle/config.js';
 import {prepareEnvironment,persistedManifest,executeCommand} from '../dist/lifecycle/environment.js';
@@ -176,4 +176,22 @@ test('a base that moved after publication keeps CI evidence while the pull reque
  strict=false;assert.equal((await verifyGithubCi(cfg,run,api)).state,'passed');
  // A new published head is always a change.
  const moved={...api,pulls:{get:async()=>({data:{state:'open',mergeable:true,head:{sha:'commit-b'}}})}};assert.equal((await verifyGithubCi(cfg,run,moved)).state,'changed');
+});
+test('bare labels and the task-file lines Iteris appends are not ticket requirements',()=>{
+ const body='Acceptance criteria:\n- Duration becomes editable.\n> Original feedback:\nExpected: the field accepts input\nPriority: Medium.\nTask file: /Users/someone/project/.tasks/task1.md\nResolve attachment paths relative to this task file.';
+ const texts=extractRequirements({...ticket(),body},config('codex')).filter(r=>r.id.startsWith('acceptance-')).map(r=>r.text);
+ assert.deepEqual(texts,['- Duration becomes editable.','Expected: the field accepts input','Priority: Medium.']);
+ assert.deepEqual(extractRequirements({...ticket(),body:'Notes:'},config('codex')).filter(r=>r.id.startsWith('acceptance-')).map(r=>r.text),['Feature']);
+});
+test('the pull request completion section is a readable summary without identifiers or the evidence log',async t=>{
+ const {run}=await pendingRun(t,'- Duration becomes editable.\n> Saves survive a reload');run.requirements.push({id:'acceptance-old',text:'Task file: /Users/someone/task1.md',stage:'local',method:'independent-review',sourceRef:'fixture',status:'pending',evidenceIds:[]});
+ for(const requirement of run.requirements)addEvidence(run,requirement.id,'commit-a',requirement.id.startsWith('acceptance-')&&/reload/.test(requirement.text)?MANUAL_FOLLOW_UP:'host-review','ok',true,'base-a');
+ run.state='complete';run.phase='complete';
+ const view=renderPrCompletion(run);
+ assert.match(view,/^\*\*Complete\.\*\* Local checks, independent review and required CI passed on commit `commit-a`\. One point below still needs a person to confirm\./);
+ assert.match(view,/\*\*Please verify by hand\*\*[^\n]*\n\n- Saves survive a reload/);
+ assert.match(view,/<summary>Ticket requirements reviewed \(1\)<\/summary>\n\n- Duration becomes editable\.\n/);
+ assert.doesNotMatch(view,/- \[|acceptance-|host-review|Source:|observed|elapsed|Failed attempts|not yet verified|Task file|\/Users\//);
+ run.state='waiting';run.reason='Waiting for CI';run.requirements.find(r=>r.id==='required-ci').status='pending';
+ assert.match(renderPrCompletion(run),/^\*\*In progress\.\*\* Iteris is still working on this task: Waiting for CI\n\nNot yet verified on commit `commit-a`: Required CI checks pass\./);
 });

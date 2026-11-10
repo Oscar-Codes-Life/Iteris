@@ -1,13 +1,13 @@
 import type { IterisConfig, Ticket } from '../types.js';
 import { globMatch } from './config.js';
-import { hash, type TaskRun, type Requirement, type Evidence } from './state.js';
+import { hash, notRequirement, type TaskRun, type Requirement, type Evidence } from './state.js';
 export function extractRequirements(ticket: Ticket, config: IterisConfig): Requirement[] {
     const sourceRef = ticket.htmlUrl || `${ticket.source?.provider ?? config.provider}:${ticket.source?.id ?? ticket.number}`;
     const make = (id: string, text: string, stage: string, method: string): Requirement => ({ id, text, stage, method, sourceRef, status: 'pending', evidenceIds: [] });
     const requirements = [make('local-checks', 'Required local checks pass on the final commit', 'local', 'host-checks'), make('independent-review', 'Independent review covers the final commit', 'review', 'independent-review'), make('publication', 'A verified pull request is published', 'publication', 'github'), make('required-ci', 'Repository-required CI checks pass', 'ci', 'github')];
     // Conservative extraction retains all acceptance lines. The planner may add
     // structure, but cannot remove these obligations or enable host actions.
-    const lines = ticket.body.split(/\r?\n/).map(line => line.trim()).filter(line => line && !/^#{1,6}\s/.test(line));
+    const lines = ticket.body.split(/\r?\n/).map(line => line.trim()).filter(line => line && !/^#{1,6}\s/.test(line) && !notRequirement(line));
     for (const text of lines.length ? lines : [ticket.title]) {
         let stage = 'local';
         if (/\b(?:deploy|deployment|release to|production rollout)\b/i.test(text))

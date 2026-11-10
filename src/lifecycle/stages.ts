@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { IterisConfig } from '../types.js';
-import { saveRun, waitFor, renderRun, MANUAL_FOLLOW_UP, type TaskRun, type ExternalAction } from './state.js';
+import { saveRun, waitFor, renderPrCompletion, MANUAL_FOLLOW_UP, type TaskRun, type ExternalAction } from './state.js';
 import { addEvidence, reconcileEvidence, readyToComplete, extractRequirements } from './requirements.js';
 import { executeCommand } from './environment.js';
 import { sourceAdapter } from './adapters.js';
@@ -144,7 +144,7 @@ export async function publishCompletionView(config: IterisConfig, run: TaskRun, 
     if (!publish)
         return;
     try {
-        await publish(config, run.publication.number, renderRun(run).slice(0, 50000));
+        await publish(config, run.publication.number, renderPrCompletion(run).slice(0, 30000));
         run.dependencies = run.dependencies.filter(d => d.id !== 'publication-status');
     }
     catch (error) {

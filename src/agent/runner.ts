@@ -11,7 +11,7 @@ import {savePendingQueue} from '../state/queue.js';
 import {loadConfig} from '../config.js';
 import {createRunFolder, writeStatus, writePrompt, appendLog} from '../state/manager.js';
 import {readProgress, appendProgress} from '../state/progress.js';
-import {findPrForBranch, createPullRequest, addLabelToIssue, updatePrReview, updatePrLifecycle, reviewSection} from '../github/pr.js';
+import {findPrForBranch, createPullRequest, addLabelToIssue, updatePrReview, updatePrLifecycle, updatePrSections} from '../github/pr.js';
 import {moveCardOnComplete} from '../trello/completion.js';
 import {expandPrompt,mergePrompt} from './prompt.js';
 import {checkOk} from '../review/schema.js';
@@ -19,11 +19,11 @@ import {redact} from '../harness/redact.js';
 import {generateSummary} from './summarizer.js';
 import {runCodeReview} from './reviewer.js';
 import {recoverFailedTicket} from './failure-recovery.js';
-import {generatePrDescription, ticketReference} from './pr-description.js';
+import {generatePrDescription, pendingDescription, prBody, ticketReference} from './pr-description.js';
 import {captureContext, assertContextBudget, publishReviewed, assertPublished, savedPlan,git} from '../review/context.js';
 import {loadPassedReview, previousEvidence, saveJson} from '../review/report.js';
 import {runHarness} from '../harness/process.js';
-import {ensureRun, saveRun, readRun, taskKey, waitFor, renderRun, recordFailure,clearVerifiedLocalDependencies, type TaskRun} from '../lifecycle/state.js';
+import {ensureRun, saveRun, readRun, taskKey, waitFor, recordFailure,clearVerifiedLocalDependencies, type TaskRun} from '../lifecycle/state.js';
 import {extractRequirements, verificationPack, addEvidence, reconcileEvidence} from '../lifecycle/requirements.js';
 import {prepareEnvironment,persistedManifest,CapabilityUnavailable,setupBudget} from '../lifecycle/environment.js';
 import {advanceCompletion, publishCompletionView, type CompletionServices} from '../lifecycle/stages.js';
@@ -50,8 +50,8 @@ export type RunnerCallbacks = {
 	onAttemptFailed?: (ticketNumber: number, state: TicketState) => void | Promise<void>;
 	beforeTicket?: () => Promise<IterisConfig>;
 };
-export type RunnerServices = CompletionServices & {findPr: typeof findPrForBranch; createPr: typeof createPullRequest; addLabel: typeof addLabelToIssue; moveCard: typeof moveCardOnComplete; updateReview?: typeof updatePrReview};
-const defaultServices: RunnerServices = {findPr: findPrForBranch, createPr: createPullRequest, addLabel: addLabelToIssue, moveCard: moveCardOnComplete, updateReview: updatePrReview,draft:setGithubDraft,status:updatePrLifecycle};
+export type RunnerServices = CompletionServices & {findPr: typeof findPrForBranch; createPr: typeof createPullRequest; addLabel: typeof addLabelToIssue; moveCard: typeof moveCardOnComplete; updateReview?: typeof updatePrReview; updateSections?: typeof updatePrSections};
+const defaultServices: RunnerServices = {findPr: findPrForBranch, createPr: createPullRequest, addLabel: addLabelToIssue, moveCard: moveCardOnComplete, updateReview: updatePrReview, updateSections: updatePrSections,draft:setGithubDraft,status:updatePrLifecycle};
 export async function runAllTickets(tickets: Ticket[], config: IterisConfig, cwd: string, callbacks: RunnerCallbacks, externalSignal?: AbortSignal, services: RunnerServices = defaultServices, ownsRepositoryLock = false): Promise<void> {
 	// Duplicate source entries must never launch two writers in the same checkout.
 	tickets = [...new Map(tickets.map(ticket => [taskKey(ticket, config), ticket])).values()];
@@ -346,21 +346,21 @@ async function runSingleTicket(ticket: Ticket, config: IterisConfig, cwd: string
 		if (baseChanged) reviewWithHead += `\n\n**The remote base changed after this review. Review and CI must assess the PR against the current base before merging.**`;
 		let pr = await services.findPr(config, state.branch);
 		if(!pr && run.publication)pr={url:run.publication.url,number:run.publication.number};
+		// The commit the published description was written for; a draft opened before review passed has a placeholder.
+		let describedHead = run.publication?.described;
+		const describe = () => generatePrDescription({ticket, config, cwd, review: reviewWithHead, baseCommit: reviewedContext.stamp.base, signal, onLine(line) {log(`[pr] ${line}`);}});
 		if (!pr) {
 			await phase('creating-pr');
-			let body: string;
-			if (!reviewPassed) {
-				body = `## Summary\n${ticket.title}\n\n## Changes\n${reviewedContext.changedFiles.map(file=>`- ${file}`).join('\n')}\n\n## Completion requirements\n${renderRun(run)}\n\n${reviewSection(reviewWithHead)}\n\n${ticketReference(ticket, config)}`;
-			} else {
-				const described = await generatePrDescription({ticket, config, cwd, review: reviewWithHead, baseCommit: reviewedContext.stamp.base, signal,
-					onLine(line) {log(`[pr] ${line}`);},
-				});
+			let description = pendingDescription(ticket);
+			if (reviewPassed) {
+				const described = await describe();
 				if (!described.success || !described.text) {
 					state.status = described.timedOut ? 'stale' : 'failed';
 					throw new Error(`PR description: ${described.error ?? 'Harness produced no description'}`);
 				}
-				body = described.text;
+				description = described.text; describedHead = reviewedContext.stamp.head;
 			}
+			const body = prBody(description, reviewWithHead, ticketReference(ticket, config));
 			await assertPublished(reviewedContext, config, cwd, signal, !reviewPassed);
 			pr = await services.createPr({...config,pr:{...config.pr,draft:true}}, {branch: state.branch, title: ticketPrTitle(ticket), body});
 			log(`[iteris] Created PR ${pr.url}`);
@@ -368,10 +368,19 @@ async function runSingleTicket(ticket: Ticket, config: IterisConfig, cwd: string
 			await services.draft?.(config,pr.number,true);
 			await assertPublished(reviewedContext, config, cwd, signal, !reviewPassed);
 			await services.updateReview?.(config, pr.number, reviewWithHead);
+			if (reviewPassed && services.updateSections && describedHead !== reviewedContext.stamp.head) {
+				// A missing description never holds a verified change back; `iteris describe` writes it later.
+				try {
+					const described = await describe();
+					if (!described.success || !described.text) throw new Error(described.error ?? 'Harness produced no description');
+					await services.updateSections(config, pr.number, {description: described.text});
+					describedHead = reviewedContext.stamp.head;
+				} catch (error) {log(`[iteris] Could not write the PR description: ${String(error)}. Run "iteris describe" to retry.`);}
+			}
 		}
 		await assertPublished(reviewedContext, config, cwd, signal, !reviewPassed);
 		state.prUrl = pr.url; state.prNumber = pr.number;
-		run.publication={url:pr.url,number:pr.number,head:reviewedContext.stamp.head,base:reviewedContext.stamp.base,draft:true};
+		run.publication={url:pr.url,number:pr.number,head:reviewedContext.stamp.head,base:reviewedContext.stamp.base,draft:true,described:describedHead};
 		for(const requirement of run.requirements.filter(r=>r.stage==='publication'))addEvidence(run,requirement.id,reviewedContext.stamp.head,'github-publication',pr.url,true,reviewedContext.stamp.base);
 		if (!reviewPassed) state.reviewPending = `${reviewed.report.outcome}: ${reviewed.report.reason}`;
 		if(reviewPassed && reviewMatchesHead) {

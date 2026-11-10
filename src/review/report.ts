@@ -27,19 +27,24 @@ export async function saveCheckpoint(directory: string, key: string, value: unkn
 
 export const checksSchema = z.array(z.object({command: z.string(), head: z.string(), exitCode: z.number().nullable(), output: z.string(), durationMs: z.number(), error: z.string().optional(), truncated: z.boolean(), unavailable: z.boolean().optional(), suggested: z.boolean().optional(), environment: z.string().optional()}));
 const inline = (value: string) => value.replace(/[\r\n]+/g, ' ').replaceAll('`', "'").replace(/[<>]/g, '');
+const tally = (statuses: string[]) => [...new Set(statuses)].map(status => `${statuses.filter(other => other === status).length} ${status}`).join(', ');
 export function renderReport(report: ReviewReport): string {
+	const finding = (f: ReviewReport['findings'][number]) => `- **${f.status}${blocks(f) ? ' / blocker' : ''} / ${f.priority}** ${inline(f.title)} — \`${inline(f.file)}:${f.line}\` (${f.side}, \`${f.head}\`). ${inline(f.verification ?? f.evidence)}${f.fixedAt ? ` Fixed at \`${f.fixedAt}\`.` : ''}`;
+	const shown = report.findings.filter(f => f.status !== 'rejected'), fixed = shown.filter(f => f.status === 'fixed'), open = shown.filter(f => f.status !== 'fixed');
 	return [
 		'## Iteris review', '', `**${report.outcome.toUpperCase()}** — ${inline(report.reason)}`,
 		`Reviewed commit: \`${report.stamp?.head ?? 'unavailable'}\`. Mode: ${report.mode}. Rounds: ${report.rounds}; repairs: ${report.repairs}.`,
-		`Reviewer: ${inline(report.selection.harness)} / ${inline(report.selection.model ?? 'default')} / ${inline(report.selection.effort ?? 'default')}. Usage/cost: unavailable.`, '',
-		'### Acceptance', '', ...report.requirements.map(item => `- **${item.status}** ${inline(item.requirement)} — ${inline(item.evidence)}`),
-		...(report.requirements.length ? [] : ['- Not verified.']), '', '### Checks', '',
+		`Reviewer: ${inline(report.selection.harness)} / ${inline(report.selection.model ?? 'default')} / ${inline(report.selection.effort ?? 'default')}.`, '',
+		// What a person must act on stays visible; one line per ticket requirement, command and settled finding is folded.
+		// Evidence only a person can gather is listed once, in the pull request's completion section.
+		...(open.length ? ['### Open findings', '', ...open.map(finding), ''] : []),
+		...(report.gaps.length ? ['### Unverified areas', '', ...report.gaps.map(gap => `- ${inline(gap)}`), ''] : []),
+		'<details>', `<summary>Acceptance: ${tally(report.requirements.map(item => item.status)) || 'not verified'}</summary>`, '', ...report.requirements.map(item => `- **${item.status}** ${inline(item.requirement)} — ${inline(item.evidence)}`),
+		...(report.requirements.length ? [] : ['- Not verified.']), '', '</details>', '',
+		'<details>', `<summary>Checks: ${tally(report.checks.map(check => check.unavailable ? 'not run' : checkOk(check) ? 'passed' : 'failed')) || 'none run'}</summary>`, '',
 		...report.checks.map(check => `- \`${inline(check.command)}\`: ${check.environment && check.exitCode === null ? `not run, ${inline(check.environment)}` : check.environment ? `exit ${check.exitCode}, attributed to this host's environment and not to the change: ${inline(check.environment)}` : check.unavailable ? 'not run, tool unavailable on this host' : check.error ? inline(check.error) : `exit ${check.exitCode}`} (${check.durationMs} ms), commit \`${check.head}\`.`),
-		...(report.checks.length ? [] : ['- No executable checks run; see outcome and repository configuration.']), '', '### Findings', '',
-		...report.findings.filter(f => f.status !== 'rejected').map(f => `- **${f.status}${blocks(f) ? ' / blocker' : ''} / ${f.priority}** ${inline(f.title)} — \`${inline(f.file)}:${f.line}\` (${f.side}, \`${f.head}\`). ${inline(f.verification ?? f.evidence)}${f.fixedAt ? ` Fixed at \`${f.fixedAt}\`.` : ''}`),
-		...(report.findings.some(f => f.status !== 'rejected') ? [] : ['- No confirmed findings.']), '',
-		'### Unverified areas', '', ...report.gaps.map(gap => `- ${inline(gap)}`), ...(report.gaps.length ? [] : ['- None reported by the required reviewers.']),
-		...(report.dependencies?.some(d => d.kind === 'external') ? ['', '### Needs manual verification', '', ...report.dependencies.filter(d => d.kind === 'external').map(d => `- ${inline(d.description)} Next: ${inline(d.nextAction)}`)] : []),
+		...(report.checks.length ? [] : ['- No executable checks run; see outcome and repository configuration.']), '', '</details>',
+		...(fixed.length ? ['', '<details>', `<summary>Found and fixed during review: ${fixed.length}</summary>`, '', ...fixed.map(finding), '', '</details>'] : []),
 		'', 'Automated readiness evidence; human merge approval is still required.',
 	].join('\n');
 }
@@ -65,6 +70,14 @@ export async function loadPassedReview(directory: string, context: ReviewContext
 		if(context.checkIds.some(id=>!report.checks.some(check=>check.command===`check:${id}`)))return;
 		if (report.dependencies?.some(d => d.kind !== 'external' || !allowExternal) || report.gaps.length || report.findings.some(blocks) || !report.requirements.length || report.requirements.some(r => r.status !== 'covered' && r.status !== 'external') || report.checks.some(c => c.head !== context.stamp.head || !checkOk(c))) return;
 		return {report, text: renderReport(report), success: true, done: true, timedOut: false};
+	} catch {return;}
+}
+
+/** The latest saved review as it is published, whatever its outcome. */
+export async function loadReportText(directory: string): Promise<{report: ReviewReport; text: string} | undefined> {
+	try {
+		const report = storedReportSchema.parse(JSON.parse(await readFile(path.join(directory, 'result.json'), 'utf8'))) as ReviewReport;
+		return {report, text: redact(renderReport(report))};
 	} catch {return;}
 }
 
