@@ -31,12 +31,21 @@ export const verificationSchema = z.object({
 	head: text, complete: z.boolean(), gaps: z.array(text), requirements: z.array(requirement).min(1),
 	decisions: z.array(z.object({id: text, status: z.enum(['confirmed', 'rejected', 'duplicate']), evidence: text, duplicateOf: z.string().optional()}).strict()),
 	resolved: z.array(z.object({id: text, evidence: text}).strict()),
+	// Failed model-suggested checks whose failure the verifier attributes to this host, not to the change.
+	environment: z.array(z.object({command: z.string().trim().min(1).max(4000), evidence: text}).strict()).max(20).optional(),
 }).strict();
 export type Verification = z.infer<typeof verificationSchema>;
 export type CheckResult = {command: string; head: string; exitCode: number | null; output: string; durationMs: number; error?: string; truncated: boolean;
-	/** A model-suggested command whose tool is not installed here. It produced no evidence and is not a failed check. */
-	unavailable?: boolean};
-/** A check that does not block: it passed, or it is a model suggestion this host cannot start. */
+	/**
+	 * A model-suggested command that produced no evidence about the change on this host: its tool is not installed,
+	 * or independent verification attributed its failure to the host environment. It is not a failed check.
+	 */
+	unavailable?: boolean;
+	/** Proposed by a planning or recovery model and run isolated; not a check the repository owner configured. */
+	suggested?: boolean;
+	/** Why the verifier attributed the failure to the host environment. */
+	environment?: string};
+/** A check that does not block: it passed, or it is a model suggestion that could not produce evidence on this host. */
 export const checkOk = (check: Pick<CheckResult, 'exitCode' | 'error' | 'unavailable'>) => check.unavailable === true || (check.exitCode === 0 && !check.error);
 export type ReviewStamp = {head: string; base: string; mergeBase: string; branch: string; scope: string; key: string};
 export type ReviewReport = {

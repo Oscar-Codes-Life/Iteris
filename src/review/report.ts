@@ -25,7 +25,7 @@ export async function saveCheckpoint(directory: string, key: string, value: unkn
 	await saveJson(path.join(directory, 'checkpoints', `${key}.json`), {key, value});
 }
 
-export const checksSchema = z.array(z.object({command: z.string(), head: z.string(), exitCode: z.number().nullable(), output: z.string(), durationMs: z.number(), error: z.string().optional(), truncated: z.boolean(), unavailable: z.boolean().optional()}));
+export const checksSchema = z.array(z.object({command: z.string(), head: z.string(), exitCode: z.number().nullable(), output: z.string(), durationMs: z.number(), error: z.string().optional(), truncated: z.boolean(), unavailable: z.boolean().optional(), suggested: z.boolean().optional(), environment: z.string().optional()}));
 const inline = (value: string) => value.replace(/[\r\n]+/g, ' ').replaceAll('`', "'").replace(/[<>]/g, '');
 export function renderReport(report: ReviewReport): string {
 	return [
@@ -34,7 +34,7 @@ export function renderReport(report: ReviewReport): string {
 		`Reviewer: ${inline(report.selection.harness)} / ${inline(report.selection.model ?? 'default')} / ${inline(report.selection.effort ?? 'default')}. Usage/cost: unavailable.`, '',
 		'### Acceptance', '', ...report.requirements.map(item => `- **${item.status}** ${inline(item.requirement)} — ${inline(item.evidence)}`),
 		...(report.requirements.length ? [] : ['- Not verified.']), '', '### Checks', '',
-		...report.checks.map(check => `- \`${inline(check.command)}\`: ${check.unavailable ? 'not run, tool unavailable on this host' : check.error ? inline(check.error) : `exit ${check.exitCode}`} (${check.durationMs} ms), commit \`${check.head}\`.`),
+		...report.checks.map(check => `- \`${inline(check.command)}\`: ${check.environment && check.exitCode === null ? `not run, ${inline(check.environment)}` : check.environment ? `exit ${check.exitCode}, attributed to this host's environment and not to the change: ${inline(check.environment)}` : check.unavailable ? 'not run, tool unavailable on this host' : check.error ? inline(check.error) : `exit ${check.exitCode}`} (${check.durationMs} ms), commit \`${check.head}\`.`),
 		...(report.checks.length ? [] : ['- No executable checks run; see outcome and repository configuration.']), '', '### Findings', '',
 		...report.findings.filter(f => f.status !== 'rejected').map(f => `- **${f.status}${blocks(f) ? ' / blocker' : ''} / ${f.priority}** ${inline(f.title)} — \`${inline(f.file)}:${f.line}\` (${f.side}, \`${f.head}\`). ${inline(f.verification ?? f.evidence)}${f.fixedAt ? ` Fixed at \`${f.fixedAt}\`.` : ''}`),
 		...(report.findings.some(f => f.status !== 'rejected') ? [] : ['- No confirmed findings.']), '',

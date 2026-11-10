@@ -14,6 +14,7 @@ import {readProgress, appendProgress} from '../state/progress.js';
 import {findPrForBranch, createPullRequest, addLabelToIssue, updatePrReview, updatePrLifecycle, reviewSection} from '../github/pr.js';
 import {moveCardOnComplete} from '../trello/completion.js';
 import {expandPrompt,mergePrompt} from './prompt.js';
+import {checkOk} from '../review/schema.js';
 import {redact} from '../harness/redact.js';
 import {generateSummary} from './summarizer.js';
 import {runCodeReview} from './reviewer.js';
@@ -401,7 +402,7 @@ async function runSingleTicket(ticket: Ticket, config: IterisConfig, cwd: string
 			run.state='blocked';run.reason=reviewed.report.reason;recordFailure(run,config,'code',{files:reviewedContext.changedFiles,findings:reviewed.report.findings.filter(f=>f.status==='confirmed').map(f=>[f.category,f.file,f.line]),checks:reviewed.report.checks.filter(c=>c.exitCode!==0).map(c=>c.command)},reviewedContext.stamp.head,reviewed.report.reason);
 			// The draft stays published; a fresh instance repairs this commit later with the findings.
 			const reviewerFailure=/timed out|deadline exceeded|stalled|Process exited|Cancelled|reviewer failed|ENOENT|spawn/i.test(reviewed.report.reason);
-			failAttempt(run,config,state,cwd,{phase:'reviewing',status:reviewed.report.outcome,kind:reviewed.report.checks.some(c=>c.exitCode!==0)?'test':'code',reason:`Review ${reviewed.report.outcome}: ${reviewed.report.reason}`,details:reviewDetails(reviewed.report),needsRepair:reviewed.report.outcome==='blocked'||!reviewerFailure});
+			failAttempt(run,config,state,cwd,{phase:'reviewing',status:reviewed.report.outcome,kind:reviewed.report.checks.some(c=>!checkOk(c))?'test':'code',reason:`Review ${reviewed.report.outcome}: ${reviewed.report.reason}`,details:reviewDetails(reviewed.report),needsRepair:reviewed.report.outcome==='blocked'||!reviewerFailure});
 		}
 		if(!reviewPassed || baseChanged)await publishCompletionView(config,run,cwd,services);
 		const completionState=run.state,completionPhase=run.phase;

@@ -10,7 +10,7 @@ import {invocation} from '../dist/harness/process.js';
 import {runAllTickets} from '../dist/agent/runner.js';
 import {atomicWriteConfig, configSchema} from '../dist/config.js';
 import {temporary, reviewRepository, environment, executable, fakeAgent, config, setupIsolationFixture} from './helpers.mjs';
-import {localPlannedChecks} from '../dist/lifecycle/planning.js';
+import {localPlannedChecks,localEvidenceCommand} from '../dist/lifecycle/planning.js';
 import {runRecoveryCheck} from '../dist/lifecycle/local-check.js';
 import {fitPrBody, PR_BODY_LIMIT, reviewSection, replaceReviewSection, replaceLifecycleSection, REVIEW_START, REVIEW_END, LIFECYCLE_START, LIFECYCLE_END} from '../dist/github/pr.js';
 const ticket={number:1,title:'Feature',body:'Implement feature. Handle retries without duplicate writes.',slug:'feature',labels:[],htmlUrl:'https://example.com/1'};
@@ -533,4 +533,32 @@ test('an attempt keeps the base it started from when another task fetches a newe
  assert.notEqual(captureContext(ticket,f.cfg,f.cwd).stamp.key,context.stamp.key);
  f.cfg._base=context.stamp.base;const pinned=captureContext(ticket,f.cfg,f.cwd);
  assert.equal(pinned.stamp.base,context.stamp.base);assert.equal(pinned.stamp.key,context.stamp.key);
+});
+test('independent verification can attribute a failed suggested command to the host, never a configured check',async t=>{
+ const f=await fixture(t,{scenario:'environment'});await setupIsolationFixture(f.cwd);await appendFile(path.join(f.cwd,'.git/info/exclude'),'sandbox-exec\nbwrap\n');
+ f.cfg._plannedChecks=['exit 3'];
+ const result=await runCodeReview(f.options);assert.equal(result.report.outcome,'passed',result.error);
+ const check=result.report.checks.find(c=>c.command==='exit 3');assert.equal(check.exitCode,3);assert.equal(check.suggested,true);assert.equal(check.unavailable,true);assert.match(check.environment,/Port 8081/);
+ assert.match(result.text,/attributed to this host's environment/);
+ // The repository owner's own check cannot be waved away by a reviewer.
+ const owner=await fixture(t,{scenario:'environment'});owner.cfg.qualityChecks=['exit 3'];
+ const blocked=await runCodeReview(owner.options);assert.notEqual(blocked.report.outcome,'passed');
+ assert.equal(blocked.report.checks.find(c=>c.command==='exit 3').unavailable,undefined);
+});
+test('suggested commands that start a server or need a device or the code host are recorded, not run',async t=>{
+ const kept=['cd app && npm test -- --ci','cd app && npm run typecheck','npm run start:check','git diff --check base HEAD','xcrun simctl list devices booted'];
+ const dropped=['cd app && npm start -- --dev-client --localhost --port 8081','cd app && npx expo start','yarn android','npm run dev','adb devices','gh pr view branch --json url','maestro test flow.yaml'];
+ for(const command of kept)assert.equal(localEvidenceCommand(command),true,command);
+ for(const command of dropped)assert.equal(localEvidenceCommand(command),false,command);
+ // The planned list is an input to the review scope: it stays as planned so finished reviews remain valid.
+ const requirements=[{id:'acceptance-a',stage:'local'}],check=command=>({command,behavioral:false,requirementIds:['acceptance-a']});
+ assert.deepEqual(localPlannedChecks({requirements,planning:{checks:[...kept,...dropped].map(check)}}),[...kept,...dropped]);
+ const f=await fixture(t);await setupIsolationFixture(f.cwd);await appendFile(path.join(f.cwd,'.git/info/exclude'),'sandbox-exec\nbwrap\n');
+ f.cfg._plannedChecks=['npm start -- --port 8081'];
+ const result=await runCodeReview(f.options);assert.equal(result.report.outcome,'passed',result.error);
+ const server=result.report.checks.find(c=>c.command.startsWith('npm start'));assert.equal(server.exitCode,null);assert.equal(server.unavailable,true);
+ assert.match(result.text,/not run, it starts a server/);
+ // The repository owner's own command always runs.
+ const owner=await fixture(t);owner.cfg.qualityChecks=['npm start -- --port 8081'];
+ assert.notEqual((await runCodeReview(owner.options)).report.checks.find(c=>c.command.startsWith('npm start')).exitCode,null);
 });

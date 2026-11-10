@@ -105,6 +105,7 @@ if (args[0] === 'app-server') {
    if (scenario==='invalid-location') finding.line = 99999;
    if (prompt.startsWith('ITERIS_REVIEW verify')) {
     const reply={head:context.stamp.head,complete:!(scenario==='recover-verifier' && needsEvidence),gaps:scenario==='recover-verifier' && needsEvidence?['Recovery tests were not run']:[],requirements:[requirement,...(input.requiredRequirements||[]).filter(text=>text!==requirement.requirement).map(text=>({...requirement,requirement:text})),...hostGates],decisions:scenario==='omit-decision'?[]:input.candidates.map((f,index)=>['duplicate-status','duplicate-status-ambiguous'].includes(scenario)&&index===1?{id:f.id,status:'duplicate',evidence:scenario==='duplicate-status'?'Same causal defect as candidate '+input.candidates[0].id:'Same causal defect as another candidate'}:{id:f.id,status:scenario==='false-positive'?'rejected':'confirmed',evidence:'Independent causal trace'}),resolved:scenario==='missing-resolution'?[]:input.previousBlockers.filter(f=>!input.candidates.some(c=>c.id===f.id)).map(f=>({id:f.id,evidence:'feature.txt now returns fixed'}))};
+    if (scenario==='environment') reply.environment=input.checks.filter(c=>c.exitCode&&!c.unavailable).map(c=>({command:c.command,evidence:'Port 8081 is in use by another checkout'}));
     if (scenario==='verifier-extra-findings' && (fs.readFileSync(process.env.CAPTURE,'utf8').match(/ITERIS_REVIEW verify/g)||[]).length===1) reply.findings=[];
     if (scenario==='verifier-persistent-extra-findings') reply.findings=[];
     text=JSON.stringify(reply);

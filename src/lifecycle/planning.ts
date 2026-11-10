@@ -4,6 +4,17 @@ import { hash } from './state.js';
 export const planningSchema = z.object({ plan: z.string().min(1), requirements: z.array(z.object({ id: z.string(), text: z.string().min(1), stage: z.string().min(1), method: z.string().min(1) }).strict()), invariants: z.array(z.string()), reproductionStrategy: z.string().min(1), fixtures: z.array(z.string()), capabilities: z.array(z.string()), checks: z.array(z.object({ command: z.string().min(1), behavioral: z.boolean(), requirementIds: z.array(z.string()) }).strict()).max(20) }).strict();
 export type PlanningPack = z.infer<typeof planningSchema>;
 /**
+ * Commands that cannot be offline local evidence, whatever a planner hoped: a dev server or app launch never
+ * finishes, and a code-host CLI or device bridge needs the network or hardware the check sandbox withholds.
+ */
+const NOT_LOCAL_EVIDENCE = [
+    /(?:^|[;&|]\s*)(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:start|dev|serve|ios|android)(?=\s|$)/,
+    /(?:^|[;&|\s])(?:npx\s+)?(?:expo|react-native)\s+(?:start|run(?::|-)\w+)(?=\s|$)/,
+    /(?:^|[;&|]\s*)(?:gh|adb|maestro)\s/,
+];
+/** The reviewer records such a suggested command as absent evidence instead of running it; the planned list itself is unchanged, so finished reviews stay valid. */
+export const localEvidenceCommand = (command: string) => !NOT_LOCAL_EVIDENCE.some(pattern => pattern.test(command));
+/**
  * Planned commands the host runs as local gates. A command that only serves a host-owned later
  * stage (review, publication, CI, deployment, device) cannot pass before that stage exists and is not local evidence.
  */

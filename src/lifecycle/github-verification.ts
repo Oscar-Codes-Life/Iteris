@@ -28,11 +28,17 @@ export async function verifyGithubCi(config: IterisConfig, run: TaskRun, octokit
     if (!required) {
         const discovered = new Set<string>();
         if (branch.protected) {
-            const { data: protection } = await octokit.repos.getBranchProtection({ owner, repo, branch: config.baseBranch });
-            strict ||= protection.required_status_checks?.strict === true;
-            for (const check of protection.required_status_checks?.contexts ?? [])
+            // GitHub also reports a branch as protected when only rulesets cover it; classic protection
+            // then answers 404 "Branch not protected", which means no classic rules, not a failed discovery.
+            const protection = await octokit.repos.getBranchProtection({ owner, repo, branch: config.baseBranch }).then(response => response.data, error => {
+                if ((error as { status?: number }).status === 404)
+                    return undefined;
+                throw error;
+            });
+            strict ||= protection?.required_status_checks?.strict === true;
+            for (const check of protection?.required_status_checks?.contexts ?? [])
                 discovered.add(check);
-            for (const check of protection.required_status_checks?.checks ?? [])
+            for (const check of protection?.required_status_checks?.checks ?? [])
                 discovered.add(check.context);
         }
         // Rulesets may impose required checks even without classic protection.

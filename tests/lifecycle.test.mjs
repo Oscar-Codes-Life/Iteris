@@ -110,6 +110,17 @@ test('CI discovery failures are visible and do not imply success',async t=>{
  const {cfg,run}=await pendingRun(t);const api={pulls:{get:async()=>({data:{state:'open',head:{sha:'commit-a'}}})},repos:{getBranch:async()=>({data:{protected:false,commit:{sha:'base-a'}}})},request:async()=>{throw new Error('rules discovery forbidden');}};
  await assert.rejects(verifyGithubCi(cfg,run,api),/discovery forbidden/);
 });
+test('a branch protected only by rulesets discovers its required checks from the rulesets',async t=>{
+ const {cfg,run}=await pendingRun(t);const head=run.publication.head;
+ const notProtected=Object.assign(new Error('Branch not protected'),{status:404});
+ const api={pulls:{get:async()=>({data:{state:'open',mergeable:true,head:{sha:head}}})},repos:{getBranch:async()=>({data:{protected:true,commit:{sha:run.publication.base}}}),getBranchProtection:async()=>{throw notProtected;},listCommitStatusesForRef(){}},checks:{listForRef(){}},
+  request:async()=>({data:[{type:'required_status_checks',parameters:{required_status_checks:[{context:'CI Gate'}]}}]}),
+  paginate:async method=>method===api.checks.listForRef?[{name:'CI Gate',status:'completed',conclusion:'success',started_at:new Date().toISOString()}]:[]};
+ const result=await verifyGithubCi(cfg,run,api);assert.equal(result.state,'passed',result.details);assert.match(result.details,/CI Gate: passed/);
+ // Any other failure of classic-protection discovery stays visible.
+ api.repos.getBranchProtection=async()=>{throw Object.assign(new Error('Forbidden'),{status:403});};
+ await assert.rejects(verifyGithubCi(cfg,run,api),/Forbidden/);
+});
 test('explicit CI checks assess the current commit and fail when required evidence fails',async t=>{
  const {cfg,run}=await pendingRun(t);cfg.verification.requiredCiChecks=['unit'];const api={pulls:{get:async()=>({data:{state:'open',head:{sha:'commit-a'}}})},repos:{getBranch:async()=>({data:{protected:false,commit:{sha:'base-a'}}}),listCommitStatusesForRef(){}},checks:{listForRef(){}},paginate:async method=>method===api.checks.listForRef?[{name:'unit',status:'completed',conclusion:'failure',started_at:new Date().toISOString()}]:[]};
  assert.equal((await verifyGithubCi(cfg,run,api)).state,'failed');

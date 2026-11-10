@@ -16,6 +16,7 @@ import {applicableChecks} from '../lifecycle/requirements.js';
 import {executeCommand,CapabilityUnavailable} from '../lifecycle/environment.js';
 import {runRecoveryCheck} from '../lifecycle/local-check.js';
 import {commitSourceChanges} from '../lifecycle/commit.js';
+import {localEvidenceCommand} from '../lifecycle/planning.js';
 
 type ReviewOptions = {
 	ticket: Ticket; config: IterisConfig; cwd: string; folder: string; plan?: string; branch?: string;
@@ -144,15 +145,17 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 				let result;
 				// Commands proposed by a planner or recovery instance run isolated; configured checks are trusted.
 				const suggested = !named && (config._plannedChecks?.includes(command) || (additionalChecks.has(command) && !config.qualityChecks.includes(command)));
-				try{result = named ? await executeCommand(named.command, cwd, {...config, _deadline:deadline}, signal) : suggested ? await runRecoveryCheck(command,cwd,config,deadline,signal) : await runCommand(command, [], {cwd, deadline, signal, shell: true, env:{...process.env,...config._execution?.env,PATH:config._execution?.path ?? process.env['PATH']}});}
+				// A suggested dev server, device bridge or code-host call cannot finish as an offline check; it is not started.
+				const notLocal = suggested && !config.qualityChecks.includes(command) && !localEvidenceCommand(command);
+				try{result = notLocal ? {exitCode: null, output: '', durationMs: 0, truncated: false} : named ? await executeCommand(named.command, cwd, {...config, _deadline:deadline}, signal) : suggested ? await runRecoveryCheck(command,cwd,config,deadline,signal) : await runCommand(command, [], {cwd, deadline, signal, shell: true, env:{...process.env,...config._execution?.env,PATH:config._execution?.path ?? process.env['PATH']}});}
 				catch(error){if(!(error instanceof CapabilityUnavailable))throw error;if(!capability.some(d=>d.id===error.dependency))capability.push({id:error.dependency,kind:'capability',description:error.message,nextAction:error.nextAction});result={exitCode:null,output:'',durationMs:0,truncated:false,error:error.message};}
 				const {stdout:_stdout,stderr:_stderr,...checkResult}=result;
 				// A suggested command whose tool is not installed here (adb, a device runner) never started.
 				// That is absent evidence for the reviewers to weigh, not a failing project check.
-				const unavailable = suggested && !config.qualityChecks.includes(command) && !result.error && (result.exitCode === 127 || result.exitCode === 126);
-				report.checks.push({command, head: context.stamp.head, ...checkResult, ...(unavailable ? {unavailable: true} : {})});
+				const unavailable = notLocal || (suggested && !config.qualityChecks.includes(command) && !result.error && (result.exitCode === 127 || result.exitCode === 126));
+				report.checks.push({command, head: context.stamp.head, ...checkResult, ...(suggested && !config.qualityChecks.includes(command) ? {suggested: true} : {}), ...(unavailable ? {unavailable: true} : {}), ...(notLocal ? {environment: NOT_LOCAL} : {})});
 				await saveJson(path.join(roundFolder, 'checks.json'), report.checks);
-				log(`${command}: ${unavailable ? `not run, tool unavailable on this host (exit ${result.exitCode})` : result.error ?? `exit ${result.exitCode}`}`);
+				log(`${command}: ${notLocal ? `not run, ${NOT_LOCAL}` : unavailable ? `not run, tool unavailable on this host (exit ${result.exitCode})` : result.error ?? `exit ${result.exitCode}`}`);
 				assertSnapshot(context, config, cwd);
 				if(signal?.aborted)throw new Error('Cancelled');
 			}
@@ -210,6 +213,16 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 				if (verification.head !== context.stamp.head) throw new Error('Verifier returned the wrong commit.');
 				for (const requirement of own(verification.requirements)) requiredRequirements.add(requirement.requirement);
 				report.requirements = own(verification.requirements);
+				// The independent verifier, never the implementer, may attribute a failed model-suggested command to this
+				// host (occupied port, no device, no network). Such a command says nothing about the change and stops gating.
+				for (const item of verification.environment ?? []) {
+					const check = report.checks.find(candidate => candidate.command === item.command && candidate.suggested && !candidate.unavailable && !candidate.error && candidate.exitCode !== 0 && candidate.exitCode !== null);
+					if (!check) continue;
+					Object.assign(check, {unavailable: true, environment: item.evidence.slice(0, 2000)});
+					log(`${check.command}: exit ${check.exitCode} attributed to the host environment by independent verification`);
+				}
+				await saveJson(path.join(roundFolder, 'checks.json'), report.checks);
+				await saveJson(path.join(directory, 'checks.json'), report.checks);
 				if (!verification.complete || verification.gaps.length) throw new ReviewGap(`Verification incomplete: ${verification.gaps.join('; ') || 'missing coverage'}`);
 				if (verification.decisions.length !== candidates.length || new Set(verification.decisions.map(d => d.id)).size !== candidates.length || verification.decisions.some(d => !candidates.some(f => f.id === d.id))) throw new Error('Verifier must decide every candidate exactly once.');
 				if (required().some(req => !verification.requirements.some(v => v.requirement === req))) throw new Error('Verifier omitted an acceptance requirement.');
@@ -245,7 +258,9 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 					if (resolved) {previous.status = 'fixed'; previous.fixedAt = context.stamp.head; previous.verification = resolved.evidence;}
 					else if (!candidates.some(c => c.id === previous.id && c.status === 'confirmed')) throw new Error(`Previous blocker ${previous.id} lacks resolution evidence.`);
 				}
-				report.findings = [...report.findings.filter(f => f.status === 'fixed' || !candidates.some(c => c.id === f.id)), ...candidates];
+				// A finding that never blocked is not tracked across commits: once fresh reviewers of a newer commit
+				// no longer raise it, it is dropped instead of being reported against code it was not found in.
+				report.findings = [...report.findings.filter(f => f.status === 'fixed' || (!candidates.some(c => c.id === f.id) && (f.head === context.stamp.head || blocks(f)))), ...candidates];
 			} catch (error) {
 				if (!(error instanceof ReviewGap)) throw error;
 				report.gaps.push(error.message);
@@ -316,8 +331,10 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 			log(`Repair ${report.repairs}: ${report.reason}`);
 			beginPhase('Repair');
 			const repeated=(repairAttempts.get(failureKey)??0)>1;
+			// A missing requirement usually cites a finding that does not block on its own; the repair needs its full detail.
+			const repairFindings = missing.length ? report.findings.filter(finding => finding.status === 'confirmed' && !finding.duplicateOf && (finding.head === context.stamp.head || blocks(finding))) : previousBlockers;
 			if(repeated)await saveJson(path.join(roundFolder,'replanning.json'),{signature:failureKey,head:context.stamp.head,attempt:repairAttempts.get(failureKey),progressMetric:'The same behavioral check and independent invariant become satisfied',reason:report.reason});
-			const repaired = await runHarness({config, phase: 'repair', prompt: redact(repairPrompt(context, previousBlockers, missing, failedChecks,repeated?'The same invariant failed after a prior repair. Replan before editing: trace the root cause and why the prior patch failed, choose a different strategy, then demonstrate measurable progress with the failing behavioral check. Do not repeat the same patch or change the acceptance obligation.':'')), cwd, timeoutMs: remaining(), signal, onProcess, onLine: line => log(`[repair] ${line}`)});
+			const repaired = await runHarness({config, phase: 'repair', prompt: redact(repairPrompt(context, repairFindings, missing, failedChecks,repeated?'The same invariant failed after a prior repair. Replan before editing: trace the root cause and why the prior patch failed, choose a different strategy, then demonstrate measurable progress with the failing behavioral check. Do not repeat the same patch or change the acceptance obligation.':'')), cwd, timeoutMs: remaining(), signal, onProcess, onLine: line => log(`[repair] ${line}`)});
 			await saveJson(path.join(roundFolder, 'repair.json'), repaired);
 			if (!repaired.success || !repaired.done) throw new Error(repaired.error ?? 'Repair did not report completion');
 			commitSourceChanges(cwd,context.stamp.branch,'Repair verified project invariant');
@@ -331,6 +348,7 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 	return finish();
 }
 
+const NOT_LOCAL = 'it starts a server or needs a device or the code host, so it cannot finish as an offline check';
 class ReviewGap extends Error {}
 
 function namesCiGate(reason: string): boolean {
