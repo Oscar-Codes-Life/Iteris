@@ -185,11 +185,11 @@ test('bare labels and the task-file lines Iteris appends are not ticket requirem
 });
 test('the pull request completion section is a readable summary without identifiers or the evidence log',async t=>{
  const {run}=await pendingRun(t,'- Duration becomes editable.\n> Saves survive a reload');run.requirements.push({id:'acceptance-old',text:'Task file: /Users/someone/task1.md',stage:'local',method:'independent-review',sourceRef:'fixture',status:'pending',evidenceIds:[]});
- for(const requirement of run.requirements)addEvidence(run,requirement.id,'commit-a',requirement.id.startsWith('acceptance-')&&/reload/.test(requirement.text)?MANUAL_FOLLOW_UP:'host-review','ok',true,'base-a');
+ for(const requirement of run.requirements)addEvidence(run,requirement.id,'commit-a',requirement.id.startsWith('acceptance-')&&/reload/.test(requirement.text)?MANUAL_FOLLOW_UP:'host-review','ok',true,'base-a');run.requirements.find(r=>/reload/.test(r.text)).text+=' — Supplied tests cover rehydration; a real reload needs a device.';
  run.state='complete';run.phase='complete';
  const view=renderPrCompletion(run);
  assert.match(view,/^\*\*Complete\.\*\* Local checks, independent review and required CI passed on commit `commit-a`\. One point below still needs a person to confirm\./);
- assert.match(view,/\*\*Please verify by hand\*\*[^\n]*\n\n- Saves survive a reload/);
+ assert.match(view,/\*\*Please verify by hand\*\*[^\n]*\n\n- Saves survive a reload\n/);assert.doesNotMatch(view,/Supplied tests cover/);
  assert.match(view,/<summary>Ticket requirements reviewed \(1\)<\/summary>\n\n- Duration becomes editable\.\n/);
  assert.doesNotMatch(view,/- \[|acceptance-|host-review|Source:|observed|elapsed|Failed attempts|not yet verified|Task file|\/Users\//);
  run.state='waiting';run.reason='Waiting for CI';run.requirements.find(r=>r.id==='required-ci').status='pending';

@@ -5,6 +5,7 @@ import {redact} from '../harness/redact.js';
 import {z} from 'zod';
 import {blocks, candidateSchema, verificationSchema, checkOk, type ReviewReport, type ReviewResult} from './schema.js';
 import type {ReviewContext} from './context.js';
+import {notRequirement} from '../lifecycle/state.js';
 
 export async function saveJson(file: string, value: unknown): Promise<void> {
 	await mkdir(path.dirname(file), {recursive: true});
@@ -30,6 +31,8 @@ const inline = (value: string) => value.replace(/[\r\n]+/g, ' ').replaceAll('`',
 const tally = (statuses: string[]) => [...new Set(statuses)].map(status => `${statuses.filter(other => other === status).length} ${status}`).join(', ');
 export function renderReport(report: ReviewReport): string {
 	const finding = (f: ReviewReport['findings'][number]) => `- **${f.status}${blocks(f) ? ' / blocker' : ''} / ${f.priority}** ${inline(f.title)} — \`${inline(f.file)}:${f.line}\` (${f.side}, \`${f.head}\`). ${inline(f.verification ?? f.evidence)}${f.fixedAt ? ` Fixed at \`${f.fixedAt}\`.` : ''}`;
+	// Runs recorded before bare labels and Iteris's own task-file lines were left out of the requirements still carry them.
+	const requirements = report.requirements.filter(item => !notRequirement(item.requirement));
 	const shown = report.findings.filter(f => f.status !== 'rejected'), fixed = shown.filter(f => f.status === 'fixed'), open = shown.filter(f => f.status !== 'fixed');
 	return [
 		'## Iteris review', '', `**${report.outcome.toUpperCase()}** — ${inline(report.reason)}`,
@@ -37,10 +40,11 @@ export function renderReport(report: ReviewReport): string {
 		`Reviewer: ${inline(report.selection.harness)} / ${inline(report.selection.model ?? 'default')} / ${inline(report.selection.effort ?? 'default')}.`, '',
 		// What a person must act on stays visible; one line per ticket requirement, command and settled finding is folded.
 		// Evidence only a person can gather is listed once, in the pull request's completion section.
-		...(open.length ? ['### Open findings', '', ...open.map(finding), ''] : []),
+		// An open finding shows as one line; its evidence, often a long paragraph, is folded beneath the list.
+		...(open.length ? ['### Open findings', '', ...open.map(f => `- **${f.status}${blocks(f) ? ' / blocker' : ''} / ${f.priority}** ${inline(f.title)} — \`${inline(f.file)}:${f.line}\``), '', '<details>', `<summary>Evidence for the open finding${open.length === 1 ? '' : 's'}</summary>`, '', ...open.map(finding), '', '</details>', ''] : []),
 		...(report.gaps.length ? ['### Unverified areas', '', ...report.gaps.map(gap => `- ${inline(gap)}`), ''] : []),
-		'<details>', `<summary>Acceptance: ${tally(report.requirements.map(item => item.status)) || 'not verified'}</summary>`, '', ...report.requirements.map(item => `- **${item.status}** ${inline(item.requirement)} — ${inline(item.evidence)}`),
-		...(report.requirements.length ? [] : ['- Not verified.']), '', '</details>', '',
+		'<details>', `<summary>Acceptance: ${tally(requirements.map(item => item.status)) || 'not verified'}</summary>`, '', ...requirements.map(item => `- **${item.status}** ${inline(item.requirement)} — ${inline(item.evidence)}`),
+		...(requirements.length ? [] : ['- Not verified.']), '', '</details>', '',
 		'<details>', `<summary>Checks: ${tally(report.checks.map(check => check.unavailable ? 'not run' : checkOk(check) ? 'passed' : 'failed')) || 'none run'}</summary>`, '',
 		...report.checks.map(check => `- \`${inline(check.command)}\`: ${check.environment && check.exitCode === null ? `not run, ${inline(check.environment)}` : check.environment ? `exit ${check.exitCode}, attributed to this host's environment and not to the change: ${inline(check.environment)}` : check.unavailable ? 'not run, tool unavailable on this host' : check.error ? inline(check.error) : `exit ${check.exitCode}`} (${check.durationMs} ms), commit \`${check.head}\`.`),
 		...(report.checks.length ? [] : ['- No executable checks run; see outcome and repository configuration.']), '', '</details>',

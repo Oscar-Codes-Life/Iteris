@@ -278,6 +278,8 @@ const HOST_GATES: Record<string, string> = { 'local-checks': 'Local checks pass 
  */
 export function renderPrCompletion(run: TaskRun): string {
     const item = (text: string) => text.replace(/[\r\n]+/g, ' ').replace(/^(?:[-*>]\s*)+/, '').replace(/[<>]/g, '').trim();
+    // A follow-up reads "requirement — the reviewer's evidence"; the evidence is in the review, the requirement is what to check.
+    const brief = (text: string) => { const head = text.split(' — ')[0]!; return head.length > 240 ? `${head.slice(0, 237)}…` : head; };
     // Runs recorded before such lines were left out of the requirements still carry them.
     const manualIds = new Set(manualFollowUps(run).map(requirement => requirement.id)), manual = manualFollowUps(run).filter(requirement => !notRequirement(requirement.text));
     const gates = run.requirements.filter(requirement => requirement.id in HOST_GATES);
@@ -292,7 +294,7 @@ export function renderPrCompletion(run: TaskRun): string {
     return [
         headline,
         ...(outstanding.length ? ['', `Not yet verified on commit \`${commit}\`: ${outstanding.join('; ')}.`] : []),
-        ...(manual.length ? ['', '**Please verify by hand** (Iteris cannot observe these, so they do not hold the task):', '', ...manual.map(requirement => `- ${item(requirement.text).slice(0, 600)}`)] : []),
+        ...(manual.length ? ['', '**Please verify by hand** (Iteris cannot observe these, so they do not hold the task):', '', ...manual.map(requirement => `- ${brief(item(requirement.text))}`)] : []),
         ...(run.dependencies.length ? ['', '**Waiting on:**', '', ...run.dependencies.map(dependency => `- ${item(dependency.description).slice(0, 500)} Next: ${item(dependency.nextAction).slice(0, 300)}`)] : []),
         ...(others.length ? ['', '<details>', `<summary>Ticket requirements reviewed (${others.length})</summary>`, '', ...others.map(requirement => `- ${item(requirement.text)}${pending.includes(requirement) && run.state !== 'complete' ? ' _(not yet verified)_' : ''}`), '', '</details>'] : []),
     ].join('\n');

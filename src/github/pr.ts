@@ -111,6 +111,8 @@ export const PR_BODY_LIMIT = 65_000;
 const TRUNCATED = "\n\n[Truncated to fit GitHub's size limit; the complete report remains in the local Iteris run.]";
 /** Shrinks the generated sections, keeping their markers so later updates still replace them in place. */
 export function fitPrBody(body: string, limit = PR_BODY_LIMIT): string {
+	// A review quotes commands and task files by absolute path; the account name on the machine that ran it is nobody's business.
+	body = body.replace(/(?<![\w.-])\/(?:Users|home)\/[^\s\/'"`)<>]+/g, '~');
 	for (const [start, end] of [[REVIEW_START, REVIEW_END], [LIFECYCLE_START, LIFECYCLE_END]] as const) {
 		if (body.length <= limit) return body;
 		const from = body.indexOf(start), to = body.indexOf(end, from);
@@ -128,11 +130,12 @@ export async function updatePrLifecycle(config: IterisConfig, number: number, re
 	if (body !== data.body) await octokit.pulls.update({owner,repo,pull_number:number,body});
 }
 
-/** The stand-in a draft carries until its review passes, and the checklist snapshot older versions left above the review. */
+/** The stand-in a draft carries until its review passes. */
 export const PENDING_DESCRIPTION = '_Iteris is still verifying this change.';
 export function hasPlaceholderDescription(body: string): boolean {
 	const review = body.indexOf(REVIEW_START);
-	return review >= 0 && (body.includes(PENDING_DESCRIPTION) || /^## Completion requirements\s*$/m.test(body.slice(0, review)));
+	// The second and third are the stand-ins of earlier versions.
+	return review >= 0 && (body.includes(PENDING_DESCRIPTION) || /^## Completion requirements\s*$|^- See the commits in this pull request\.\s*$/m.test(body.slice(0, review)));
 }
 function foldSection(body: string, start: string, end: string, fold: (inner: string) => string | undefined): string {
 	const from = body.indexOf(start), to = body.indexOf(end, from);
@@ -145,7 +148,37 @@ function foldSection(body: string, start: string, end: string, fold: (inner: str
  * long lists older versions published are folded where they stand and the new description is put above them.
  */
 export function healPublishedBody(body: string, description: string): string {
-	let healed = replaceDescriptionSection(body, description);
+	return tidyPublishedBody(replaceDescriptionSection(body, description));
+}
+const VERDICT = /^\*\*(?:PASSED|BLOCKED|INCOMPLETE)\*\* — /;
+const VERDICT_LIMIT = 400;
+/** Idempotent, and needs no model: folds what older versions published at full length and drops harness noise above the description. */
+export function tidyPublishedBody(body: string): string {
+	let healed = body;
+	const described = healed.indexOf(DESCRIPTION_START);
+	// Lines a harness printed about its own output, which older versions published at the top of the body.
+	if (described > 0) {
+		const above = healed.slice(0, described).split('\n').filter(line => !/^(?:Warning: truncated output \(original token count: \d+\)|Total output lines: \d+)\s*$/.test(line)).join('\n').trim();
+		healed = `${above ? `${above}\n\n` : ''}${healed.slice(described)}`;
+	}
+	// An incomplete review's verdict could run to a page; its first sentence stays visible, the rest joins the folded details.
+	const from = healed.indexOf(REVIEW_START), to = healed.indexOf(REVIEW_END, from);
+	if (from >= 0 && to > from) {
+		const lines = healed.slice(from, to).split('\n'), index = lines.findIndex(line => VERDICT.test(line) && line.length > VERDICT_LIMIT);
+		if (index >= 0) {
+			const full = lines[index]!, cut = full.slice(0, VERDICT_LIMIT - 100), sentence = cut.lastIndexOf('. ');
+			lines[index] = `${(sentence > 80 ? cut.slice(0, sentence + 1) : `${cut}…`)} _Full verdict in the review details._`;
+			const folded = lines.findIndex(line => line === '<summary>Review details</summary>');
+			// Quoted, so that a second pass does not take the full text for a verdict line again.
+			if (folded >= 0) lines.splice(folded + 1, 0, '', 'Full verdict:', '', `> ${full}`);
+			else {
+				// Ahead of the first detail heading, so the header lines under the verdict stay where they are.
+				const heading = lines.findIndex((line, at) => at > index && line.startsWith('### '));
+				lines.splice(heading >= 0 ? heading : lines.length, 0, '### Full verdict', '', `> ${full}`, '');
+			}
+			healed = healed.slice(0, from) + lines.join('\n') + healed.slice(to);
+		}
+	}
 	healed = foldSection(healed, REVIEW_START, REVIEW_END, inner => {
 		const detail = inner.search(/^### /m);
 		return detail < 0 ? undefined : `${inner.slice(0, detail).trim()}\n\n<details>\n<summary>Review details</summary>\n\n${inner.slice(detail).trim()}\n\n</details>`;
@@ -159,11 +192,11 @@ export function healPublishedBody(body: string, description: string): string {
 	return fitPrBody(healed);
 }
 export type PublishedPr = {number: number; url: string; title: string; body: string; state: string};
-/** Every pull request in the repository, open or not, that still carries a placeholder description from Iteris. */
-export async function listPlaceholderPrs(config: IterisConfig, octokit: Octokit = createOctokit()): Promise<PublishedPr[]> {
+/** Every pull request in the repository, open or not, whose body Iteris wrote. */
+export async function listIterisPrs(config: IterisConfig, octokit: Octokit = createOctokit()): Promise<PublishedPr[]> {
 	const [owner, repo] = config.repo.split('/') as [string, string];
 	const prs = await octokit.paginate(octokit.pulls.list, {owner, repo, state: 'all', per_page: 100});
-	return prs.filter(pr => hasPlaceholderDescription(pr.body ?? '')).map(pr => ({number: pr.number, url: pr.html_url, title: pr.title, body: pr.body ?? '', state: pr.merged_at ? 'merged' : pr.state}));
+	return prs.filter(pr => (pr.body ?? '').includes(REVIEW_START)).map(pr => ({number: pr.number, url: pr.html_url, title: pr.title, body: pr.body ?? '', state: pr.merged_at ? 'merged' : pr.state}));
 }
 /** Commit subjects and the diff as GitHub has them, which also works for a merged pull request whose branch is gone. */
 export async function prChanges(config: IterisConfig, number: number, octokit: Octokit = createOctokit()): Promise<{commits: string; diff: string}> {

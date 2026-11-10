@@ -13,7 +13,7 @@ import {temporary, reviewRepository, environment, executable, fakeAgent, config,
 import {localPlannedChecks,localEvidenceCommand} from '../dist/lifecycle/planning.js';
 import {runRecoveryCheck} from '../dist/lifecycle/local-check.js';
 import {listRuns} from '../dist/lifecycle/state.js';
-import {fitPrBody, PR_BODY_LIMIT, reviewSection, replaceReviewSection, replaceLifecycleSection, replaceDescriptionSection, descriptionSection, healPublishedBody, hasPlaceholderDescription, listPlaceholderPrs, prChanges, REVIEW_START, REVIEW_END, LIFECYCLE_START, LIFECYCLE_END} from '../dist/github/pr.js';
+import {fitPrBody, PR_BODY_LIMIT, reviewSection, replaceReviewSection, replaceLifecycleSection, replaceDescriptionSection, descriptionSection, healPublishedBody, tidyPublishedBody, hasPlaceholderDescription, listIterisPrs, prChanges, REVIEW_START, REVIEW_END, LIFECYCLE_START, LIFECYCLE_END} from '../dist/github/pr.js';
 const ticket={number:1,title:'Feature',body:'Implement feature. Handle retries without duplicate writes.',slug:'feature',labels:[],htmlUrl:'https://example.com/1'};
 async function fixture(t, {harness='codex', content='changed\n', scenario, mode='normal'}={}) {
  const repo=await reviewRepository(t),{cwd,git}=repo;
@@ -586,9 +586,24 @@ test('a published pull request without a saved run is healed in place: new descr
  assert.doesNotMatch(healed,/## Completion requirements|## Changes\n- a\.ts|creating-pr/);
  assert.match(healed,/Implements custom task: Feature\n\n<!-- iteris:lifecycle:start -->\n## Task completion\n<details>\n<summary>Iteris's record when it last updated this pull request: complete<\/summary>\n\nState: \*\*complete\*\*/);
  assert.equal(hasPlaceholderDescription(healed),false);assert.equal(healPublishedBody(healed,'## Summary\n- Real description.'),healed);
- assert.equal(hasPlaceholderDescription(`## Summary\n- Written by a model.\n\n${reviewSection(review)}`),false);assert.equal(hasPlaceholderDescription('## Completion requirements\nA person wrote this.'),false);
+ assert.equal(hasPlaceholderDescription(`## Summary\n- Written by a model.\n\n${reviewSection(review)}`),false);assert.equal(hasPlaceholderDescription(`## Summary\n- Feature\n\n## Changes\n- See the commits in this pull request.\n\n${reviewSection(review)}`),true);assert.equal(hasPlaceholderDescription('## Completion requirements\nA person wrote this.'),false);
  const pulls={list(){},listCommits(){},listFiles(){},get:async()=>{throw new Error('406 diff too large');}};
  const octokit={pulls,paginate:async method=>method===pulls.list?[{number:1,html_url:'u1',title:'Healed',body:healed,state:'closed',merged_at:'2026-10-01'},{number:2,html_url:'u2',title:'Stale',body,state:'closed',merged_at:'2026-10-01'},{number:3,html_url:'u3',title:'Empty',body:null,state:'open',merged_at:null}]:method===pulls.listCommits?[{commit:{message:'First change\n\ndetails'}},{commit:{message:'Second change'}}]:[{filename:'a.ts',status:'modified',patch:'+after'}]};
- assert.deepEqual((await listPlaceholderPrs(config('codex'),octokit)).map(pr=>[pr.number,pr.state]),[[2,'merged']]);
+ assert.deepEqual((await listIterisPrs(config('codex'),octokit)).map(pr=>[pr.number,pr.state]),[[1,'merged'],[2,'merged']]);
  assert.deepEqual(await prChanges(config('codex'),2,octokit),{commits:'First change\nSecond change',diff:'--- a.ts (modified)\n+after'});
+});
+test('tidying an older pull request shortens a page-long verdict and drops harness noise, once',()=>{
+ const verdict=`**INCOMPLETE** — correctness review incomplete: Physical verification is missing. ${'Install a build on the device and repeat the cycles. '.repeat(20)}`.trim();
+ const body=`Warning: truncated output (original token count: 5723)\nTotal output lines: 140\n\n${descriptionSection('## Summary\n- Real.')}\n\n${reviewSection(`## Iteris review\n\n${verdict}\nReviewed commit: \`abc\`.\n\n### Acceptance\n\n- **covered** One`)}\n\nCloses #1`;
+ const tidied=tidyPublishedBody(body);
+ assert.match(tidied,/^<!-- iteris:description:start -->\n## Summary\n- Real\.\n<!-- iteris:description:end -->/);
+ assert.match(tidied,/\n\*\*INCOMPLETE\*\* — correctness review incomplete: Physical verification is missing\.[^\n]{0,260} _Full verdict in the review details\._\nReviewed commit: `abc`\.\n\n<details>/);
+ assert.match(tidied,/<details>\n<summary>Review details<\/summary>\n\n### Full verdict\n\n> \*\*INCOMPLETE\*\* — [^\n]{900,}\n\n### Acceptance/);
+ assert.equal(tidyPublishedBody(tidied),tidied);
+ const earlier=body.replace(/### Acceptance[\s\S]*?(?=\n<!-- iteris:review:end)/,'<details>\n<summary>Review details</summary>\n\n### Acceptance\n\n- **covered** One\n\n</details>'),again=tidyPublishedBody(earlier);
+ assert.match(again,/<summary>Review details<\/summary>\n\nFull verdict:\n\n> \*\*INCOMPLETE\*\*/);assert.equal(tidyPublishedBody(again),again);
+ const person=`A note from a person.\n\n${descriptionSection('## Summary\n- Real.')}\n\n${reviewSection('## Iteris review\n\n**PASSED** — Fine.')}`;assert.equal(tidyPublishedBody(person),person);
+});
+test('a published body never carries the home directory of the machine that wrote it',()=>{
+ assert.equal(fitPrBody("- `cat '/Users/someone/project/.tasks/task5.md'`: exit 0\n- Task file: /home/ci-runner/work/task.md\n- See https://example.com/Users/guide and docs/Users/readme.md"),"- `cat '~/project/.tasks/task5.md'`: exit 0\n- Task file: ~/work/task.md\n- See https://example.com/Users/guide and docs/Users/readme.md");
 });

@@ -13,7 +13,7 @@ import { resolveTaskConfig } from './config.js';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { generatePrDescription } from '../agent/pr-description.js';
-import { updatePrSections, listPlaceholderPrs, prChanges, updatePrBody, healPublishedBody, REVIEW_START, REVIEW_END } from '../github/pr.js';
+import { updatePrSections, listIterisPrs, hasPlaceholderDescription, prChanges, updatePrBody, healPublishedBody, tidyPublishedBody, REVIEW_START, REVIEW_END } from '../github/pr.js';
 import { loadReportText } from '../review/report.js';
 export async function lifecycleCommand(command: string, args: string[], config: IterisConfig, cwd: string): Promise<boolean> {
     if (!['status', 'resume', 'doctor', 'evidence', 'cancel', 'describe'].includes(command))
@@ -28,9 +28,9 @@ export async function lifecycleCommand(command: string, args: string[], config: 
         return true;
     }
     if (command === 'describe') {
-        const dryRun = args.includes('--dry-run'), all = args.includes('--all'), key = args.find(arg => !arg.startsWith('--'));
+        const dryRun = args.includes('--dry-run'), all = args.includes('--all'), rewrite = args.includes('--rewrite'), key = args.find(arg => !arg.startsWith('--'));
         if (key && all)
-            throw new Error('Usage: iteris describe [task-key | --all] [--dry-run]');
+            throw new Error('Usage: iteris describe [task-key | --all] [--rewrite] [--dry-run]');
         const published = (key ? [await readRun(cwd, key)] : await listRuns(cwd, config.repo)).filter((run): run is TaskRun => !!run?.publication && run.state !== 'cancelled');
         if (!published.length && !all)
             console.log(key ? 'That task has no published pull request.' : 'No published task runs.');
@@ -52,6 +52,13 @@ export async function lifecycleCommand(command: string, args: string[], config: 
                     continue;
                 }
                 const snapshot = resolveTaskConfig(config, run.ticket);
+                if (publication.described === publication.head && !rewrite) {
+                    // The description already covers this commit; the other two parts cost nothing to render again.
+                    if (!dryRun)
+                        await updatePrSections(snapshot, publication.number, { review: review.text, lifecycle: renderPrCompletion(run) });
+                    console.log(`${label}\n  ${dryRun ? 'Description is current; the review and completion parts would be refreshed.' : 'Description is current; review and completion parts refreshed.'}`);
+                    continue;
+                }
                 const described = await generatePrDescription({ ticket: run.ticket, config: snapshot, cwd, review: review.text, baseCommit: publication.base, branch: publication.head });
                 if (!described.success || !described.text) {
                     console.log(`${label}\n  Failed: ${described.error ?? 'the harness produced no description'}`);
@@ -69,12 +76,23 @@ export async function lifecycleCommand(command: string, args: string[], config: 
             if (all) {
                 // Pull requests from earlier queues, merged or closed since, whose runs are no longer on this machine.
                 const local = new Set((await listRuns(cwd, config.repo)).map(run => run.publication?.number));
-                const remote = (await listPlaceholderPrs(config)).filter(pr => !local.has(pr.number));
-                if (!remote.length)
-                    console.log('No other pull request in this repository carries a placeholder description from Iteris.');
+                const remote = (await listIterisPrs(config)).filter(pr => !local.has(pr.number));
+                let touched = 0;
                 for (const pr of remote) {
                     const label = `${pr.url} (${pr.state}) — ${pr.title}`;
                     try {
+                        if (!hasPlaceholderDescription(pr.body)) {
+                            // Already described: only fold what an earlier version left at full length.
+                            const tidied = tidyPublishedBody(pr.body);
+                            if (tidied === pr.body)
+                                continue;
+                            touched++;
+                            if (!dryRun)
+                                await updatePrBody(config, pr.number, tidied);
+                            console.log(`${label}\n  ${dryRun ? 'Would be tidied' : 'Tidied'}: long lists folded, description kept.`);
+                            continue;
+                        }
+                        touched++;
                         const reviewStart = pr.body.indexOf(REVIEW_START), reviewEnd = pr.body.indexOf(REVIEW_END, reviewStart);
                         // The ticket itself is gone; the checklist the placeholder kept is its text, line by line.
                         const requirements = [...pr.body.slice(0, reviewStart).matchAll(/^- \[[ x]\] (.+?) \((?:acceptance|plan)-[0-9a-f]+; [^)]*\)$/gm)].map(match => match[1]!);
@@ -95,6 +113,8 @@ export async function lifecycleCommand(command: string, args: string[], config: 
                         console.log(`${label}\n  Failed: ${String(error)}`);
                     }
                 }
+                if (!touched)
+                    console.log('No other pull request written by Iteris in this repository needs attention.');
             }
         }
         finally {

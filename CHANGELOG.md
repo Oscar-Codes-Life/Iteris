@@ -13,13 +13,15 @@ User-visible changes are recorded here. Iteris uses [Semantic Versioning](https:
 
 ### Added
 
-- `iteris describe [key] [--dry-run]` rewrites the description, review and completion parts of already published pull requests from the final diff and the saved run. `iteris describe --all` also heals pull requests from earlier queues, open, merged or closed, that still carry a placeholder description: it writes the description from the diff GitHub holds, keeps text a person added above it and folds the long lists.
+- `iteris describe [key] [--dry-run]` rewrites the description, review and completion parts of already published pull requests from the final diff and the saved run. A description that already covers the published commit is kept, so a rerun only refreshes the other parts and needs no harness call; `--rewrite` forces a new one. `iteris describe --all` also heals pull requests from earlier queues, open, merged or closed, that still carry a placeholder description: it writes the description from the diff GitHub holds, keeps text a person added above it and folds the long lists.
 
 ### Fixed
 
 - **Pull requests were unreadable.** A PR opened as a draft before its review passed kept a placeholder forever: the ticket title as summary, a list of every changed file and a snapshot of the requirement checklist with every box unticked, which stayed after the task was verified. The description is now written from the final diff once the review passes, and nothing stale is left behind.
 - The PR's completion section was the internal status file: requirement identifiers, the source URL and one evidence line per requirement per attempt, enough to hit GitHub's size limit and truncate the review to nothing. It now states where the task stands, what is not yet verified and what a person must verify by hand, with the ticket requirements folded.
 - The review in the PR folds its per-requirement, per-command and fixed-finding lists, keeping the verdict, open findings and unverified areas visible.
+- Open findings in the PR show as one line each with their evidence folded, and items to verify by hand show the requirement without the reviewer's paragraph of evidence.
+- Everything Iteris publishes shortens home-directory paths to `~`; reviews quoted commands and task files with the account name of the machine that ran them.
 - Bare labels (`Acceptance criteria:`) and the task-file lines Iteris appends to custom tasks were treated as ticket requirements, which put a local path in the PR and produced manual-verification items about nothing.
 - Every `git` command in an isolated check failed with exit 128 because the sandbox denied `/dev/null`. Planned checks such as `git diff --check` could never pass, so no review could.
 - Reviewers reported the host's own gates (publication, required CI, local checks) as unverified before a pull request existed, and each such entry made the review incomplete. The host now ignores reviewer opinions of requirements it decides itself.
