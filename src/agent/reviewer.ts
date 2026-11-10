@@ -17,6 +17,7 @@ import {executeCommand,CapabilityUnavailable} from '../lifecycle/environment.js'
 import {runRecoveryCheck} from '../lifecycle/local-check.js';
 import {commitSourceChanges} from '../lifecycle/commit.js';
 import {localEvidenceCommand} from '../lifecycle/planning.js';
+import {evidenceNote, copyEvidence, archiveEvidence} from '../lifecycle/evidence.js';
 
 type ReviewOptions = {
 	ticket: Ticket; config: IterisConfig; cwd: string; folder: string; plan?: string; branch?: string;
@@ -165,6 +166,8 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 			assertSnapshot(context, config, cwd);
 			beginPhase('Investigation');
 			const snapshot = await createSnapshot(cwd, context.stamp.head, deadline, signal, context.diff);
+			await copyEvidence(cwd, snapshot.cwd, context.stamp.branch);
+			await archiveEvidence(cwd, folder, context.stamp.branch);
 			let passes: ReviewPass[];
 			let candidates: Finding[] = [];
 			try {
@@ -286,7 +289,7 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 				log(`Recovery ${report.repairs}: ${report.reason}`);
 				beginPhase('Recovery');
 				const repeated=(repairAttempts.get(failureKey)??0)>1;
-				const prompt = recoveryPrompt(context, report.gaps, report.requirements, report.checks, previousBlockers, candidates,repeated?'This invariant remains unresolved after recovery. Replan from the recorded failure: trace why the prior strategy failed and choose a different local reproduction or setup approach. Keep the same acceptance obligation and budget.':'');
+				const prompt = recoveryPrompt(context, report.gaps, report.requirements, report.checks, previousBlockers, candidates,repeated?'This invariant remains unresolved after recovery. Replan from the recorded failure: trace why the prior strategy failed and choose a different local reproduction or setup approach. Keep the same acceptance obligation and budget.':'', evidenceNote(cwd, context.stamp.branch));
 				if(repeated)await saveJson(path.join(roundFolder,'replanning.json'),{signature:failureKey,head:context.stamp.head,attempt:repairAttempts.get(failureKey),progressMetric:'Available local commands execute successfully; independent coverage resolves the same invariant',reason:report.reason});
 				const recovered = await runHarness({config, phase: 'repair', prompt: redact(prompt), cwd, timeoutMs: remaining(), signal, onProcess, onLine: line => log(`[recovery] ${line}`)});
 				await saveJson(path.join(roundFolder, 'recovery-process.json'), recovered);
@@ -334,7 +337,7 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 			// A missing requirement usually cites a finding that does not block on its own; the repair needs its full detail.
 			const repairFindings = missing.length ? report.findings.filter(finding => finding.status === 'confirmed' && !finding.duplicateOf && (finding.head === context.stamp.head || blocks(finding))) : previousBlockers;
 			if(repeated)await saveJson(path.join(roundFolder,'replanning.json'),{signature:failureKey,head:context.stamp.head,attempt:repairAttempts.get(failureKey),progressMetric:'The same behavioral check and independent invariant become satisfied',reason:report.reason});
-			const repaired = await runHarness({config, phase: 'repair', prompt: redact(repairPrompt(context, repairFindings, missing, failedChecks,repeated?'The same invariant failed after a prior repair. Replan before editing: trace the root cause and why the prior patch failed, choose a different strategy, then demonstrate measurable progress with the failing behavioral check. Do not repeat the same patch or change the acceptance obligation.':'')), cwd, timeoutMs: remaining(), signal, onProcess, onLine: line => log(`[repair] ${line}`)});
+			const repaired = await runHarness({config, phase: 'repair', prompt: redact(repairPrompt(context, repairFindings, missing, failedChecks,repeated?'The same invariant failed after a prior repair. Replan before editing: trace the root cause and why the prior patch failed, choose a different strategy, then demonstrate measurable progress with the failing behavioral check. Do not repeat the same patch or change the acceptance obligation.':'', evidenceNote(cwd, context.stamp.branch))), cwd, timeoutMs: remaining(), signal, onProcess, onLine: line => log(`[repair] ${line}`)});
 			await saveJson(path.join(roundFolder, 'repair.json'), repaired);
 			if (!repaired.success || !repaired.done) throw new Error(repaired.error ?? 'Repair did not report completion');
 			commitSourceChanges(cwd,context.stamp.branch,'Repair verified project invariant');

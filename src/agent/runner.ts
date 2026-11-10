@@ -37,6 +37,7 @@ import {parseOrRecoverReport} from './schema-recovery.js';
 import {importLegacyArtifacts} from '../lifecycle/migration.js';
 import {cancellationScope} from '../lifecycle/cancellation.js';
 import {githubTaskRepository} from '../lifecycle/adapters.js';
+import {evidenceNote} from '../lifecycle/evidence.js';
 
 export type RunnerCallbacks = {
 	onStatusChange: (ticketNumber: number, state: TicketState) => void;
@@ -265,7 +266,7 @@ async function runSingleTicket(ticket: Ticket, config: IterisConfig, cwd: string
 		const pack=verificationPack(run,config);
 		await saveJson(path.join(folder,'verification-pack.json'),JSON.parse(pack));await saveRun(cwd,run);
 		await writeFile(path.join(folder, 'execution.json'), JSON.stringify(state.selection, null, 2) + '\n');
-		const prompt = `${expandPrompt(ticket, config, await readProgress(cwd), attemptBriefing(run))}\n\nHost-owned task verification pack:\n${pack}\nExternal acceptance stages are verified by the host after publication. Implement all required local behavior. Do not deploy or update providers from the harness. Policy and context files named in the pack (such as REVIEW.md) are host inputs that may not exist: never create or edit them, and keep verification notes out of the repository unless the ticket asks for a document. The host prepares the branch and commits your source changes. Leave changes ready for independent review and print <task>done</task>; do not require permission to write .git or change host-owned .iteris files.`;
+		const prompt = `${expandPrompt(ticket, config, await readProgress(cwd), attemptBriefing(run))}\n\nHost-owned task verification pack:\n${pack}\nExternal acceptance stages are verified by the host after publication. Implement all required local behavior. Do not deploy or update providers from the harness. Policy and context files named in the pack (such as REVIEW.md) are host inputs that may not exist: never create or edit them. ${evidenceNote(cwd, state.branch)} The host prepares the branch and commits your source changes. Leave changes ready for independent review and print <task>done</task>; do not require permission to write .git or change host-owned .iteris files.`;
 		await writePrompt(folder, prompt);
 		let plan = checkpoint.plan ?? run.plan ?? '';
 		if (!checkpoint.implemented) {

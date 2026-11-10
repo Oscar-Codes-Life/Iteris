@@ -135,6 +135,9 @@ test('a blocked review keeps its draft and a fresh repair instance fixes the rev
 	assert.equal(run.state, 'complete', run.reason); assert.notEqual(run.publication.head, blockedHead); assert.equal(api.prs.size, 1);
 	const repair = (await calls(cwd)).filter(call => call.prompt.startsWith('ITERIS_FAILURE_RECOVER'));
 	assert.equal(repair.length, 1); assert.match(repair[0].prompt, /Broken behavior/); assert.match(repair[0].prompt, /Previous attempts on this task/);
+	assert.match(repair[0].prompt, /Evidence stays out of the repository\./);
+	const implementation = (await calls(cwd)).find(call => call.prompt.startsWith('You are an autonomous'));
+	assert.match(implementation.prompt, /Evidence stays out of the repository\. Put reproduction output[^\n]* in `\.iteris\/evidence\/[\w.-]+\/`/); assert.doesNotMatch(implementation.prompt, /record the exact command|record behavioral commands and output\./);
 });
 
 test('partial work left by a crashed instance becomes a checkpoint for the next instance', async t => {

@@ -13,6 +13,8 @@ import {temporary, reviewRepository, environment, executable, fakeAgent, config,
 import {localPlannedChecks,localEvidenceCommand} from '../dist/lifecycle/planning.js';
 import {runRecoveryCheck} from '../dist/lifecycle/local-check.js';
 import {listRuns} from '../dist/lifecycle/state.js';
+import {evidenceNote, evidenceDirectory, copyEvidence} from '../dist/lifecycle/evidence.js';
+import {commitSourceChanges} from '../dist/lifecycle/commit.js';
 import {fitPrBody, PR_BODY_LIMIT, reviewSection, replaceReviewSection, replaceLifecycleSection, replaceDescriptionSection, descriptionSection, healPublishedBody, tidyPublishedBody, hasPlaceholderDescription, listIterisPrs, prChanges, REVIEW_START, REVIEW_END, LIFECYCLE_START, LIFECYCLE_END} from '../dist/github/pr.js';
 const ticket={number:1,title:'Feature',body:'Implement feature. Handle retries without duplicate writes.',slug:'feature',labels:[],htmlUrl:'https://example.com/1'};
 async function fixture(t, {harness='codex', content='changed\n', scenario, mode='normal'}={}) {
@@ -75,6 +77,8 @@ test('separate repair must be committed, independently re-reviewed and verified 
  assert.notEqual(result.report.stamp.head,old);assert.equal(result.report.findings[0].status,'fixed');assert.equal(result.report.findings[0].fixedAt,result.report.stamp.head);
  const calls=await f.calls();assert.equal(calls.length,7);assert.equal(calls.filter(c=>c.prompt.startsWith('ITERIS_REPAIR')).length,1);
  assert.equal(result.report.checks[0].head,result.report.stamp.head);
+ assert.match(calls.find(c=>c.prompt.startsWith('ITERIS_REPAIR')).prompt,/Evidence stays out of the repository\. Put reproduction output[^\n]* in `\.iteris\/evidence\/1-feature\/`/);
+ for(const call of calls.filter(c=>!c.prompt.startsWith('ITERIS_REPAIR')))assert.match(call.prompt,/is in \.iteris\/evidence\/ in this snapshot when any exists[\s\S]*Never ask for evidence to be committed\.\n[^\n]*does not belong in the pull request/);
 });
 test('a disappearing blocker needs explicit resolution evidence',async t=>{
  const f=await fixture(t,{content:'broken\n',scenario:'missing-resolution'});f.cfg.review.maxRepairCycles=2;
@@ -606,4 +610,18 @@ test('tidying an older pull request shortens a page-long verdict and drops harne
 });
 test('a published body never carries the home directory of the machine that wrote it',()=>{
  assert.equal(fitPrBody("- `cat '/Users/someone/project/.tasks/task5.md'`: exit 0\n- Task file: /home/ci-runner/work/task.md\n- See https://example.com/Users/guide and docs/Users/readme.md"),"- `cat '~/project/.tasks/task5.md'`: exit 0\n- Task file: ~/work/task.md\n- See https://example.com/Users/guide and docs/Users/readme.md");
+});
+test('task evidence lives in an ignored folder: never staged or committed, shown to reviewers and archived with the task',async t=>{
+ const f=await fixture(t);assert.equal(evidenceDirectory('iteris/1-feature'),'.iteris/evidence/1-feature');assert.equal(evidenceDirectory('feature/a b'),'.iteris/evidence/feature-a-b');
+ const note=evidenceNote(f.cwd,'iteris/1-feature'),directory=path.join(f.cwd,'.iteris/evidence/1-feature');
+ assert.match(note,/even where it has a folder or convention for them/);assert.match(note,/delete them from the repository/);
+ await writeFile(path.join(directory,'reproduction.txt'),'before: locked\nafter: editable\n');await writeFile(path.join(f.cwd,'source.txt'),'real change\n');
+ assert.equal(f.git('status','--porcelain','--untracked-files=all').trim(),'?? source.txt');
+ f.git('add','-A');assert.equal(f.git('diff','--cached','--name-only').trim(),'source.txt');f.git('reset','-q');
+ commitSourceChanges(f.cwd,'iteris/1-feature','Implement feature');assert.equal(f.git('show','--name-only','--format=','HEAD').trim(),'source.txt');
+ const snapshot=await createSnapshot(f.cwd,f.git('rev-parse','HEAD').trim(),Date.now()+30000);t.after(()=>snapshot.dispose());
+ await assert.rejects(readFile(path.join(snapshot.cwd,'.iteris/evidence/1-feature/reproduction.txt'),'utf8'));
+ await copyEvidence(f.cwd,snapshot.cwd,'iteris/1-feature');assert.match(await readFile(path.join(snapshot.cwd,'.iteris/evidence/1-feature/reproduction.txt'),'utf8'),/after: editable/);
+ const result=await runCodeReview(f.options);assert.equal(result.report.outcome,'passed',result.error);
+ assert.match(await readFile(path.join(f.options.folder,'evidence/reproduction.txt'),'utf8'),/after: editable/);
 });

@@ -29,7 +29,7 @@ export function extractRequirements(ticket: Ticket, config: IterisConfig): Requi
     return [...new Map(requirements.map(requirement => [requirement.id, requirement])).values()];
 }
 export function verificationPack(run: TaskRun, config: IterisConfig): string {
-    return JSON.stringify({ version: 1, requirements: run.requirements, invariants: config.verification.policyFiles, contextFiles: config.verification.contextFiles, fixtures: config.verification.fixtures, reproduction: 'Reproduce each acceptance invariant before repairing it; record behavioral commands and output.', capabilities: [...new Set(run.requirements.map(r => r.stage))], behavioralChecks: config.verification.checks.filter(c => c.behavioral), checks: config.verification.checks }, null, 2);
+    return JSON.stringify({ version: 1, requirements: run.requirements, invariants: config.verification.policyFiles, contextFiles: config.verification.contextFiles, fixtures: config.verification.fixtures, reproduction: 'Reproduce each acceptance invariant before repairing it; keep the behavioral commands and their output in the task evidence folder, never in the repository.', capabilities: [...new Set(run.requirements.map(r => r.stage))], behavioralChecks: config.verification.checks.filter(c => c.behavioral), checks: config.verification.checks }, null, 2);
 }
 export function applicableChecks(config: IterisConfig, files: string[]) {
     return config.verification.checks.filter(check => !check.paths.length || files.some(file => check.paths.some(pattern => globMatch(pattern, file))));

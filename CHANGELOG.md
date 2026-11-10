@@ -6,6 +6,7 @@ User-visible changes are recorded here. Iteris uses [Semantic Versioning](https:
 
 ### Changed
 
+- **Evidence no longer goes into the repository.** Instances were told to "record" how they verified their work without being told where, and reviewers only see the committed tree, so logs, transcripts, validation notes and plan documents were committed and filled pull requests. Each task now has an ignored folder, `.iteris/evidence/<task>/`, which the host never commits, shows to reviewers and archives with the task. A reviewer treats such a file added by the diff as a blocking finding.
 - **Evidence Iteris cannot obtain itself no longer holds a task by default.** A device session, a hosted service or an attachment the ticket did not supply is listed in the review and the PR as *needs manual verification*, and the task completes once local checks, independent review and required CI pass. Set `workflow.externalEvidence` to `required` to keep the earlier behavior of waiting for submitted evidence. Stages declared in `verification.stages` block in either mode.
 - Each attempt merges the current base into the task branch before work continues, with an instance resolving conflicts. A base that moves afterwards invalidates a published, reviewed commit only when it no longer merges cleanly or the repository requires an up-to-date branch.
 - Review phases are allowed a quarter of `timeout` instead of a fixed 15 minutes, unless `review.timeout` is set.
