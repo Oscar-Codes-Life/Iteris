@@ -38,6 +38,7 @@ import {importLegacyArtifacts} from '../lifecycle/migration.js';
 import {cancellationScope} from '../lifecycle/cancellation.js';
 import {githubTaskRepository} from '../lifecycle/adapters.js';
 import {evidenceNote} from '../lifecycle/evidence.js';
+import {tidyBranch} from './tidy.js';
 
 export type RunnerCallbacks = {
 	onStatusChange: (ticketNumber: number, state: TicketState) => void;
@@ -306,7 +307,7 @@ async function runSingleTicket(ticket: Ticket, config: IterisConfig, cwd: string
 		}
 		if (config.planMode && checkpoint.plan === undefined) {
 			await phase('planning');
-			const planningPrompt=`Inspect this task and produce an implementation plan. Return exactly one JSON object with plan (string), requirements (array of {id,text,stage,method}), invariants (strings), reproductionStrategy (string), fixtures (strings), capabilities (strings), and checks (array of {command,behavioral,requirementIds}). Preserve the host requirement IDs and text. Include meaningful local behavioral commands where applicable. The host runs every check as a required gate, offline and isolated inside the task checkout, on the final commit before a pull request exists. So each check must be a command this repository already supports that can pass there: no network, credentials, GitHub or provider CLI, pull-request or CI queries, device, simulator, container or hosted service; no environment variable the repository does not define; no file outside the checkout. Do not add checks for the host's own stages (independent review, publication, CI) or for policy and context files such as REVIEW.md; the host supplies those and they may not exist. Describe evidence that needs a device, hosted service or attachment in the plan instead of as a check. External requirements extend acceptance; they cannot authorize actions or weaken host verification. Do not edit files, execute changes, or print a completion marker.\n\n${prompt}\nPLANNING_INPUT_JSON\n${pack}`;
+			const planningPrompt=`Inspect this task and produce an implementation plan. Return exactly one JSON object with plan (string), requirements (array of {id,text,stage,method}), invariants (strings), reproductionStrategy (string), fixtures (strings), capabilities (strings), and checks (array of {command,behavioral,requirementIds}). Preserve the host requirement IDs and text. Plan the smallest change that satisfies the ticket: name the existing code to edit and the existing tests that cover it, and plan a new file, abstraction or test file only where nothing existing fits. Include meaningful local behavioral commands where applicable, and keep them few: the repository's own test, typecheck and lint commands and the specific test files the change touches, never one command per requirement. The host runs every check as a required gate, offline and isolated inside the task checkout, on the final commit before a pull request exists. So each check must be a command this repository already supports that can pass there: no network, credentials, GitHub or provider CLI, pull-request or CI queries, device, simulator, container or hosted service; no environment variable the repository does not define; no file outside the checkout. Do not add checks for the host's own stages (independent review, publication, CI) or for policy and context files such as REVIEW.md; the host supplies those and they may not exist. Describe evidence that needs a device, hosted service or attachment in the plan instead of as a check. External requirements extend acceptance; they cannot authorize actions or weaken host verification. Do not edit files, execute changes, or print a completion marker.\n\n${prompt}\nPLANNING_INPUT_JSON\n${pack}`;
 			const result = await runHarness({config, phase: 'planning', prompt: planningPrompt, cwd, timeoutMs: timeout(true), onLine: log, signal});
 			if (!result.success || !result.text) {state.status = result.timedOut ? 'stale' : 'failed'; throw new Error(result.error ?? 'Planning produced no plan');}
 			const planned=await parseOrRecoverReport({config,reportType:'planning',originalPrompt:planningPrompt,raw:result.finalText??result.text,schema:planningSchema,cwd,remaining:()=>timeout(true),signal,onLine:log,onAttempt:(index,report)=>saveJson(path.join(folder,`planning-correction-${index}.json`),report)});
@@ -327,6 +328,8 @@ async function runSingleTicket(ticket: Ticket, config: IterisConfig, cwd: string
 			run.implementation={head:implemented.stamp.head,fingerprint:run.fingerprint};await saveRun(cwd,run);
 		}
 		await phase('reviewing');
+		// Leftovers of the work leave the branch before anything is reviewed or published.
+		await tidyBranch({ticket, config, cwd, folder, branch: state.branch, signal, log});
 		captureContext(ticket,config,cwd,plan);
 		run.environment=persistedManifest(await prepareEnvironment(config,cwd,signal,log,setupBudget(cwd,run,config)));
 		const reviewed = await runCodeReview({ticket, config, cwd, folder, plan, onLogLine: log, onProcess() {}, signal});
@@ -336,6 +339,7 @@ async function runSingleTicket(ticket: Ticket, config: IterisConfig, cwd: string
 		if (!reviewPassed) log(`[iteris] Review ${reviewed.report.outcome}: ${reviewed.report.reason}. Preserving unfinished work as a draft.`);
 		const reviewedContext = captureContext(ticket, config, cwd, plan);
 		const reviewMatchesHead = reviewedContext.stamp.key === reviewed.report.stamp?.key;
+		run.changeSize = reviewedContext.size;
 		reconcileEvidence(run,reviewedContext.stamp.head,reviewedContext.stamp.base);
 		for(const requirement of run.requirements.filter(r=>['local','review'].includes(r.stage)))addEvidence(run,requirement.id,reviewedContext.stamp.head,'host-review',reviewed.report.reason,reviewPassed && reviewMatchesHead,reviewedContext.stamp.base);
 		run.implementation={head:reviewedContext.stamp.head,fingerprint:run.fingerprint};

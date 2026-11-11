@@ -18,6 +18,7 @@ import {runRecoveryCheck} from '../lifecycle/local-check.js';
 import {commitSourceChanges} from '../lifecycle/commit.js';
 import {localEvidenceCommand} from '../lifecycle/planning.js';
 import {evidenceNote, copyEvidence, archiveEvidence} from '../lifecycle/evidence.js';
+import {tidyBranch} from './tidy.js';
 
 type ReviewOptions = {
 	ticket: Ticket; config: IterisConfig; cwd: string; folder: string; plan?: string; branch?: string;
@@ -299,6 +300,7 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 					onAttempt: (index, correction) => saveJson(path.join(roundFolder, `recovery-schema-recovery-attempt-${index}.json`), correction)});
 				await saveJson(path.join(roundFolder, 'recovery.json'), recovery);
 				commitSourceChanges(cwd,context.stamp.branch,'Recover project verification');
+				await tidyBranch({ticket, config, cwd, folder, branch: context.stamp.branch, signal, log, timeoutMs: remaining()});
 				const next = captureContext(ticket, config, cwd, options.plan, options.branch);
 				if (next.stamp.base !== context.stamp.base) throw new Error('Base changed during recovery; restart review.');
 				// A model cannot declare a host capability missing; whatever it names is an external follow-up.
@@ -341,6 +343,7 @@ export async function runCodeReview(options: ReviewOptions): Promise<ReviewResul
 			await saveJson(path.join(roundFolder, 'repair.json'), repaired);
 			if (!repaired.success || !repaired.done) throw new Error(repaired.error ?? 'Repair did not report completion');
 			commitSourceChanges(cwd,context.stamp.branch,'Repair verified project invariant');
+			await tidyBranch({ticket, config, cwd, folder, branch: context.stamp.branch, signal, log, timeoutMs: remaining()});
 			const next = captureContext(ticket, config, cwd, options.plan, options.branch);
 			if (next.stamp.head === context.stamp.head) {report.reason += ' Repair produced no new commit.'; return finish();}
 			if (next.stamp.base !== context.stamp.base) throw new Error('Base changed during repair; restart review.');

@@ -192,6 +192,7 @@ test('the pull request completion section is a readable summary without identifi
  assert.match(view,/\*\*Please verify by hand\*\*[^\n]*\n\n- Saves survive a reload\n/);assert.doesNotMatch(view,/Supplied tests cover/);
  assert.match(view,/<summary>Ticket requirements reviewed \(1\)<\/summary>\n\n- Duration becomes editable\.\n/);
  assert.doesNotMatch(view,/- \[|acceptance-|host-review|Source:|observed|elapsed|Failed attempts|not yet verified|Task file|\/Users\//);
+ run.changeSize={other:{files:34,added:1314,deleted:290},tests:{files:20,added:2807,deleted:9,newFiles:8}};assert.match(renderPrCompletion(run),/\n\nChange size: \+1,314 −290 in 34 non-test files; tests \+2,807 −9 in 20 files \(8 new\)\.\n/);run.changeSize=undefined;assert.doesNotMatch(renderPrCompletion(run),/Change size/);
  run.state='waiting';run.reason='Waiting for CI';run.requirements.find(r=>r.id==='required-ci').status='pending';
  assert.match(renderPrCompletion(run),/^\*\*In progress\.\*\* Iteris is still working on this task: Waiting for CI\n\nNot yet verified on commit `commit-a`: Required CI checks pass\./);
 });

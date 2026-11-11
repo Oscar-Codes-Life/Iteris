@@ -138,6 +138,7 @@ test('a blocked review keeps its draft and a fresh repair instance fixes the rev
 	assert.match(repair[0].prompt, /Evidence stays out of the repository\./);
 	const implementation = (await calls(cwd)).find(call => call.prompt.startsWith('You are an autonomous'));
 	assert.match(implementation.prompt, /Evidence stays out of the repository\. Put reproduction output[^\n]* in `\.iteris\/evidence\/[\w.-]+\/`/); assert.doesNotMatch(implementation.prompt, /record the exact command|record behavioral commands and output\./);
+	assert.match(implementation.prompt, /## Scope\nKeep the change as small as the ticket allows\.[\s\S]*Create a new test file only when no existing one covers that unit\./); assert.match(repair[0].prompt, /Fix what is listed with the smallest change, and nothing else\./);
 });
 
 test('partial work left by a crashed instance becomes a checkpoint for the next instance', async t => {

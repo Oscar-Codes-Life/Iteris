@@ -49,7 +49,21 @@ export function assertClean(cwd: string): void {
 	const unexpected = changes.filter(entry => !(entry.startsWith('?? ') && /^(\.iteris\/|\.tasks\/|\.iteris\.json(?:\.|$))/.test(entry.slice(3))));
 	if (unexpected.length) throw new Error('Working tree has uncommitted changes. Preserve and commit or resolve them before review.');
 }
-export type ReviewContext = {stamp: ReviewStamp; ticket: Ticket; plan: string; policy: string; checks: string[]; checkIds:string[]; changedFiles: string[]; diff: string; risk: string[]; requirements:ReturnType<typeof extractRequirements>};
+export type ChangeSize = {other: {files: number; added: number; deleted: number}; tests: {files: number; added: number; deleted: number; newFiles: number}};
+export type ReviewContext = {stamp: ReviewStamp; ticket: Ticket; plan: string; policy: string; checks: string[]; checkIds:string[]; changedFiles: string[]; diff: string; risk: string[]; requirements:ReturnType<typeof extractRequirements>; size?: ChangeSize};
+const TEST_FILE = /(^|\/)(__tests__|__mocks__|__fixtures__|tests?|specs?|e2e|fixtures)\/|\.(test|spec)\.[^/]+$|(^|\/)test_[^/]+$|_test\.[^/]+$/i;
+/** How the diff splits between tests and everything else (code, resources, documents), so that its proportions can be judged and shown. */
+export function changeSize(cwd: string, mergeBase: string, head: string): ChangeSize {
+	const size: ChangeSize = {other: {files: 0, added: 0, deleted: 0}, tests: {files: 0, added: 0, deleted: 0, newFiles: 0}};
+	const added = new Set(git(cwd, ['diff', '--name-only', '-z', '--no-renames', '--diff-filter=A', mergeBase, head]).split('\0').filter(Boolean));
+	for (const entry of git(cwd, ['diff', '--numstat', '-z', '--no-renames', mergeBase, head]).split('\0').filter(Boolean)) {
+		const [insertions, deletions, ...name] = entry.split('\t'), file = name.join('\t');
+		const test = TEST_FILE.test(file), group = test ? size.tests : size.other;
+		group.files++; group.added += Number(insertions) || 0; group.deleted += Number(deletions) || 0;
+		if (test && added.has(file)) size.tests.newFiles++;
+	}
+	return size;
+}
 function resolveBase(config: IterisConfig, cwd: string): string {
 	for (const ref of [`refs/remotes/origin/${config.baseBranch}`, `refs/heads/${config.baseBranch}`]) {
 		try {return git(cwd, ['rev-parse', '--verify', `${ref}^{commit}`]).trim();} catch { /* try local */ }
@@ -106,7 +120,7 @@ export function captureContext(ticket: Ticket, config: IterisConfig, cwd: string
 	const source = sourceIdentity(ticket, config);
 	const scope = digest({version: REVIEW_VERSION + 1, base, branch, ticket:{number:ticket.number,title:ticket.title,body:ticket.body,labels:ticket.labels,source,custom:ticket.custom?.fingerprint}, plan, policy, checks: [...config.qualityChecks,...planned], requirements:requirements.map(r=>({id:r.id,text:r.text,stage:r.stage,method:r.method})), verification:config.verification, environment:config._execution?.identity, review: reviewSettings(config.review), harness: config.harness, settings: config.harnesses[config.harness], repo: config.repo, provider: source.provider});
 	const key = digest({scope, head, mergeBase});
-	return {stamp: {head, base, mergeBase, branch, scope, key}, ticket, plan, policy, checks: [...new Set([...config.qualityChecks,...planned])], checkIds:applicableChecks(config,changedFiles).map(c=>c.id), changedFiles, diff, risk, requirements};
+	return {stamp: {head, base, mergeBase, branch, scope, key}, ticket, plan, policy, checks: [...new Set([...config.qualityChecks,...planned])], checkIds:applicableChecks(config,changedFiles).map(c=>c.id), changedFiles, diff, risk, requirements, size: changeSize(cwd, mergeBase, head)};
 }
 export function assertSnapshot(context: ReviewContext, config: IterisConfig, cwd: string): void {
 	const current = captureContext(context.ticket, config, cwd, context.plan, context.stamp.branch);

@@ -8,6 +8,7 @@ import {redact} from '../harness/redact.js';
 import {taskKey} from '../lifecycle/state.js';
 import {prepareBranch,commitSourceChanges,checkpointPartialWork} from '../lifecycle/commit.js';
 import {evidenceNote} from '../lifecycle/evidence.js';
+import {REPAIR_SCOPE_NOTE} from './prompt.js';
 
 export async function recoverFailedTicket(options: {
 	ticket: Ticket; config: IterisConfig; cwd: string; state: TicketState; plan: string; signal: AbortSignal;
@@ -45,6 +46,7 @@ Saved log: ${path.join(stateRoot(cwd), '.iteris', 'tasks', taskKey(ticket,config
 Attempt journal: ${path.join(stateRoot(cwd), '.iteris', 'tasks', taskKey(ticket,config), 'attempts.md')}
 Independent review of the last reviewed commit: ${path.join(stateRoot(cwd), '.iteris', 'tasks', taskKey(ticket,config), 'artifacts', 'review', 'review.md')} summarizes the outcome, each requirement's status and each check's result; findings.json beside it gives every finding's trigger, expected and actual behavior, evidence and remedy. When the failure is a blocked review, fix every confirmed finding and missing requirement reported for the current commit, not only those named in the failure reason.
 ${options.history ? `\n${options.history}\n` : ''}${evidenceNote(cwd, branch)}
+${REPAIR_SCOPE_NOTE}
 The host prepared this branch and will commit your source changes. If the existing committed implementation is already complete, verify it and continue without an empty commit. If the issue cannot be repaired locally, explain why and stop. Print exactly <task>done</task> on its own line only after the source changes are ready for independent review.`;
 	const result = await runHarness({config, phase: 'repair', prompt: redact(prompt), cwd, timeoutMs: Math.max(1,Math.min(config.timeout*1000,(config._deadline??Date.now()+config.timeout*1000)-Date.now()-config.timeout*1000*config.recovery.finalVerificationReserve)), signal,
 		onLine: line => onLogLine(`[self-heal] ${line}`)});

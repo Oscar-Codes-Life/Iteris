@@ -107,6 +107,8 @@ export type TaskRun = {
         elapsedMs: number;
     };
     planning?: import('./planning.js').PlanningPack;
+    /** Test and non-test lines of the reviewed commit against its base, shown in the pull request. */
+    changeSize?: import('../review/context.js').ChangeSize;
     /** Journal of failed attempts; a fresh instance receives it in its prompt. */
     attempts?: AttemptRecord[];
 };
@@ -291,8 +293,11 @@ export function renderPrCompletion(run: TaskRun): string {
         : run.state === 'cancelled' ? '**Cancelled.**'
         : `**In progress.** ${run.state === 'blocked' ? 'Iteris has stopped working on this task' : 'Iteris is still working on this task'}${run.reason ? `: ${item(run.reason).slice(0, 300)}` : '.'}`;
     const outstanding = run.state === 'complete' || run.state === 'cancelled' ? [] : [...gates.filter(requirement => requirement.status !== 'verified').map(requirement => HOST_GATES[requirement.id]!), ...(others.some(requirement => requirement.status !== 'verified') ? [`${others.filter(requirement => requirement.status !== 'verified').length} of ${others.length} ticket requirements`] : [])];
+    const count = (value: number) => value.toLocaleString('en-US'), size = run.changeSize;
+    const sizeLine = size ? `Change size: +${count(size.other.added)} −${count(size.other.deleted)} in ${count(size.other.files)} non-test file${size.other.files === 1 ? '' : 's'}; tests +${count(size.tests.added)} −${count(size.tests.deleted)} in ${count(size.tests.files)} file${size.tests.files === 1 ? '' : 's'}${size.tests.newFiles ? ` (${count(size.tests.newFiles)} new)` : ''}.` : '';
     return [
         headline,
+        ...(sizeLine ? ['', sizeLine] : []),
         ...(outstanding.length ? ['', `Not yet verified on commit \`${commit}\`: ${outstanding.join('; ')}.`] : []),
         ...(manual.length ? ['', '**Please verify by hand** (Iteris cannot observe these, so they do not hold the task):', '', ...manual.map(requirement => `- ${brief(item(requirement.text))}`)] : []),
         ...(run.dependencies.length ? ['', '**Waiting on:**', '', ...run.dependencies.map(dependency => `- ${item(dependency.description).slice(0, 500)} Next: ${item(dependency.nextAction).slice(0, 300)}`)] : []),
