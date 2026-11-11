@@ -95,6 +95,7 @@ export async function loadCustomTasks(config: IterisConfig, cwd: string, service
 		}
 	}
 	const result = await importCustom(config, cwd, services, signal);
-	await save(result);
+	// Finding nothing new must not replace the downloaded tasks a plain run would reuse.
+	if (!services.onlyNew || result.directory) await save(result);
 	return {...result, cached: false};
 }

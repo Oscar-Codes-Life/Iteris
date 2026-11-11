@@ -2,7 +2,7 @@ import {completionServices} from './helpers.mjs';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
-import {readFile, readdir, mkdir, writeFile} from 'node:fs/promises';
+import {readFile, readdir, mkdir, writeFile, unlink} from 'node:fs/promises';
 import path from 'node:path';
 import {identifyItems, canonical} from '../dist/custom/identity.js';
 import {download} from '../dist/custom/http.js';
@@ -12,6 +12,8 @@ import {configSchema, atomicWriteConfig} from '../dist/config.js';
 import {createRunFolder, writeStatus} from '../dist/state/manager.js';
 import {loadPendingQueue, savePendingQueue} from '../dist/state/queue.js';
 import {ticketBranch, ticketPrTitle} from '../dist/types.js';
+import {ensureRun, saveRun} from '../dist/lifecycle/state.js';
+import {loadCustomTasks} from '../dist/custom/cache.js';
 import {runAllTickets} from '../dist/agent/runner.js';
 import {temporary, environment, executable, config, fakeAgent, reviewRepository} from './helpers.mjs';
 const custom = {endpoint:'https://api.example.com/tasks', apiKeyEnv:'CUSTOM_TEST_KEY', itemsPath:''};
@@ -211,4 +213,29 @@ test('REST identifiers come from source data and handle missing or invalid value
  assert.deepEqual(result.tickets.map(ticket=>ticket.custom.identifier),['NAV-123','0','42',undefined,undefined,undefined,undefined]);
  assert.deepEqual(result.tickets.map(ticketPrTitle),['NAV-123: Fix navigation','0: Fix navigation','42: Fix navigation',...Array(4).fill('Fix navigation')]);
  assert.equal(ticketPrTitle({title:'Existing GitHub or Trello title'}),'Existing GitHub or Trello title');
+});
+test('next imports only tasks this checkout has no run for, in any state, and keeps refresh complete',async t=>{
+ const cwd=await fixture(t);const first=await importCustom(cfg(),cwd,importer([{id:1,title:'finished'},{id:2,title:'waiting'},{id:3,title:'downloaded, never started'}]));
+ for(const [index,state] of ['complete','waiting'].entries()){const ticket=first.tickets[index],run=await ensureRun(cwd,ticket,cfg(),path.join(cwd,'.iteris/tasks/artifacts'),ticketBranch(ticket));run.state=state;await saveRun(cwd,run);}
+ let conversions=0;const messages=[];const counting=items=>({fetcher:async()=>Response.json(items),harness:async()=>{conversions++;return ok(draft);},onProgress:message=>messages.push(message)});
+ const board=[{id:1,title:'finished, then edited'},{id:2,title:'waiting'},{id:3,title:'downloaded, never started'},{id:4,title:'brand new'}];
+ const next=await importCustom(cfg(),cwd,{...counting(board),onlyNew:true});
+ assert.deepEqual(next.tickets.map(ticket=>ticket.number),[first.tickets[2].number,4]);assert.equal(conversions,2);
+ assert.ok(messages.includes('2 new tasks; 2 already taken and left out.'),messages.join('|'));assert.ok(messages.includes('1 taken task changed at the source. Run iteris refresh to pick it up.'));assert.ok(messages.includes('Converting task 2/2…'));
+ assert.equal(JSON.parse(await readFile(path.join(next.directory,'manifest.json'),'utf8')).tasks.length,2);
+ conversions=0;const refreshed=await importCustom(cfg(),cwd,counting(board));assert.equal(refreshed.tickets.length,4);assert.equal(conversions,4);
+ assert.deepEqual(refreshed.tickets.map(ticket=>ticket.number),[1,2,3,4]);
+});
+test('next that finds nothing keeps the downloaded tasks, and runs restore a lost number registry',async t=>{
+ const cwd=await fixture(t);const first=await loadCustomTasks(cfg(),cwd,{...importer([{id:1,title:'one'},{id:2,title:'two'}]),refresh:true});
+ for(const ticket of first.tickets){const run=await ensureRun(cwd,ticket,cfg(),path.join(cwd,'.iteris/tasks/artifacts'),ticketBranch(ticket));run.state='complete';await saveRun(cwd,run);}
+ const messages=[];const nothing=await loadCustomTasks(cfg(),cwd,{...importer([{id:1,title:'one'},{id:2,title:'two'}]),refresh:true,onlyNew:true,harness:async()=>assert.fail('must not convert a taken task'),onProgress:message=>messages.push(message)});
+ assert.deepEqual(nothing.tickets,[]);assert.ok(messages.includes('0 new tasks; 2 already taken and left out.'));
+ const reused=await loadCustomTasks(cfg(),cwd,{fetcher:async()=>assert.fail('must not fetch'),harness:async()=>assert.fail('must not convert')});
+ assert.equal(reused.cached,true);assert.deepEqual(reused.tickets.map(ticket=>ticket.number),[1,2]);
+ await unlink(path.join(cwd,'.iteris/custom/registry.json'));
+ const added=await loadCustomTasks(cfg(),cwd,{...importer([{id:1,title:'one'},{id:2,title:'two'},{id:3,title:'three'}]),refresh:true,onlyNew:true});
+ assert.deepEqual(added.tickets.map(ticket=>ticket.number),[3]);
+ const all=await loadCustomTasks(cfg(),cwd,{...importer([{id:2,title:'two'},{id:1,title:'one'},{id:3,title:'three'}]),refresh:true});
+ assert.deepEqual(all.tickets.map(ticket=>[ticket.number,ticketBranch(ticket)]),[[2,ticketBranch(first.tickets[1])],[1,ticketBranch(first.tickets[0])],[3,ticketBranch(added.tickets[0])]]);
 });

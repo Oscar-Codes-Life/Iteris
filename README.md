@@ -98,6 +98,7 @@ Run these from the root of the target Git repository. Iteris reads `.iteris.json
 | `iteris parallel [1-8]` | Save the maximum parallel worktree tasks (default: 3). Local tasks remain serial. |
 | `iteris instances` | Open a live project-wide instance monitor in another terminal. |
 | `iteris refresh` | Fetch and reconvert tasks from a **Custom REST endpoint**, then open the ticket picker. Other ticket sources fetch normally. |
+| `iteris next` | Fetch the source and offer only tickets this checkout has never taken (no saved run in any state). With a **Custom REST endpoint**, taken tasks are neither downloaded nor converted again. |
 | `iteris review [standard\|deep\|audit]` | Review the current branch and run configured checks without implementation, pushing, or opening a PR. Omit the mode to use the configured review mode. |
 | `iteris --help` | Print the command synopsis. `-h` also works. |
 | `iteris --version` | Print the installed release version without loading project settings. `-V` also works. |
@@ -215,7 +216,7 @@ The most useful settings to edit directly are:
 - **GitHub Projects:** set `"provider": "github"` and `"githubSource": "projects"`. Set `projectNumber` to use a specific Project, or remove it to discover Projects on the next run. With multiple visible Projects, Iteris opens a picker; with one, it selects it automatically. `todoStatus` filters Project items.
 - **Automatic GitHub source:** `"githubSource": "auto"` uses a configured or discovered Project, then falls back to issues if none are visible. Both `auto` and `projects` save `"githubSource": "issues"` on this fallback, so later runs skip Project discovery. Project lookup and authentication errors are reported rather than treated as an empty Project list.
 - **Trello:** choose it with `iteris setup`. To pick a different board later, remove both `trello.boardId` and `trello.listId` from `.iteris.json`; to change lists on the same board, remove only `trello.listId`. The next run asks when multiple choices are available. Set `trello.moveOnComplete` to the name of a destination list if you want completed cards moved.
-- **Custom REST:** choose it with `iteris setup`; see [Custom REST endpoints](#custom-rest-endpoints). Use `iteris refresh` to fetch updated items.
+- **Custom REST:** choose it with `iteris setup`; see [Custom REST endpoints](#custom-rest-endpoints). Use `iteris refresh` to fetch everything again, or `iteris next` to fetch only tasks not taken before.
 
 Legacy configurations migrate automatically on load:
 
@@ -275,7 +276,7 @@ GitHub authentication is still required: selected custom tasks use the normal br
 
 Tasks with IDs retain their local number, branch, and execution history when edited. Numeric `123` and string `"123"` are the same ID. Tasks without IDs use a fingerprint of their source JSON; object-key order does not matter, but content edits create a new task. Mixed responses with and without IDs are supported. Identical duplicates are collapsed; conflicting records with the same ID reject the import. An item that later gains an ID becomes a new identity.
 
-Unchanged completed tasks are unchecked by default. After a refresh, edited tasks with stable IDs show **Changed** and are checked for another run. Identity allocation and the download cache reference live in `.iteris/custom/`; execution records live in `.iteris/tasks/<stable-key>/`, with earlier task versions retained in `history/`. Keep `.iteris/` and `.tasks/` to preserve downloaded tasks, identity allocation, and completion history. If saved files are missing or invalid, Iteris asks you to run `iteris refresh` rather than silently downloading and converting everything again.
+`iteris next` fetches the endpoint but converts and downloads only tasks with no saved run in this checkout, and reports how many taken tasks changed at the source so that `iteris refresh` can pick them up. Unchanged completed tasks are unchecked by default. After a refresh, edited tasks with stable IDs show **Changed** and are checked for another run. Identity allocation and the download cache reference live in `.iteris/custom/`; execution records live in `.iteris/tasks/<stable-key>/`, with earlier task versions retained in `history/`. Keep `.iteris/` and `.tasks/` to preserve downloaded tasks, identity allocation, and completion history. If saved files are missing or invalid, Iteris asks you to run `iteris refresh` rather than silently downloading and converting everything again.
 
 ## Execution and state
 

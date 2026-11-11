@@ -135,7 +135,7 @@ async function main() {
 		return;
 	}
 	if (command === '--help' || command === '-h') {
-		console.log('iteris [--version | --help] [--once] [setup | refresh | resume | status [task-key] | doctor | evidence <task-key> <receipt.json> | cancel <task-key> | describe [task-key | --all] [--rewrite] [--dry-run] | review [standard|deep|audit] | harness [claude|codex] | model [id] | effort [level] | workspace [local|worktree] | parallel [1-8] | instances]');
+		console.log('iteris [--version | --help] [--once] [setup | refresh | next | resume | status [task-key] | doctor | evidence <task-key> <receipt.json> | cancel <task-key> | describe [task-key | --all] [--rewrite] [--dry-run] | review [standard|deep|audit] | harness [claude|codex] | model [id] | effort [level] | workspace [local|worktree] | parallel [1-8] | instances]');
 		return;
 	}
 	let config = await loadConfig();
@@ -159,9 +159,9 @@ async function main() {
 	}
 	if(command && await lifecycleCommand(command,[...args.slice(1),...(once?['--once']:[])],config,process.cwd()))return;
 	if(!command && (await unfinishedTickets(process.cwd(),config)).length){await lifecycleCommand('resume',once?['--once']:[],config,process.cwd());return;}
-	if (extra.length || ((command === 'setup' || command === 'refresh') && argument) || (command && !['setup', 'refresh', 'review', 'harness', 'model', 'effort', 'workspace', 'parallel'].includes(command))) throw new Error('Unknown command. Run iteris --help.');
+	if (extra.length || ((command === 'setup' || command === 'refresh' || command === 'next') && argument) || (command && !['setup', 'refresh', 'next', 'review', 'harness', 'model', 'effort', 'workspace', 'parallel'].includes(command))) throw new Error('Unknown command. Run iteris --help.');
 	await printBranding();
-	if (command && command !== 'setup' && command !== 'refresh' && command !== 'review') {
+	if (command && command !== 'setup' && command !== 'refresh' && command !== 'next' && command !== 'review') {
 		config = await configure(command, argument);
 		console.log(`Saved: ${selectionLabel(config)} · ${config.workspace.mode} · ${config.workspace.concurrency} parallel slots`);
 		return;
@@ -185,14 +185,14 @@ async function main() {
 		console.log('Setup complete. Run iteris to select tickets.');
 		return;
 	}
-	await run(config, command === 'refresh');
+	await run(config, command === 'refresh' || command === 'next', command === 'next');
 }
 
-async function fetchTicketsForProvider(config: IterisConfig, refresh = false): Promise<Ticket[]> {
+async function fetchTicketsForProvider(config: IterisConfig, refresh = false, onlyNew = false): Promise<Ticket[]> {
 	if(config.provider==='command')return sourceAdapter(config,process.cwd()).fetch();
 	if (config.provider === 'custom') {
 		const imported = await loadCustomTasks(config, process.cwd(), {
-			refresh, onProgress: message => console.log(message),
+			refresh, onlyNew, onProgress: message => console.log(message),
 			useLegacy: async (directory, count) => await choose(`Found ${count} downloaded tasks in ${directory}. Use these with the current endpoint?`, [
 				{value: 'reuse', label: 'Use downloaded tasks'},
 				{value: 'refresh', label: 'Fetch fresh tasks from the endpoint'},
@@ -264,7 +264,8 @@ async function fetchTrelloFlow(config: IterisConfig): Promise<Ticket[]> {
 	return result.tickets;
 }
 
-async function run(config: IterisConfig, refresh = false) {
+/** refresh: fetch from the source again instead of resuming or reusing downloads. onlyNew: offer only tasks never taken here. */
+async function run(config: IterisConfig, refresh = false, onlyNew = false) {
 	const unfinished=refresh ? [] : await unfinishedTickets(process.cwd(),config);
 	if(unfinished.length){await lifecycleCommand('resume',config.continuation.watch?[]:['--once'],config,process.cwd());return;}
 	const pending = refresh ? undefined : await loadPendingQueue(process.cwd(), config);
@@ -277,14 +278,19 @@ async function run(config: IterisConfig, refresh = false) {
 	}
 	let tickets: Ticket[];
 	try {
-		tickets = await fetchTicketsForProvider(config, refresh);
+		tickets = await fetchTicketsForProvider(config, refresh, onlyNew);
 	} catch (error) {
 		console.error('Failed to fetch tickets:', error instanceof Error ? error.message : error);
 		process.exit(1);
 	}
+	if (onlyNew) {
+		// A custom source leaves taken tasks out before downloading them; every other source is filtered here.
+		const taken = new Set((await listRuns(process.cwd(), config.repo)).map(run => run.key));
+		tickets = tickets.filter(ticket => !taken.has(taskKey(ticket, config)));
+	}
 
 	if (tickets.length === 0) {
-		console.log('No tickets found. Nothing to do.');
+		console.log(onlyNew ? 'No new tickets: everything at the source has already been taken here. Run iteris refresh to fetch all of it again.' : 'No tickets found. Nothing to do.');
 		process.exit(0);
 	}
 
