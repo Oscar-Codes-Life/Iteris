@@ -53,6 +53,12 @@ test('a dead queue lock is reclaimed once while a live queue remains exclusive',
  assert.equal(await hasActiveRun(cwd),true);
  await attempts.find(result=>result.status==='fulfilled').value();
  assert.equal(await hasActiveRun(cwd),false);
+ // A queue keeps its own mark between passes: short commands can take the run lock, a second queue cannot start.
+ const {claimQueue}=await import('../dist/state/active.js'),queue=await claimQueue(cwd),nested=await claimQueue(cwd);
+ assert.equal(await hasActiveRun(cwd),true);await (await acquireRun(cwd))();
+ await nested();assert.equal(await hasActiveRun(cwd),true,'nested claims in one process share the mark');await queue();assert.equal(await hasActiveRun(cwd),false);
+ await writeFile(path.join(cwd,'.iteris/queue.json'),JSON.stringify({pid:process.ppid}));await assert.rejects(claimQueue(cwd),/already running/);assert.equal(await hasActiveRun(cwd),true);
+ await writeFile(path.join(cwd,'.iteris/queue.json'),JSON.stringify({pid:dead}));await (await claimQueue(cwd))();assert.equal(await hasActiveRun(cwd),false);
 });
 
 test('project-local prerequisite checks never change process-wide PATH',async t=>{

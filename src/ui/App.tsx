@@ -13,6 +13,7 @@ import {TicketRow} from './TicketRow.js';
 import {LiveLog} from './LiveLog.js';
 import {taskKey} from '../lifecycle/state.js';
 import {runWorker} from '../lifecycle/worker.js';
+import {claimQueue} from '../state/active.js';
 
 type Dialog = {title: string; options: ChoiceOption[]; initial?: string; resolve: (value: string) => void; reject: (error: Error) => void};
 export function App({config, tickets, cwd, resume = false}: {config: IterisConfig; tickets: Ticket[]; cwd: string; resume?: boolean}) {
@@ -65,6 +66,11 @@ export function App({config, tickets, cwd, resume = false}: {config: IterisConfi
 			},
 		};
 		const run = async () => {
+			// One queue per repository, from the first ticket to the last wait.
+			const release = await claimQueue(cwd);
+			try {await work();} finally {await release();}
+		};
+		const work = async () => {
 			if (resume) {
 				const saved = await readInstances(cwd, config);
 				setStates(new Map(saved.map(state => [state.runKey!, state])));

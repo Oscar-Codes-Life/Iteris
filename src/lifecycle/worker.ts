@@ -10,7 +10,7 @@ import { assertClean, git, captureContext } from '../review/context.js';
 import { loadPassedReview } from '../review/report.js';
 import { prepareEnvironment, setupBudget } from './environment.js';
 import { advanceCompletion } from './stages.js';
-import { acquireRun } from '../state/active.js';
+import { acquireRun, claimQueue } from '../state/active.js';
 import path from 'node:path';
 import { recoverFailedTicket } from '../agent/failure-recovery.js';
 import { classifyFailure } from './failures.js';
@@ -45,6 +45,12 @@ async function pause(ms: number, signal?: AbortSignal) {
     await new Promise<void>(resolve => { const done = () => { clearTimeout(timer); signal?.removeEventListener('abort', done); resolve(); }; const timer = setTimeout(done, ms); signal?.addEventListener('abort', done, { once: true }); });
 }
 export async function runWorker(options: WorkerOptions): Promise<void> {
+    // Held across the waits between passes, where the run lock is free for short commands.
+    const release = await claimQueue(options.cwd);
+    try { await workQueue(options); }
+    finally { await release(); }
+}
+async function workQueue(options: WorkerOptions): Promise<void> {
     const { cwd, callbacks, signal } = options;
     const now = options.now ?? Date.now;
     let force = options.force ?? false;
