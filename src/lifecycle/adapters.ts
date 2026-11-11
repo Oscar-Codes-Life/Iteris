@@ -11,7 +11,7 @@ import { executeCommand, CapabilityUnavailable } from './environment.js';
 import { sourceIdentity, type TaskRun } from './state.js';
 import { download } from '../custom/http.js';
 import { atPath, identifyItems } from '../custom/identity.js';
-import { customConfigSchema } from '../custom/schema.js';
+import { customSettings } from '../custom/schema.js';
 import { registerSecret } from '../harness/redact.js';
 export interface TaskSourceAdapter {
     fetch(): Promise<Ticket[]>;
@@ -96,7 +96,7 @@ export function sourceAdapter(config: IterisConfig, cwd: string, octokit: Octoki
         return {
             async fetch() { return (await loadCustomTasks(config, cwd, { refresh: true })).tickets; },
             async refresh(ticket) {
-                const custom = customConfigSchema.parse(config.custom), token = process.env[custom.apiKeyEnv];
+                const custom = customSettings(config.custom), token = process.env[custom.apiKeyEnv];
                 if (!token)
                     throw new CapabilityUnavailable('custom-credentials', `Missing environment variable ${custom.apiKeyEnv}`, `Provide ${custom.apiKeyEnv} to refresh the task source`);
                 registerSecret(token);

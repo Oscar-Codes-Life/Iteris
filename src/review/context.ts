@@ -73,16 +73,20 @@ function resolveBase(config: IterisConfig, cwd: string): string {
 /** Policy and context files as committed on the base; a branch cannot rewrite its own review rules. */
 function trustedPolicy(config: IterisConfig, cwd: string, base: string): string {
 	let policy = '';
+	const sizes: string[] = [];
 	for (const file of [...new Set([...config.verification.policyFiles,...config.verification.contextFiles])]) {
 		if (file.includes('..') || path.isAbsolute(file)) throw new Error('Trusted context files must be repository-relative');
 		const policyExists = git(cwd, ['ls-tree', base, '--', file]).trim();
 		if (policyExists) {
 			if (!policyExists.startsWith('100644 ') && !policyExists.startsWith('100755 ')) throw new Error(`${file} must be a regular tracked file on the base.`);
-			policy += `\n## ${file}\n${git(cwd, ['show', `${base}:${file}`])}`;
+			const section = `\n## ${file}\n${git(cwd, ['show', `${base}:${file}`])}`;
+			sizes.push(`${file} ${section.length.toLocaleString('en-US')}`);
+			policy += section;
 		}
 	}
 	const limit = config.verification.maxContextCharacters;
-	if (policy.length > limit) throw new Error(`Trusted review context is too large (${limit.toLocaleString('en-US')} characters maximum; the configured policy/context files total ${policy.length.toLocaleString('en-US')}). Set verification.maxContextCharacters in .iteris.json to accommodate the configured policy/context files.`);
+	// Name each file: one that a merged task filled with its own notes is the usual cause, and raising the limit would hide it.
+	if (policy.length > limit) throw new Error(`Trusted review context is too large (${limit.toLocaleString('en-US')} characters maximum; the configured policy/context files total ${policy.length.toLocaleString('en-US')}: ${sizes.join(', ')}). Every reviewer receives these files as rules. Check that each one on the base branch holds what you intend, then trim it or raise verification.maxContextCharacters in .iteris.json.`);
 	return policy;
 }
 /**

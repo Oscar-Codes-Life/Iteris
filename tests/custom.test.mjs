@@ -100,6 +100,7 @@ test('imports nested arrays and treats empty arrays as successful',async t=>{
  assert.equal(result.tickets.length,1);
  assert.deepEqual(await importCustom(cfg(),cwd,importer([])),{tickets:[],duplicates:0});
  await assert.rejects(importCustom(cfg(),cwd,importer({items:[]})),/array/);
+ await assert.rejects(importCustom({...cfg(),custom:undefined},cwd,importer([])),/has no "custom" section/);await assert.rejects(importCustom({...cfg(),custom:{endpoint:'ftp://example.com/tasks'}},cwd,importer([])),/"custom" section of \.iteris\.json is not valid: endpoint: /);
  await assert.rejects(importCustom(cfg(),cwd,{fetcher:async()=>new Response('broken')}),/invalid JSON/);
 });
 test('validation retry succeeds, exhaustion publishes nothing, cancellation releases lock',async t=>{

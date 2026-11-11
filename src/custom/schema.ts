@@ -11,6 +11,14 @@ export const customConfigSchema = z.object({
 	idPath: z.string().optional(),
 }).passthrough();
 export type CustomConfig = z.infer<typeof customConfigSchema>;
+/** The custom source settings, or an error a person can act on instead of a schema dump. */
+export function customSettings(value: unknown): CustomConfig {
+	const result = customConfigSchema.safeParse(value);
+	if (result.success) return result.data;
+	throw new Error(value === undefined
+		? 'This task comes from a custom source, but .iteris.json in this folder has no "custom" section. Check that Iteris was started in the project folder and that .iteris.json still holds your settings, or run iteris setup.'
+		: `The "custom" section of .iteris.json is not valid: ${result.error.issues.map(issue => `${issue.path.join('.') || 'custom'}: ${issue.message}`).join('; ')}`);
+}
 export const taskSchema = z.object({
 	title: z.string().trim().min(1),
 	description: z.string(),

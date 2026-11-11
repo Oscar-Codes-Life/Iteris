@@ -8,7 +8,7 @@ import {acquireRun} from '../state/active.js';
 import {customBranch, type IterisConfig, type Ticket, type TicketStatus} from '../types.js';
 import {atPath, identifyItems, customSourceKey} from './identity.js';
 import {download, MAX_BYTES} from './http.js';
-import {httpUrl, customConfigSchema, draftSchema, taskSchema, manifestSchema, sourceIdentifierSchema, type Attachment} from './schema.js';
+import {httpUrl, customSettings, draftSchema, taskSchema, manifestSchema, sourceIdentifierSchema, type Attachment} from './schema.js';
 import {listRuns} from '../lifecycle/state.js';
 
 const registrySchema = z.object({next: z.number().int().positive(), entries: z.record(z.object({number: z.number().int().positive(), fingerprint: z.string(), branch: z.string().optional()}))});
@@ -79,7 +79,7 @@ function formatFor(url: string, contentType: string) {
 	return Object.values(mimeTypes).find(format => format.extension === (extension === 'jpeg' ? 'jpg' : extension));
 }
 export async function importCustom(config: IterisConfig, cwd: string, services: Services = {}, externalSignal?: AbortSignal): Promise<{tickets: Ticket[]; directory?: string; duplicates: number}> {
-	const custom = customConfigSchema.parse(config.custom);
+	const custom = customSettings(config.custom);
 	const token = process.env[custom.apiKeyEnv];
 	if (!token?.trim()) throw new Error(`Set the ${custom.apiKeyEnv} environment variable before importing custom tasks.`);
 	registerSecret(token);

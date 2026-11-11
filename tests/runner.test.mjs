@@ -228,7 +228,7 @@ test('oversized trusted context stops before any instance runs and continues onc
  const callbacks={onStatusChange:(_,s)=>states.push(s),onLogLine(){},onComplete(){}};
  await runAllTickets([ticket(1)],cfg,cwd,callbacks,undefined,api);
  await assert.rejects(readFile(calls,'utf8'),{code:'ENOENT'});
- const run=await readRun(cwd,taskKey(ticket(1),cfg));assert.equal(run.state,'waiting');assert.match(run.reason,/verification\.maxContextCharacters/);assert.match(run.reason,/total 68,4\d\d/);
+ const run=await readRun(cwd,taskKey(ticket(1),cfg));assert.equal(run.state,'waiting');assert.match(run.reason,/verification\.maxContextCharacters/);assert.match(run.reason,/total 68,4\d\d/);assert.match(run.reason,/: AGENTS\.md 68,4\d\d\)/,'the oversized file is named');
  assert.equal(states.at(-1).status,'waiting');assert.match(run.dependencies[0].nextAction,/maxContextCharacters/);
  cfg.verification.maxContextCharacters=100000;await atomicWriteConfig(cfg,cwd);
  await runAllTickets([ticket(1)],cfg,cwd,callbacks,undefined,api);

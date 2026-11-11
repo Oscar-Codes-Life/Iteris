@@ -10,7 +10,7 @@ export function classifyFailure(error: unknown, phase: string): {
     // Only the user can correct configuration: wait and re-read it instead of spending instances on repair.
     if (/Trusted review context is too large/i.test(text)) {
         kind = 'capability';
-        nextAction = 'Raise verification.maxContextCharacters in .iteris.json or trim the configured policy/context files; the next attempt re-reads the configuration';
+        nextAction = 'Trim the oversized policy/context file on the base branch (or remove it if a task added it by mistake), or raise verification.maxContextCharacters in .iteris.json; the next attempt re-reads both';
     }
     else if (error instanceof CapabilityUnavailable || /missing executable|executable unavailable|spawn.*ENOENT|runtime.*incompatible|environment probe|setup failed/i.test(text)) {
         kind = 'environment';

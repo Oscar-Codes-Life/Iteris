@@ -40,6 +40,25 @@ export function tidyCandidates(cwd: string, baseBranch: string): TidyCandidates 
 	return {mergeBase, added, cosmetic: modified.filter(file => !substantive.has(file))};
 }
 
+/**
+ * The files the host reads from the base as review rules for every later task. A branch that adds or
+ * rewrites one changes how all later work is judged once it merges, so that never rides along with a
+ * task: only a ticket that names the file may touch it. Decided by the host, not by a model.
+ */
+export function policyChanges(cwd: string, config: IterisConfig, ticket: Ticket, mergeBase: string): TidyPlan {
+	const plan: TidyPlan = {remove: [], restore: []};
+	const asked = `${ticket.title}\n${ticket.body}`.toLowerCase();
+	const files = config.verification.policyFiles.filter(file => !file.includes('..') && !path.isAbsolute(file) && !asked.includes(path.basename(file).toLowerCase()));
+	if (!files.length) return plan;
+	const changed = names(git(cwd, ['--literal-pathspecs', 'diff', '--no-ext-diff', '--no-renames', '--name-status', '-z', mergeBase, 'HEAD', '--', ...files]));
+	for (let index = 0; index + 1 < changed.length; index += 2) {
+		const status = changed[index]!, file = changed[index + 1]!;
+		if (status === 'A') plan.remove.push({file, reason: 'Review rules for every later task; the ticket does not ask for them.'});
+		else plan.restore.push({file, reason: 'Review rules for every later task; the ticket does not ask to change them.'});
+	}
+	return plan;
+}
+
 export function tidyPrompt(ticket: Ticket, candidates: TidyCandidates): string {
 	const list = (files: string[]) => files.length ? files.map(file => `- ${file}`).join('\n') : '(none)';
 	return `ITERIS_TIDY
@@ -120,28 +139,35 @@ export async function tidyBranch(options: TidyOptions): Promise<TidyPlan | undef
 	const log = options.log ?? (() => {});
 	try {
 		const candidates = tidyCandidates(cwd, config.baseBranch);
-		if (!candidates || !(candidates.added.length + candidates.cosmetic.length)) return undefined;
+		if (!candidates) return undefined;
+		// The host settles the review-rule files itself; the instance judges everything else.
+		const host = policyChanges(cwd, config, ticket, candidates.mergeBase);
+		const settled = new Set([...host.remove, ...host.restore].map(entry => entry.file));
 		// A file judged once and kept is not judged again on every attempt.
 		const record = path.join(folder, 'tidy.json');
 		let judged: string[] = [];
 		try {judged = z.object({kept: z.array(z.string())}).parse(JSON.parse(await readFile(record, 'utf8'))).kept;} catch { /* first pass */ }
-		const fresh = {...candidates, added: candidates.added.filter(file => !judged.includes(file)), cosmetic: candidates.cosmetic.filter(file => !judged.includes(file))};
-		if (!(fresh.added.length + fresh.cosmetic.length)) return undefined;
-		log(`[tidy] Checking ${fresh.added.length} added and ${fresh.cosmetic.length} cosmetically changed file${fresh.added.length + fresh.cosmetic.length === 1 ? '' : 's'} for leftovers of the work.`);
-		const result = await runHarness({config, phase: 'review', prompt: redact(tidyPrompt(ticket, fresh)), cwd, timeoutMs: Math.max(1, Math.min(options.timeoutMs ?? 600_000, (config._deadline ?? Infinity) - Date.now())), signal, onLine: line => log(`[tidy] ${line}`)});
-		const plan = result.success ? parseTidyPlan(result.finalText ?? result.text, fresh) : undefined;
-		if (!plan) {
-			log(`[tidy] No usable answer (${result.error ?? 'not a JSON plan'}); nothing removed.`);
-			return undefined;
+		const open = (files: string[]) => files.filter(file => !judged.includes(file) && !settled.has(file));
+		const fresh = {...candidates, added: open(candidates.added), cosmetic: open(candidates.cosmetic)};
+		let answer: TidyPlan | undefined;
+		if (fresh.added.length + fresh.cosmetic.length) {
+			log(`[tidy] Checking ${fresh.added.length} added and ${fresh.cosmetic.length} cosmetically changed file${fresh.added.length + fresh.cosmetic.length === 1 ? '' : 's'} for leftovers of the work.`);
+			const result = await runHarness({config, phase: 'review', prompt: redact(tidyPrompt(ticket, fresh)), cwd, timeoutMs: Math.max(1, Math.min(options.timeoutMs ?? 600_000, (config._deadline ?? Infinity) - Date.now())), signal, onLine: line => log(`[tidy] ${line}`)});
+			answer = result.success ? parseTidyPlan(result.finalText ?? result.text, fresh) : undefined;
+			if (!answer) log(`[tidy] No usable answer (${result.error ?? 'not a JSON plan'}); no leftovers removed.`);
 		}
+		if (!answer && !settled.size) return undefined;
+		const plan: TidyPlan = {remove: [...host.remove, ...(answer?.remove ?? [])], restore: [...host.restore, ...(answer?.restore ?? [])]};
 		for (const entry of plan.remove) log(`[tidy] ${dryRun ? 'Would remove' : 'Removing'} ${entry.file}: ${entry.reason}`);
 		for (const entry of plan.restore) log(`[tidy] ${dryRun ? 'Would restore' : 'Restoring'} ${entry.file}: ${entry.reason}`);
 		if (dryRun) return plan;
 		if (plan.remove.length + plan.restore.length) await applyTidyPlan(cwd, branch, candidates.mergeBase, plan, `Remove task artifacts from ${ticket.title}`);
 		else log('[tidy] Nothing to remove.');
-		const gone = new Set([...plan.remove, ...plan.restore].map(entry => entry.file));
-		await mkdir(folder, {recursive: true});
-		await writeFile(record, JSON.stringify({kept: [...new Set([...judged, ...fresh.added, ...fresh.cosmetic])].filter(file => !gone.has(file)).sort()}, null, 2) + '\n');
+		if (answer) {
+			const gone = new Set([...plan.remove, ...plan.restore].map(entry => entry.file));
+			await mkdir(folder, {recursive: true});
+			await writeFile(record, JSON.stringify({kept: [...new Set([...judged, ...fresh.added, ...fresh.cosmetic])].filter(file => !gone.has(file)).sort()}, null, 2) + '\n');
+		}
 		return plan;
 	} catch (error) {
 		if (signal?.aborted) throw error;

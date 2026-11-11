@@ -628,11 +628,12 @@ test('task evidence lives in an ignored folder: never staged or committed, shown
 });
 test('the cleanup step removes leftovers of the work and restores unrelated formatting before review',async t=>{
  const f=await fixture(t),write=async(file,content)=>{await mkdir(path.dirname(path.join(f.cwd,file)),{recursive:true});await writeFile(path.join(f.cwd,file),content);};
- f.git('checkout','-q','main');await write('data.csv','a,b\r\n1,2\r\n');await write('notes.txt','kept\n\n');f.git('add','-A');f.git('commit','-qm','base data');f.git('push','-q','origin','main');
+ f.cfg.verification.policyFiles=['REVIEW.md','POLICY.md'];
+ f.git('checkout','-q','main');await write('data.csv','a,b\r\n1,2\r\n');await write('notes.txt','kept\n\n');await write('REVIEW.md','# Rules\n');f.git('add','-A');f.git('commit','-qm','base data');f.git('push','-q','origin','main');
  f.git('checkout','-q','iteris/1-feature');f.git('merge','-q','--no-edit','main');
  await write('src/feature.ts','export const feature = true;\n');await write('src/feature.test.ts','test\n');
  await write('plans/evidence/grp-1/verification.md','# Verification\n');await write('app/e2e/grp-1/probe.mjs','console.log(1)\n');await write('.tool/config.json','{}\n');
- await write('data.csv','a,b\n1,2\n');await write('notes.txt','kept\n');await write('feature.txt','changed for real\n');
+ await write('data.csv','a,b\n1,2\n');await write('notes.txt','kept\n');await write('feature.txt','changed for real\n');await write('REVIEW.md','# Rules\nNotes about this task.\n');
  f.git('add','-A');f.git('commit','-qm','work');
  const candidates=tidyCandidates(f.cwd,'main');
  assert.deepEqual(candidates.added,['.tool/config.json','app/e2e/grp-1/probe.mjs','plans/evidence/grp-1/verification.md','src/feature.test.ts','src/feature.ts']);assert.deepEqual(candidates.cosmetic,['data.csv','notes.txt']);
@@ -641,7 +642,7 @@ test('the cleanup step removes leftovers of the work and restores unrelated form
  const lines=[],options={ticket,config:f.cfg,cwd:f.cwd,folder:f.options.folder,branch:'iteris/1-feature',log:line=>lines.push(line)};
  const preview=await tidyBranch({...options,dryRun:true});assert.equal(preview?.remove.length,3,lines.join('\n'));assert.equal(f.git('status','--porcelain').trim(),'');assert.equal(f.git('log','-1','--format=%s'),'work');
  const plan=await tidyBranch(options);
- assert.deepEqual(plan.remove.map(entry=>entry.file),['.tool/config.json','app/e2e/grp-1/probe.mjs','plans/evidence/grp-1/verification.md']);assert.deepEqual(plan.restore.map(entry=>entry.file),['data.csv','notes.txt']);
+ assert.deepEqual(plan.remove.map(entry=>entry.file),['.tool/config.json','app/e2e/grp-1/probe.mjs','plans/evidence/grp-1/verification.md']);assert.deepEqual(plan.restore.map(entry=>entry.file),['REVIEW.md','data.csv','notes.txt'],'the host restores review rules a task rewrote');assert.equal(await readFile(path.join(f.cwd,'REVIEW.md'),'utf8'),'# Rules\n');
  assert.equal(f.git('log','-1','--format=%s'),'Remove task artifacts from Feature');assert.equal(f.git('status','--porcelain','--untracked-files=all').trim(),'');
  assert.deepEqual(f.git('diff','--name-only','origin/main','HEAD').split('\n'),['feature.txt','src/feature.test.ts','src/feature.ts']);
  assert.equal(await readFile(path.join(f.cwd,'data.csv'),'utf8'),'a,b\r\n1,2\r\n');
@@ -653,6 +654,12 @@ test('the cleanup step removes leftovers of the work and restores unrelated form
  const second=await tidyBranch(options);assert.deepEqual(second.remove.map(entry=>entry.file),['scratch/output.log']);assert.match((await f.calls()).at(-1).prompt,/ADDED\n- scratch\/output\.log\n\nCOSMETIC\n\(none\)$/);
  environment(t,{TIDY_ANSWER:'I could not decide.'});await write('scratch/again.log','x\n');f.git('add','-A');f.git('commit','-qm','again');
  assert.equal(await tidyBranch(options),undefined);assert.equal(f.git('log','-1','--format=%s'),'again');
+ // Review-rule files are settled by the host, with or without a usable answer; a ticket that names one may add it.
+ await write('POLICY.md','# Notes about this task\n');f.git('add','-A');f.git('commit','-qm','notes');
+ const guarded=await tidyBranch(options);assert.deepEqual(guarded,{remove:[{file:'POLICY.md',reason:'Review rules for every later task; the ticket does not ask for them.'}],restore:[]});
+ await assert.rejects(readFile(path.join(f.cwd,'POLICY.md')));assert.match(await readFile(path.join(f.cwd,'.iteris/evidence/1-feature/removed-from-branch/POLICY.md'),'utf8'),/Notes/);
+ await write('POLICY.md','# Rules\n');f.git('add','-A');f.git('commit','-qm','rules');
+ assert.equal(await tidyBranch({...options,ticket:{...ticket,body:'Add a POLICY.md with our review rules.'}}),undefined);assert.equal(f.git('log','-1','--format=%s'),'rules');
 });
 test('writers are told to keep the change small and reuse tests; reviewers judge its size and stay in scope',async t=>{
  const f=await fixture(t,{content:'broken\n'});f.cfg.review.maxRepairCycles=2;

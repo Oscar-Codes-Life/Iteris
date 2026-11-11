@@ -3,7 +3,7 @@ import {randomUUID} from 'node:crypto';
 import path from 'node:path';
 import {z} from 'zod';
 import type {IterisConfig, Ticket} from '../types.js';
-import {customConfigSchema, manifestSchema} from './schema.js';
+import {customSettings, manifestSchema} from './schema.js';
 import {customSourceKey} from './identity.js';
 import {importCustom} from './import.js';
 
@@ -38,7 +38,7 @@ export async function readSavedCustomTasks(directory: string): Promise<ImportRes
 
 export async function loadCustomTasks(config: IterisConfig, cwd: string, services: Services = {}, signal?: AbortSignal): Promise<ImportResult & {cached: boolean}> {
 	signal?.throwIfAborted();
-	const sourceKey = customSourceKey(customConfigSchema.parse(config.custom));
+	const sourceKey = customSourceKey(customSettings(config.custom));
 	const cacheFile = path.join(cwd, '.iteris/custom/cache.json');
 	const save = async (result: ImportResult) => {
 		await mkdir(path.dirname(cacheFile), {recursive: true});
