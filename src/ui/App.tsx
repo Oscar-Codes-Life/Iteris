@@ -14,6 +14,7 @@ import {LiveLog} from './LiveLog.js';
 import {taskKey} from '../lifecycle/state.js';
 import {runWorker} from '../lifecycle/worker.js';
 import {claimQueue} from '../state/active.js';
+import {useAnswer, question} from './answer.js';
 
 type Dialog = {title: string; options: ChoiceOption[]; initial?: string; resolve: (value: string) => void; reject: (error: Error) => void};
 export function App({config, tickets, cwd, resume = false}: {config: IterisConfig; tickets: Ticket[]; cwd: string; resume?: boolean}) {
@@ -74,10 +75,10 @@ export function App({config, tickets, cwd, resume = false}: {config: IterisConfi
 			if (resume) {
 				const saved = await readInstances(cwd, config);
 				setStates(new Map(saved.map(state => [state.runKey!, state])));
-				await runWorker({config, cwd, callbacks, signal: controller.current.signal, force: true, once: !config.continuation.watch});
+				await runWorker({config, cwd, callbacks, signal: controller.current.signal, force: true, once: !config.continuation.watch, answers: true});
 			} else {
 				await runAllTickets(tickets, config, cwd, callbacks, controller.current.signal);
-				if (config.continuation.watch) await runWorker({config, cwd, callbacks, signal: controller.current.signal});
+				if (config.continuation.watch) await runWorker({config, cwd, callbacks, signal: controller.current.signal, answers: true});
 			}
 		};
 		void run().then(() => setFinished(true), failure => {setError(String(failure)); setFinished(true);});
@@ -93,8 +94,11 @@ export function App({config, tickets, cwd, resume = false}: {config: IterisConfi
 		setBusy(true); setError('');
 		gate.current = configure(parts[0]!, parts[1], {picker: pick, cwd, active: true}).then(next => {setPending(next);}, failure => {setError(failure instanceof Error ? failure.message : String(failure));}).finally(() => setBusy(false));
 	}
+	const list = [...states.values()], current = view === 'instances' ? list[Math.min(selected, Math.max(0, list.length - 1))] : undefined;
+	const answer = useAnswer(cwd, current);
 	useInput((input, key) => {
 		if (dialog || busy) return;
+		if (commandText === null && answer.handle(input, key)) return;
 		if (commandText !== null) {
 			if (key.escape) setCommandText(null);
 			else if (key.return) {setCommandText(null); submit(commandText);}
@@ -112,7 +116,7 @@ export function App({config, tickets, cwd, resume = false}: {config: IterisConfi
 		<Text bold color="magenta">Iteris · {config.repo}</Text>
 		<Text dimColor wrap="truncate">Saved settings for the next ticket: {selectionLabel(pending)}</Text>
 		<Box gap={2}><Text bold color={view === 'instances' ? 'magenta' : 'gray'}>Instances</Text><Text bold color={view === 'queue' ? 'magenta' : 'gray'}>Queue</Text><Text dimColor>Tab switch</Text></Box>
-		{view === 'instances' ? <Instances states={[...states.values()]} selected={selected} workspace={config.workspace} /> : <Box flexDirection="column">
+		{view === 'instances' ? <Instances states={list} selected={selected} workspace={config.workspace} answer={answer} /> : <Box flexDirection="column">
 		{active && <Box flexDirection="column" marginY={1}><Text bold>Working on #{active.ticket.number}: {active.ticket.title} · {active.status}</Text><Text>{active.selection?.harness} · {active.selection?.model} · effort: {active.selection?.effort ?? 'Not supported'}</Text></Box>}
 		{[...states.values()].map(state => <TicketRow key={state.runKey??taskKey(state.ticket,config)} state={state} />)}
 		{active && <LiveLog lines={active.logLines} harness={active.selection?.harness ?? config.harness} />}
@@ -123,6 +127,6 @@ export function App({config, tickets, cwd, resume = false}: {config: IterisConfi
 		{(pending.workspace.mode !== config.workspace.mode || pending.workspace.concurrency !== config.workspace.concurrency) && <Text dimColor>Next queue: {pending.workspace.mode} · {pending.workspace.concurrency} parallel slots</Text>}
 		{busy && !dialog && <Text dimColor>Checking settings…</Text>}
 		{finished && <Text color={hasFailures || error ? 'yellow' : 'green'}>{hasFailures || error ? 'Queue contains unfinished tasks. Run iteris status for next actions.' : 'All tickets complete.'} Press q to exit.</Text>}
-		{!dialog && !busy && <Text dimColor>↑/↓ select · / settings · q exit when idle</Text>}
+		{!dialog && !busy && answer.draft === null && <Text dimColor>↑/↓ select · {question(current) !== undefined ? 'Enter answer · ' : ''}/ settings · q exit when idle</Text>}
 	</Box>;
 }

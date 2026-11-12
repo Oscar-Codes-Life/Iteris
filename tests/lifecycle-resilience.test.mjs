@@ -91,6 +91,15 @@ test('monitoring submissions preserve the observation window and reset after fai
 test('CI evidence for an earlier base cannot satisfy the reconciled current base',async t=>{
  const {cfg,run}=await pending(t);cfg.verification.requiredCiChecks=['unit'];run.ciFreshness={head:'head',base:'base',after:new Date().toISOString()};let base='old-base',startedAt=new Date().toISOString();const api={pulls:{get:async()=>({data:{state:'open',head:{sha:'head'}}})},repos:{getBranch:async()=>({data:{protected:false,commit:{sha:'base'}}}),listCommitStatusesForRef(){}},checks:{listForRef(){}},paginate:async method=>method===api.checks.listForRef?[{name:'unit',status:'completed',conclusion:'success',started_at:startedAt,pull_requests:[{base:{sha:base}}]}]:[]};assert.equal((await verifyGithubCi(cfg,run,api)).state,'waiting');base='base';assert.equal((await verifyGithubCi(cfg,run,api)).state,'passed');startedAt='2000-01-01T00:00:00.000Z';assert.equal((await verifyGithubCi(cfg,run,api)).state,'waiting');
 });
+test('running CI is checked again after continuation.ciSeconds, every time, and failed CI keeps the growing wait',async t=>{
+ const {cwd,cfg,run}=await pending(t);const wait=()=>Math.round((Date.parse(run.dependencies.find(d=>d.id==='ci').nextRetryAt)-Date.now())/1000);
+ const running={...completionServices,ci:async()=>({state:'waiting',details:'CI Gate: waiting',head:'head',base:'base'})};
+ assert.equal(cfg.continuation.ciSeconds,600);
+ for(let check=0;check<4;check++){await advanceCompletion(cfg,run,cwd,running);assert.equal(run.state,'waiting');assert.ok(Math.abs(wait()-600)<=2,`check ${check+1} waits ${wait()}s`);}
+ cfg.continuation.ciSeconds=120;await advanceCompletion(cfg,run,cwd,running);assert.ok(Math.abs(wait()-120)<=2);
+ const failed=(await pending(t)).run,failing={...completionServices,ci:async()=>({state:'failed',details:'unit failed',head:'head',base:'base'})};
+ await advanceCompletion(cfg,failed,cwd,failing);assert.ok(Date.parse(failed.dependencies.find(d=>d.id==='ci').nextRetryAt)-Date.now()<=cfg.continuation.initialSeconds*1000);
+});
 test('failed CI invalidates prior success and prevents source completion or deployment',async t=>{
  const {cwd,cfg,run}=await pending(t);addEvidence(run,'required-ci','head','github-required-checks','previous pass',true,'base');cfg.integrations.status.github={command:command('process.exit(1)'),idempotent:true};cfg.integrations.externalActions=['deploy'];cfg.verification.stages=[{id:'deploy',kind:'deployment',required:true,idempotent:true,observationSeconds:0,verify:command('process.exit(1)'),execute:command("require('node:fs').writeFileSync('unexpected-deployment','bad')")}];
  await advanceCompletion(cfg,run,cwd,{...completionServices,ci:async()=>({state:'failed',details:'unit failed',head:'head',base:'base'}),synchronize:async()=>assert.fail('failed CI cannot complete a source task')});assert.equal(run.state,'waiting');assert.equal(run.requirements.find(r=>r.id==='required-ci').status,'pending');await assert.rejects(readFile(path.join(cwd,'unexpected-deployment')),/ENOENT/);

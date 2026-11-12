@@ -2,7 +2,7 @@ import {stateRoot} from '../state/workspace.js';
 import path from 'node:path';
 import type {IterisConfig, Ticket, TicketState} from '../types.js';
 import {ticketBranch} from '../types.js';
-import {runHarness} from '../harness/process.js';
+import {runHarness, blockedReason, BLOCKED_NOTE} from '../harness/process.js';
 import {captureContext, git} from '../review/context.js';
 import {redact} from '../harness/redact.js';
 import {taskKey} from '../lifecycle/state.js';
@@ -15,8 +15,8 @@ export async function recoverFailedTicket(options: {
 	onLogLine: (line: string) => void;
 	/** Attempt journal from earlier failed instances of this task. */
 	history?: string;
-	/** Receives the reason when recovery returns false, for the attempt journal. */
-	outcome?: {reason?: string};
+	/** Receives the reason when recovery returns false, for the attempt journal; needsPerson when the instance said only a person can continue. */
+	outcome?: {reason?: string; needsPerson?: boolean};
 }): Promise<boolean> {
 	const {ticket, config, cwd, state, plan, signal, onLogLine} = options;
 	if (signal.aborted || !state.failureReason) return false;
@@ -47,9 +47,14 @@ Attempt journal: ${path.join(stateRoot(cwd), '.iteris', 'tasks', taskKey(ticket,
 Independent review of the last reviewed commit: ${path.join(stateRoot(cwd), '.iteris', 'tasks', taskKey(ticket,config), 'artifacts', 'review', 'review.md')} summarizes the outcome, each requirement's status and each check's result; findings.json beside it gives every finding's trigger, expected and actual behavior, evidence and remedy. When the failure is a blocked review, fix every confirmed finding and missing requirement reported for the current commit, not only those named in the failure reason.
 ${options.history ? `\n${options.history}\n` : ''}${evidenceNote(cwd, branch)}
 ${REPAIR_SCOPE_NOTE}
-The host prepared this branch and will commit your source changes. If the existing committed implementation is already complete, verify it and continue without an empty commit. If the issue cannot be repaired locally, explain why and stop. Print exactly <task>done</task> on its own line only after the source changes are ready for independent review.`;
+The host prepared this branch and will commit your source changes. If the existing committed implementation is already complete, verify it and continue without an empty commit. If the issue cannot be repaired locally, explain why and stop. Print exactly <task>done</task> on its own line only after the source changes are ready for independent review.
+${BLOCKED_NOTE}`;
 	const result = await runHarness({config, phase: 'repair', prompt: redact(prompt), cwd, timeoutMs: Math.max(1,Math.min(config.timeout*1000,(config._deadline??Date.now()+config.timeout*1000)-Date.now()-config.timeout*1000*config.recovery.finalVerificationReserve)), signal,
 		onLine: line => onLogLine(`[self-heal] ${line}`)});
+	if (result.success && result.blocked) {
+		if (options.outcome) {options.outcome.reason = blockedReason(result); options.outcome.needsPerson = true;}
+		return false;
+	}
 	if (!result.success || !result.done) {
 		if (options.outcome) options.outcome.reason = `Recovery instance ${result.timedOut ? 'timed out or stalled' : 'did not finish'}: ${result.error ?? 'no completion signal'}`;
 		return false;

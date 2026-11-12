@@ -8,8 +8,9 @@ import type {FailureKind, TaskRun} from './state.js';
  * A failed attempt never abandons a task. The host records what happened, the
  * instance is stopped, the branch, commits, plan and evidence stay in place, and
  * a fresh instance later continues with this journal in its prompt. The loop
- * ends only when the task completes, is cancelled, or reaches the optional
- * `recovery.maxTaskAttempts` cap.
+ * ends only when the task completes, is cancelled, reaches the optional
+ * `recovery.maxTaskAttempts` cap, or an instance reports that the task needs
+ * something only a person can supply.
  */
 export type AttemptRecord = {
 	number: number;
@@ -44,7 +45,25 @@ export type AttemptInput = {
 	needsRepair?: boolean;
 	/** false when another dependency (transport, capability, environment) already schedules the next probe. */
 	schedule?: boolean;
+	/** The instance reported that only a person can supply what the task needs: stop instead of retrying. */
+	needsPerson?: boolean;
 };
+
+/** Thrown when an instance ends its turn with the blocked signal. The message is its explanation. */
+export class NeedsPerson extends Error {}
+
+/** What a person replied to a task that stopped because it needed them. */
+export type Answer = {at: string; question: string; text: string};
+const NEEDS_YOU = 'Needs you: ';
+/** The instance's request, when this reason is one. */
+export function personQuestion(reason: string | undefined): string | undefined {
+	return reason?.startsWith(NEEDS_YOU) ? reason.slice(NEEDS_YOU.length) : undefined;
+}
+/** Stopped until a person answers: no schedule and no resume restarts it, because a new instance would meet the same wall. */
+export function awaitingPerson(run: Pick<TaskRun, 'state' | 'attempts'>): boolean {
+	const last = run.attempts?.at(-1);
+	return run.state === 'blocked' && last?.disposition === 'stopped' && last.status === 'needs-person';
+}
 
 export const ATTEMPT_DEPENDENCY = 'attempt';
 const reasonLimit = 2000;
@@ -101,7 +120,13 @@ export function recordAttempt(run: TaskRun, config: IterisConfig, input: Attempt
 	};
 	const cap = config.recovery.maxTaskAttempts;
 	const failures = budgetFailures(repeated ? attempts.slice(0, -1) : attempts) + (input.schedule === false ? 0 : 1 + (record.repeats ?? 0));
-	if (input.schedule !== false && (!config.recovery.enabled || (cap > 0 && failures >= cap))) {
+	if (input.needsPerson) {
+		// Another instance would meet the same wall. A person supplies what is missing and resumes.
+		record.disposition = 'stopped';
+		run.dependencies = run.dependencies.filter(dependency => dependency.id !== ATTEMPT_DEPENDENCY);
+		run.state = 'blocked';
+		run.reason = `${NEEDS_YOU}${reason}`;
+	} else if (input.schedule !== false && (!config.recovery.enabled || (cap > 0 && failures >= cap))) {
 		record.disposition = 'stopped';
 		run.dependencies = run.dependencies.filter(dependency => dependency.id !== ATTEMPT_DEPENDENCY);
 		run.state = 'blocked';
@@ -149,7 +174,7 @@ function renderEntry(attempt: AttemptRecord, output: boolean): string {
 	lines.push(`Cause (${attempt.kind}): ${attempt.reason}`);
 	if (attempt.details?.length) lines.push('Details:', ...attempt.details.map(detail => `- ${detail}`));
 	if (output && attempt.logTail?.length) lines.push('Last output before the instance stopped:', ...attempt.logTail.map(line => `    ${line}`));
-	const next = attempt.disposition === 'stopped' ? 'Stopped; the task needs attention.' : attempt.disposition === 'waiting' ? 'Waiting for the recorded dependency, then a fresh instance continues.' : `A fresh instance retries${attempt.nextRetryAt ? ` after ${attempt.nextRetryAt}` : ''}${attempt.needsRepair ? ', repairing this commit before review' : ''}.`;
+	const next = attempt.disposition === 'stopped' ? (attempt.status === 'needs-person' ? 'Stopped until a person answers, in the live view or with iteris answer <task-key> "…".' : 'Stopped; the task needs attention.') : attempt.disposition === 'waiting' ? 'Waiting for the recorded dependency, then a fresh instance continues.' : `A fresh instance retries${attempt.nextRetryAt ? ` after ${attempt.nextRetryAt}` : ''}${attempt.needsRepair ? ', repairing this commit before review' : ''}.`;
 	lines.push(`Next: ${next}`);
 	return lines.join('\n');
 }
@@ -163,11 +188,33 @@ export function renderAttempts(run: TaskRun): string {
 		+ `Failed attempts: ${countedFailures(run)}${retry ? ` · Next fresh instance after: ${retry.nextRetryAt}` : ''}\n\n`
 		+ 'Each failed attempt is recorded here. Iteris stops the failed instance, keeps the branch, commits, plan and evidence, '
 		+ 'and starts a fresh instance that receives this history.\n\n'
-		+ [...attempts].reverse().map(attempt => renderEntry(attempt, true)).join('\n\n') + '\n';
+		+ [...attempts].reverse().map(attempt => renderEntry(attempt, true)).join('\n\n') + '\n'
+		+ (run.answers?.length ? `\n## Answers from a person\n\n${renderAnswers(run.answers)}\n` : '');
 }
 
 /** Compact journal for a fresh instance's prompt. Most recent attempts first, bounded in size. */
-export function attemptBriefing(run: Pick<TaskRun, 'attempts'> | undefined, limit = 5): string {
+function renderAnswers(answers: Answer[]): string {
+	return answers.map(answer => `### ${answer.at}\nAsked: ${clean(answer.question, 1500) || '(not recorded)'}\nAnswer: ${clean(answer.text, 4000)}`).join('\n\n');
+}
+
+export function attemptBriefing(run: Pick<TaskRun, 'attempts' | 'answers'> | undefined, limit = 5): string {
+	const answered = answerBriefing(run);
+	const journal = journalBriefing(run, limit);
+	return answered && journal ? `${answered}\n${journal}` : answered || journal;
+}
+
+/** What the person replied when an earlier instance stopped to ask. */
+function answerBriefing(run: Pick<TaskRun, 'answers'> | undefined): string {
+	const answers = run?.answers ?? [];
+	if (!answers.length) return '';
+	return '## Answers from the person responsible for this task\n'
+		+ 'An earlier instance stopped because the task needed something only a person could supply, and the person replied. '
+		+ 'Work from the reply: it may supply facts or where to find them, make a decision, or narrow what this task should deliver. '
+		+ 'The most recent reply is last. Do not stop for the same request again; stop again only if something else is missing.\n\n'
+		+ renderAnswers(answers.slice(-5)) + '\n';
+}
+
+function journalBriefing(run: Pick<TaskRun, 'attempts'> | undefined, limit: number): string {
 	const attempts = run?.attempts ?? [];
 	if (!attempts.length) return '';
 	const total = attempts.reduce((sum, attempt) => sum + 1 + (attempt.repeats ?? 0), 0);

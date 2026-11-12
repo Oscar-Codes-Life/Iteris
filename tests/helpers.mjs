@@ -88,6 +88,7 @@ if (args[0] === 'app-server') {
   }
   let text=prompt.startsWith('Inspect this task')?'Implementation plan':prompt.startsWith('Write a high-value pull request description')?'## Summary\\n- Adds useful behavior.\\n\\n## Changes\\n- Updates the implementation.':prompt.startsWith('You are summarizing')?'Session summary':'<task>done</task>';
   if(prompt.startsWith('Inspect this task')) {const pack=JSON.parse(prompt.split('PLANNING_INPUT_JSON\\n')[1]);text=JSON.stringify({plan:'Implementation plan',requirements:pack.requirements.map(({id,text,stage,method})=>({id,text,stage,method})),invariants:[],reproductionStrategy:'Run the behavioral fixture',fixtures:[],capabilities:pack.capabilities,checks:[]});}
+  if (process.env.FAKE_BLOCKED && prompt.startsWith(process.env.FAKE_BLOCKED==='recover'?'ITERIS_FAILURE_RECOVER':'You are an autonomous')) text='The ticket needs 14 days of production logs, which this checkout does not have.\\nExport them and attach them to the ticket.\\n<task>blocked</task>';
   if (prompt.startsWith('ITERIS_TIDY')) {
    const listed=name=>(prompt.split('\\n'+name+'\\n')[1]||'').split('\\n\\n')[0].split('\\n').filter(line=>line.startsWith('- ')).map(line=>line.slice(2));
    text=process.env.TIDY_ANSWER??JSON.stringify({remove:[...listed('ADDED').filter(file=>['evidence','scratch','e2e/grp-','.tool/'].some(part=>file.includes(part))).map(file=>({file,reason:'A leftover of the work.'})),{file:'feature.txt',reason:'Not offered; must be ignored.'}],restore:listed('COSMETIC').map(file=>({file,reason:'Unrelated formatting.'}))});

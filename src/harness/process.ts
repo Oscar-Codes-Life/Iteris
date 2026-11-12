@@ -5,7 +5,19 @@ import type {IterisConfig} from '../types.js';
 import {protectHostAuthority} from '../lifecycle/authority.js';
 
 export type Phase = 'planning' | 'implementation' | 'review' | 'repair' | 'pr-description' | 'summary' | 'import';
-export type ProcessResult = {success: boolean; text: string; finalText?: string; done: boolean; timedOut: boolean; error?: string};
+export type ProcessResult = {
+	success: boolean; text: string; finalText?: string; done: boolean; timedOut: boolean; error?: string;
+	/** The instance ended by saying the task needs something only a person can supply. */
+	blocked?: boolean;
+};
+const signals = (message: string, signal: string) => message.split(/\r?\n/).some(part => part.trim() === signal);
+/** What a writing instance is told about the two ways its turn may end. */
+export const BLOCKED_NOTE = `If the ticket cannot be finished from this checkout because it needs something only a person or another ticket can supply (a physical device, production logs or dashboards, credentials or an account, a decision, or the merged or deployed result of another ticket), do not improvise, substitute a guess, or leave a placeholder for it. Say in a few plain sentences exactly what is missing and end with the one thing you need the person to supply, decide or do, then print exactly <task>blocked</task> on its own line. Iteris then stops the task and shows your message to the person as a question with a text field; their written answer is given to the instance that continues the task. Use this only for such outside needs: never for a failing check, a hard problem, or work you can still do here.`;
+/** The instance's own explanation, without the signal line. */
+export function blockedReason(result: Pick<ProcessResult, 'finalText' | 'text'>): string {
+	const said = (result.finalText || result.text || '').split(/\r?\n/).filter(part => part.trim() !== '<task>blocked</task>').join('\n').trim();
+	return said || 'The instance gave no explanation.';
+}
 export function invocation(config: IterisConfig, phase: Phase, images: string[] = []): {command: string; args: string[]; env: NodeJS.ProcessEnv} {
 	const settings = config.harnesses[config.harness];
 	const readOnly = phase === 'planning' || phase === 'pr-description' || phase === 'summary' || phase === 'import' || phase === 'review';
@@ -69,7 +81,7 @@ export async function runHarness(options: {
 		if (options.signal?.aborted) {resolve({success: false, done: false, text: '', timedOut: false, error: 'Cancelled'}); return;}
 		const proc = spawn(command, args, {cwd: options.cwd, env, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe']});
 		options.onProcess?.(proc);
-		let text = ''; let finalText = ''; let done = false; let error: string | undefined; let timedOut = false;
+		let text = ''; let finalText = ''; let done = false; let blocked = false; let error: string | undefined; let timedOut = false;
 		let killTimer: NodeJS.Timeout | undefined;
 		const kill = (signal: NodeJS.Signals) => {
 			try {if (proc.pid && process.platform !== 'win32') process.kill(-proc.pid, signal); else proc.kill(signal);} catch { /* already exited */ }
@@ -98,7 +110,9 @@ export async function runHarness(options: {
 			if (event.assistant) {
 				text += event.assistant + '\n';
 				finalText = event.assistant;
-				if (event.assistant.split(/\r?\n/).some(part => part.trim() === '<task>done</task>')) done = true;
+				if (signals(event.assistant, '<task>done</task>')) done = true;
+				// Only the closing message counts: an instance that carried on afterwards was not stuck.
+				blocked = signals(event.assistant, '<task>blocked</task>');
 				options.onLine?.(event.assistant);
 			}
 		});
@@ -111,7 +125,7 @@ export async function runHarness(options: {
 			options.signal?.removeEventListener('abort', abort);
 			try{await verifyAuthority();}catch(failure){error=failure instanceof Error?failure.message:String(failure);}
 			const success = code === 0 && !signal && !error && !timedOut;
-			resolve({success, text: text.trim(), finalText, done, timedOut, error: error ?? (success ? undefined : `Process exited with ${signal ?? code}`)});
+			resolve({success, text: text.trim(), finalText, done, timedOut, ...(blocked && !done ? {blocked: true} : {}), error: error ?? (success ? undefined : `Process exited with ${signal ?? code}`)});
 		});
 		proc.stdin.end(options.prompt);
 	});

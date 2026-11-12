@@ -184,7 +184,11 @@ export async function advanceCompletion(config: IterisConfig, run: TaskRun, cwd:
     if (ci.state !== 'passed') {
         for (const requirement of run.requirements.filter(r => r.stage === 'ci'))
             addEvidence(run, requirement.id, head, 'github-required-checks', ci.details, false, base);
-        waitFor(run, config, 'ci', ci.state === 'failed' ? 'test' : 'external', ci.details, ci.state === 'failed' ? 'Repair failed CI, then verify the new commit' : 'Wait for checks on the published commit');
+        // Checks that are still running are looked at again after continuation.ciSeconds, every time.
+        if (ci.state === 'failed')
+            waitFor(run, config, 'ci', 'test', ci.details, 'Repair failed CI, then verify the new commit');
+        else
+            waitFor(run, config, 'ci', 'external', ci.details, 'Wait for checks on the published commit', Date.now(), config.continuation.ciSeconds);
     }
     else {
         for (const requirement of run.requirements.filter(r => r.stage === 'ci'))

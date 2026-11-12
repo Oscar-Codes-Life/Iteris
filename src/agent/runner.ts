@@ -22,7 +22,7 @@ import {recoverFailedTicket} from './failure-recovery.js';
 import {generatePrDescription, pendingDescription, prBody, ticketReference} from './pr-description.js';
 import {captureContext, assertContextBudget, publishReviewed, assertPublished, savedPlan,git} from '../review/context.js';
 import {loadPassedReview, previousEvidence, saveJson} from '../review/report.js';
-import {runHarness} from '../harness/process.js';
+import {runHarness, blockedReason} from '../harness/process.js';
 import {ensureRun, saveRun, readRun, taskKey, waitFor, recordFailure,clearVerifiedLocalDependencies, type TaskRun} from '../lifecycle/state.js';
 import {extractRequirements, verificationPack, addEvidence, reconcileEvidence} from '../lifecycle/requirements.js';
 import {prepareEnvironment,persistedManifest,CapabilityUnavailable,setupBudget} from '../lifecycle/environment.js';
@@ -31,7 +31,7 @@ import {setGithubDraft} from '../lifecycle/github-verification.js';
 import {resolveTaskConfig} from '../lifecycle/config.js';
 import {classifyFailure} from '../lifecycle/failures.js';
 import {prepareBranch,commitSourceChanges,checkpointPartialWork,integrateBase,unresolvedConflicts,mergeInProgress,abortMerge} from '../lifecycle/commit.js';
-import {recordAttempt,consumeRetry,attemptBriefing,retryScheduled,type AttemptInput} from '../lifecycle/attempts.js';
+import {recordAttempt,consumeRetry,attemptBriefing,retryScheduled,NeedsPerson,type AttemptInput} from '../lifecycle/attempts.js';
 import {planningSchema,applyPlanningPack,localPlannedChecks} from '../lifecycle/planning.js';
 import {parseOrRecoverReport} from './schema-recovery.js';
 import {importLegacyArtifacts} from '../lifecycle/migration.js';
@@ -146,14 +146,15 @@ export async function runAllTickets(tickets: Ticket[], config: IterisConfig, cwd
 						recoveryAttempts.set(failureKey, attempts + 1);
 						callbacks.onStatusChange(ticket.number, {...result, status: 'recovering'});
 						const artifacts = path.join(stateRoot(cwd), '.iteris', 'tasks', taskKey(ticket,snapshot),'artifacts');
-						const recoveryLog: string[] = [], outcome: {reason?: string} = {};
+						const recoveryLog: string[] = [], outcome: {reason?: string; needsPerson?: boolean} = {};
 						const recovered = await recoverFailedTicket({ticket, config: snapshot, cwd, state: {...result, status: result.attempt.status as TicketState['status']}, plan: checkpoint.plan ?? await savedPlan(artifacts), signal: controller.signal,
 							history: attemptBriefing(await readRun(root, run.key)), outcome,
 							onLogLine: line => {recoveryLog.push(line); callbacks.onLogLine(ticket.number, line);}});
 						if (recovered) {checkpoint.implemented = hasCommittedWork(cwd, snapshot.baseBranch); continue;}
 						if (controller.signal.aborted) break;
 						const reason = outcome.reason ?? 'Recovery instance could not repair the failure';
-						await journal({phase: 'repair', status: 'failed', kind: classifyFailure(reason, 'repair').kind, reason, head: headOf(cwd), selection: result.selection, logTail: recoveryLog}, result);
+						await journal(outcome.needsPerson ? {phase: 'repair', status: 'needs-person', kind: 'capability', reason, needsPerson: true, needsRepair: result.attempt.needsRepair, head: headOf(cwd), selection: result.selection, logTail: recoveryLog}
+							: {phase: 'repair', status: 'failed', kind: classifyFailure(reason, 'repair').kind, reason, head: headOf(cwd), selection: result.selection, logTail: recoveryLog}, result);
 						break;
 					}
 				});
@@ -320,6 +321,7 @@ async function runSingleTicket(ticket: Ticket, config: IterisConfig, cwd: string
 		if (!checkpoint.implemented) {
 			await phase('running');
 			const result = await runHarness({config, phase: 'implementation', prompt: `${prompt}${plan ? `\n\nImplement this plan:\n${plan}` : ''}`, cwd, timeoutMs: timeout(true), onLine: log, signal});
+			if (result.success && result.blocked) throw new NeedsPerson(blockedReason(result));
 			if (!result.success || !result.done) {state.status = result.timedOut ? 'stale' : 'failed'; throw new Error(result.error ?? 'Process exited without the completion signal');}
 			commitSourceChanges(cwd,state.branch,`Implement ${ticket.title}`);
 			const implemented = captureContext(ticket, config, cwd, plan);
@@ -434,6 +436,7 @@ async function runSingleTicket(ticket: Ticket, config: IterisConfig, cwd: string
 			waitFor(run,config,'preflight','environment',error.message,error.nextAction);state.status='waiting';
 			if(!signal.aborted)failAttempt(run,config,state,cwd,{phase:failedPhase,status:'waiting',kind:'environment',reason:error.message,schedule:false});
 		}
+		else if(error instanceof NeedsPerson && !signal.aborted) failAttempt(run,config,state,cwd,{phase:failedPhase,status:'needs-person',kind:'capability',reason:error.message,needsPerson:true});
 		else {
 			const failure=classifyFailure(error,run.phase),reason=error instanceof Error?error.message:String(error);
 			if(!signal.aborted && ['transport','capability','environment','external'].includes(failure.kind)){
@@ -448,9 +451,9 @@ async function runSingleTicket(ticket: Ticket, config: IterisConfig, cwd: string
 		state.status = state.status==='waiting' ? 'waiting' : signal.aborted ? 'cancelled' : failedStatus;
 		if (!signal.aborted && state.attempt?.disposition === 'retry') state.status = 'retrying';
 		else if (state.attempt?.disposition === 'stopped') state.status = 'blocked';
-		state.failureReason = error instanceof Error ? error.message : String(error);
+		state.failureReason = error instanceof NeedsPerson && run.reason ? run.reason : error instanceof Error ? error.message : String(error);
 		log(`[iteris] ${state.failureReason}`);
-		if (state.attempt) log(`[iteris] ${run.reason}`);
+		if (state.attempt && run.reason !== state.failureReason) log(`[iteris] ${run.reason}`);
 	} finally {
 		if(cancellation.cancelled()){run.state='cancelled';run.phase='cancelled';run.reason='Cancelled explicitly';state.status='cancelled';consumeRetry(run);}
 		cancellation.dispose();

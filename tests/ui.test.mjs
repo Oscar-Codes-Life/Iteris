@@ -44,6 +44,26 @@ test('provider picker offers Custom after GitHub and Trello',async t=>{
  assert.equal(selected,'custom');assert.match(ui.output(),/Custom REST endpoint/);
 });
 
+test('the instances view separates tasks that wait by themselves from tasks that need a person',async t=>{
+ const {Instances}=await import('../dist/ui/Instances.js');const {stripVTControlCharacters}=await import('node:util');
+ const stdin=new PassThrough();stdin.isTTY=true;stdin.setRawMode=()=>{};stdin.ref=()=>{};stdin.unref=()=>{};
+ const stdout=new PassThrough();stdout.columns=100;stdout.rows=40;stdout.isTTY=true;const frames=[];stdout.on('data',chunk=>frames.push(stripVTControlCharacters(chunk.toString())));
+ const state=(number,status,failureReason)=>({runKey:String(number),ticket:{number,title:`Task ${number}`},branch:`iteris/${number}`,status,failureReason,elapsedMs:0,logLines:[]});
+ const reason=`Needs you: ${'The ticket needs two phones and a build installed on each. '.repeat(3)}`;
+ const states=[state(1,'blocked',reason),state(2,'waiting','CI Gate: waiting'),state(3,'retrying','Attempt 1 failed'),state(4,'pending')];
+ const view=render(React.createElement(Instances,{states,selected:0,workspace:{mode:'worktree',concurrency:3}}),{stdin,stdout,stderr:stdout,debug:true,exitOnCtrlC:false});t.after(()=>view.unmount());
+ const last=()=>frames.findLast(frame=>frame.includes('parallel tasks'));
+ await wait(80);let frame=last();
+ assert.match(frame,/2 waiting/);assert.match(frame,/1 need you/);assert.doesNotMatch(frame,/need attention|Waiting for a task slot/);
+ assert.match(frame,/Stopped · waiting for your answer/);assert.match(frame,/Iteris needs your help to continue this task/);assert.ok(frame.replace(/[│\s]+/g,' ').includes(reason.trim().replace('Needs you: ','')),'the whole request is readable');
+ assert.match(frame,/iteris answer <task key>/);assert.doesNotMatch(frame,/Task output/);
+ view.rerender(React.createElement(Instances,{states,selected:0,workspace:{mode:'worktree',concurrency:3},answer:{draft:null}}));await wait(80);assert.match(last(),/Press Enter to type your answer/);
+ view.rerender(React.createElement(Instances,{states,selected:0,workspace:{mode:'worktree',concurrency:3},answer:{draft:'Use the simulators'}}));await wait(80);assert.match(last(),/Your answer · Enter sends · Esc cancels/);assert.match(last(),/› Use the simulators▌/);
+ view.rerender(React.createElement(Instances,{states,selected:1,workspace:{mode:'worktree',concurrency:3}}));await wait(80);frame=last();
+ assert.match(frame,/No instance running · Iteris checks again by itself/);
+ view.rerender(React.createElement(Instances,{states,selected:3,workspace:{mode:'worktree',concurrency:3}}));await wait(80);assert.match(last(),/Waiting for a task slot/);
+});
+
 for(const columns of [50,80,120]) test(`instances render long titles and paths within ${columns} columns`,async t=>{
  const {Instances}=await import('../dist/ui/Instances.js');const {Box,Text}=await import('ink');const {stripVTControlCharacters}=await import('node:util');
  const stdin=new PassThrough();stdin.isTTY=true;stdin.setRawMode=()=>{};stdin.ref=()=>{};stdin.unref=()=>{};
@@ -76,4 +96,20 @@ test('standalone monitor selects each task with the keyboard without starting a 
  for(const number of [1,2]) {const ticket={number,title:`Task ${number}`,body:'Implement feature',slug:`task-${number}`,labels:[],htmlUrl:'https://example.com'};const folder=await createRunFolder(cwd,ticket,cfg);await saveRun(cwd,await ensureRun(cwd,ticket,cfg,folder,`iteris/task-${number}`));}
  const ui=terminal(t,React.createElement(InstanceMonitor,{config:cfg,cwd}));await wait(100);
  assert.match(ui.output(),/#1 · Task 1/);ui.stdin.write('\u001b[B');await wait(60);assert.match(ui.output(),/#2 · Task 2/);assert.equal(await hasActiveRun(cwd),false);
+});
+test('a stopped task shows what it needs and a text field whose answer is saved for the queue',async t=>{
+ const {InstanceMonitor}=await import('../dist/ui/InstanceMonitor.js');const {ensureRun,saveRun}=await import('../dist/lifecycle/state.js');const {createRunFolder}=await import('../dist/state/manager.js');
+ const {recordAttempt}=await import('../dist/lifecycle/attempts.js');const {answerWaiting,takeAnswer}=await import('../dist/lifecycle/answers.js');
+ const cwd=await temporary(t),cfg=config();await atomicWriteConfig(cfg,cwd);
+ const ticket={number:1,title:'Device QA',body:'Test on devices',slug:'device-qa',labels:[],htmlUrl:'https://example.com'};
+ const run=await ensureRun(cwd,ticket,cfg,await createRunFolder(cwd,ticket,cfg),'iteris/device-qa');
+ recordAttempt(run,cfg,{phase:'running',status:'needs-person',kind:'capability',reason:'I need an iPhone and an Android phone with the build installed. Which devices can I use?',needsPerson:true});await saveRun(cwd,run);
+ const ui=terminal(t,React.createElement(InstanceMonitor,{config:cfg,cwd}));await wait(150);
+ assert.match(ui.output(),/Iteris needs your help to continue this task/);assert.match(ui.output(),/Which devices can I use\?/);assert.match(ui.output(),/Press Enter to type your answer/);assert.match(ui.output(),/Enter answer · q close monitor/);
+ ui.stdin.write('\r');await wait(60);assert.match(ui.output(),/Your answer · Enter sends · Esc cancels/);
+ // While the field is open, letters that are shortcuts elsewhere are text.
+ ui.stdin.write('quit the device part,\njust keep the unit tests');await wait(60);ui.stdin.write('\u007f');await wait(60);ui.stdin.write('s');await wait(60);
+ assert.equal(await answerWaiting(cwd,run.key),false);ui.stdin.write('\r');await wait(150);
+ assert.match(ui.output(),/Answer saved · run iteris to continue this task/);
+ assert.equal(await takeAnswer(cwd,run),true);assert.equal(run.answers[0].text,'quit the device part, just keep the unit tests');assert.match(run.answers[0].question,/^I need an iPhone/);
 });

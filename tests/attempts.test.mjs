@@ -7,7 +7,8 @@ import {atomicWriteConfig} from '../dist/config.js';
 import {runAllTickets} from '../dist/agent/runner.js';
 import {runHarness} from '../dist/harness/process.js';
 import {ensureRun, saveRun, readRun, taskKey} from '../dist/lifecycle/state.js';
-import {recordAttempt, attemptBriefing, renderAttempts, resumableBlocked, consumeRetry, countedFailures} from '../dist/lifecycle/attempts.js';
+import {recordAttempt, attemptBriefing, renderAttempts, resumableBlocked, consumeRetry, countedFailures, awaitingPerson} from '../dist/lifecycle/attempts.js';
+import {submitAnswer, takeAnswer, answerWaiting} from '../dist/lifecycle/answers.js';
 import {runWorker, schedulingOrder, unfinishedTickets} from '../dist/lifecycle/worker.js';
 import {advanceCompletion} from '../dist/lifecycle/stages.js';
 import {addEvidence, extractRequirements} from '../dist/lifecycle/requirements.js';
@@ -116,6 +117,100 @@ test('a failed attempt is journaled without prompting and a fresh instance retri
 	assert.equal(implementations.length, 2);
 	assert.doesNotMatch(implementations[0].prompt, /Previous attempts on this task/);
 	assert.match(implementations[1].prompt, /Previous attempts on this task/); assert.match(implementations[1].prompt, /Process exited with 2/);
+});
+
+test('an instance that needs a person stops the task until the person answers', async t => {
+	const {cwd, cfg, run} = await blankRun(t);
+	const record = recordAttempt(run, cfg, {phase: 'running', status: 'needs-person', kind: 'capability', reason: 'Needs two phones.', needsPerson: true});
+	assert.equal(record.disposition, 'stopped'); assert.equal(run.state, 'blocked'); assert.equal(run.reason, 'Needs you: Needs two phones.');
+	assert.equal(run.dependencies.some(d => d.id === 'attempt'), false);
+	assert.equal(awaitingPerson(run), true);
+	assert.deepEqual(schedulingOrder([run], Date.now(), false), []);
+	assert.deepEqual(schedulingOrder([run], Date.now(), true), [], 'resuming without an answer would meet the same wall');
+	assert.match(renderAttempts(run), /Stopped until a person answers/);
+	assert.equal(await takeAnswer(cwd, run), false);
+	await assert.rejects(submitAnswer(cwd, run.key, '   '), /empty/);
+	await submitAnswer(cwd, run.key, 'Use the two simulators.'); await submitAnswer(cwd, run.key, 'Skip Android 12.');
+	assert.equal(await answerWaiting(cwd, run.key), true);
+	assert.equal(await takeAnswer(cwd, run), true); assert.equal(await answerWaiting(cwd, run.key), false);
+	assert.deepEqual(run.answers.map(({question, text}) => ({question, text})), [{question: 'Needs two phones.', text: 'Use the two simulators.\nSkip Android 12.'}]);
+	assert.equal(run.state, 'waiting'); assert.equal(schedulingOrder([run], Date.now(), false).length, 1);
+	const briefing = attemptBriefing(run);
+	assert.match(briefing, /^## Answers from the person responsible for this task/); assert.match(briefing, /Asked: Needs two phones\.\nAnswer: Use the two simulators\.\nSkip Android 12\./);
+	assert.match(briefing, /## Previous attempts on this task/); assert.match(renderAttempts(run), /## Answers from a person/);
+});
+
+test('the blocked signal ends the attempt loop without a retry or a repair instance', async t => {
+	const {cwd} = await reviewRepository(t); await executable(cwd, 'codex', fakeAgent);
+	environment(t, {PATH: `${cwd}:${process.env.PATH}`, FAKE_IMPLEMENT: undefined, FAKE_MODE: undefined, FAKE_BLOCKED: '1', REVIEW_SCENARIO: undefined, CAPTURE: path.join(cwd, 'calls.jsonl')});
+	const cfg = config('codex'); cfg.planMode = false; await atomicWriteConfig(cfg, cwd);
+	const seen = [], api = services();
+	await runAllTickets([ticket(1)], cfg, cwd, {...quiet, onStatusChange: (_, state) => {seen.push(state);}}, undefined, api);
+	let run = await readRun(cwd, taskKey(ticket(1), cfg));
+	assert.equal(run.state, 'blocked', run.reason);
+	assert.match(run.reason, /^Needs you: The ticket needs 14 days of production logs/); assert.doesNotMatch(run.reason, /<task>/);
+	assert.equal(run.attempts.length, 1); assert.equal(run.attempts[0].disposition, 'stopped'); assert.equal(run.attempts[0].status, 'needs-person');
+	assert.equal(seen.at(-1).status, 'blocked'); assert.match(seen.at(-1).failureReason, /^Needs you: /);
+	assert.equal((await calls(cwd)).length, 1, 'no repair instance and no second attempt');
+	assert.match((await calls(cwd))[0].prompt, /print exactly <task>blocked<\/task>/);
+	assert.equal((await unfinishedTickets(cwd, cfg)).length, 0);
+	// Neither a watching queue nor iteris resume starts another instance: only an answer does.
+	await runWorker({cwd, config: cfg, once: true, services: api, callbacks: quiet, adapter: () => ({refresh: async task => task})});
+	await runWorker({cwd, config: cfg, once: true, force: true, services: api, callbacks: quiet, adapter: () => ({refresh: async task => task})});
+	assert.equal((await calls(cwd)).length, 1);
+	delete process.env.FAKE_BLOCKED; process.env.FAKE_IMPLEMENT = '1';
+	await submitAnswer(cwd, run.key, 'The export is in docs/logs.csv.');
+	assert.equal((await unfinishedTickets(cwd, cfg)).length, 1, 'an answered task is work again');
+	await runWorker({cwd, config: cfg, once: true, services: api, callbacks: quiet, adapter: () => ({refresh: async task => task})});
+	run = await readRun(cwd, run.key);
+	assert.equal(run.state, 'complete', run.reason);
+	const second = (await calls(cwd)).filter(call => call.prompt.startsWith('You are an autonomous'))[1];
+	assert.match(second.prompt, /## Answers from the person responsible for this task[\s\S]*Asked: The ticket needs 14 days of production logs[\s\S]*Answer: The export is in docs\/logs\.csv\./);
+});
+
+test('a live queue keeps watching a task that asked and continues it as soon as the answer arrives', async t => {
+	const {cwd} = await reviewRepository(t); await executable(cwd, 'codex', fakeAgent);
+	environment(t, {PATH: `${cwd}:${process.env.PATH}`, FAKE_IMPLEMENT: undefined, FAKE_MODE: undefined, FAKE_BLOCKED: '1', REVIEW_SCENARIO: undefined, CAPTURE: path.join(cwd, 'calls.jsonl')});
+	const cfg = config('codex'); cfg.planMode = false; await atomicWriteConfig(cfg, cwd);
+	const api = services(), key = taskKey(ticket(1), cfg);
+	await runAllTickets([ticket(1)], cfg, cwd, quiet, undefined, api);
+	assert.equal((await readRun(cwd, key)).state, 'blocked');
+	// Without a person at the screen the queue has nothing left to do; with one it waits for the answer.
+	await runWorker({cwd, config: cfg, services: api, callbacks: quiet, adapter: () => ({refresh: async task => task})});
+	let finished = false;
+	const queue = runWorker({cwd, config: cfg, services: api, answers: true, callbacks: quiet, adapter: () => ({refresh: async task => task})}).then(() => {finished = true;});
+	await new Promise(resolve => setTimeout(resolve, 1500));
+	assert.equal(finished, false);
+	delete process.env.FAKE_BLOCKED; process.env.FAKE_IMPLEMENT = '1';
+	const answered = Date.now();
+	await submitAnswer(cwd, key, 'Use the export in docs/logs.csv.');
+	await queue;
+	assert.equal((await readRun(cwd, key)).state, 'complete');
+	assert.ok(Date.now() - answered < 30_000);
+});
+
+test('a repair instance that needs a person stops the task instead of scheduling another repair', async t => {
+	const {cwd} = await reviewRepository(t); await executable(cwd, 'codex', fakeAgent);
+	environment(t, {PATH: `${cwd}:${process.env.PATH}`, FAKE_IMPLEMENT: '1', FAKE_FEATURE: 'broken', FAKE_MODE: undefined, FAKE_BLOCKED: undefined, REVIEW_SCENARIO: undefined, CAPTURE: path.join(cwd, 'calls.jsonl')});
+	const cfg = config('codex'); cfg.planMode = false; cfg.recovery.attempts = 0; await atomicWriteConfig(cfg, cwd);
+	const api = services();
+	await runAllTickets([ticket(1)], cfg, cwd, quiet, undefined, api);
+	let run = await readRun(cwd, taskKey(ticket(1), cfg));
+	assert.equal(run.state, 'waiting', run.reason); assert.equal(run.attempts.at(-1).needsRepair, true);
+	process.env.FAKE_BLOCKED = 'recover';
+	await runWorker({cwd, config: cfg, once: true, force: true, services: api, callbacks: quiet, adapter: () => ({refresh: async task => task})});
+	run = await readRun(cwd, run.key);
+	assert.equal(run.state, 'blocked', run.reason); assert.match(run.reason, /^Needs you: The ticket needs 14 days/);
+	assert.equal(run.attempts.at(-1).disposition, 'stopped'); assert.equal(run.attempts.at(-1).phase, 'repair');
+	assert.equal((await unfinishedTickets(cwd, cfg)).length, 0);
+	// The answer goes to a repair instance for the same commit, not to a second review of it.
+	delete process.env.FAKE_BLOCKED; process.env.REVIEW_SCENARIO = 'recover-ticket-failure';
+	await submitAnswer(cwd, run.key, 'Remove the broken branch of the feature.');
+	await runWorker({cwd, config: cfg, once: true, services: api, callbacks: quiet, adapter: () => ({refresh: async task => task})});
+	run = await readRun(cwd, run.key);
+	assert.equal(run.state, 'complete', run.reason);
+	const repairs = (await calls(cwd)).filter(call => call.prompt.startsWith('ITERIS_FAILURE_RECOVER'));
+	assert.equal(repairs.length, 2); assert.match(repairs[1].prompt, /Answer: Remove the broken branch of the feature\./);
 });
 
 test('a blocked review keeps its draft and a fresh repair instance fixes the reviewed commit', async t => {

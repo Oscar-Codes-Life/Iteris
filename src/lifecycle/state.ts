@@ -111,6 +111,8 @@ export type TaskRun = {
     changeSize?: import('../review/context.js').ChangeSize;
     /** Journal of failed attempts; a fresh instance receives it in its prompt. */
     attempts?: AttemptRecord[];
+    /** Replies from a person to an instance that stopped to ask; a fresh instance receives them in its prompt. */
+    answers?: import('./attempts.js').Answer[];
 };
 export function sourceIdentity(ticket: Ticket, config: IterisConfig): NonNullable<Ticket['source']> {
     if (ticket.source)
@@ -231,10 +233,11 @@ export async function rebindLegacyIdentity(cwd: string, run: TaskRun, ticket: Ti
     previous.reason = `Identity reconciled to ${key}`;
     await saveRun(cwd, previous);
 }
-export function waitFor(run: TaskRun, config: IterisConfig, id: string, kind: FailureKind, description: string, nextAction: string, now = Date.now()): void {
+export function waitFor(run: TaskRun, config: IterisConfig, id: string, kind: FailureKind, description: string, nextAction: string, now = Date.now(), seconds?: number): void {
     const old = run.dependencies.find(d => d.id === id);
     const attempts = (old?.attempts ?? 0) + 1;
-    const interval = Math.min(config.continuation.maxSeconds, config.continuation.initialSeconds * 2 ** Math.min(attempts - 1, 10));
+    // A fixed wait when the caller knows how long the thing it waits for takes; otherwise a growing one.
+    const interval = seconds ?? Math.min(config.continuation.maxSeconds, config.continuation.initialSeconds * 2 ** Math.min(attempts - 1, 10));
     run.dependencies = [...run.dependencies.filter(d => d.id !== id), { id, kind, description, nextAction, lastProbe: new Date(now).toISOString(), nextRetryAt: new Date(now + interval * 1000).toISOString(), attempts }];
     run.state = 'waiting';
     run.reason = description;

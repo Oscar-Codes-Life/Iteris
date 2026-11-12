@@ -7,6 +7,7 @@ import {listRuns} from '../lifecycle/state.js';
 import {retryScheduled} from '../lifecycle/attempts.js';
 import {hasActiveRun} from '../state/active.js';
 import {Instances} from './Instances.js';
+import {useAnswer, question} from './answer.js';
 
 export async function readInstances(cwd: string, config: IterisConfig): Promise<TicketState[]> {
 	const active = await hasActiveRun(cwd);
@@ -41,7 +42,10 @@ export function InstanceMonitor({cwd, config}: {cwd: string; config: IterisConfi
 		};
 		void refresh(); return () => {stopped = true; clearTimeout(timer);};
 	}, [cwd, config]);
+	const current = states[Math.min(selected, Math.max(0, states.length - 1))];
+	const answer = useAnswer(cwd, current);
 	useInput((input, key) => {
+		if (answer.handle(input, key)) return;
 		if (input === 'q' || key.escape) exit();
 		if (key.upArrow || input === 'k') setSelected(value => Math.max(0, value - 1));
 		if (key.downArrow || input === 'j') setSelected(value => Math.min(states.length - 1, value + 1));
@@ -49,8 +53,8 @@ export function InstanceMonitor({cwd, config}: {cwd: string; config: IterisConfi
 	return <Box flexDirection="column" paddingX={1}>
 		<Text bold color="magenta">Iteris · {config.repo}</Text>
 		<Text bold>Instances <Text dimColor>· live project overview</Text></Text>
-		<Instances states={states} selected={selected} workspace={config.workspace} />
+		<Instances states={states} selected={selected} workspace={config.workspace} answer={answer} />
 		{error && <Text color="red">{error}</Text>}
-		<Text dimColor>↑/↓ select · q close monitor · tasks keep running</Text>
+		{answer.draft === null && <Text dimColor>↑/↓ select · {question(current) !== undefined ? 'Enter answer · ' : ''}q close monitor · tasks keep running</Text>}
 	</Box>;
 }

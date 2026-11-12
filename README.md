@@ -87,6 +87,7 @@ Run these from the root of the target Git repository. Iteris reads `.iteris.json
 | `iteris` | Resume unfinished work or select tasks, then watch persisted dependencies in the foreground. |
 | `iteris --once` | Perform one scheduling pass without watching. |
 | `iteris resume --once` | Refresh dependencies and reconcile unfinished tasks, including blocked work. |
+| `iteris answer <task-key> "text"` | Answer a task that stopped because it needs you; a fresh instance continues it. |
 | `iteris status`, `iteris doctor` | Inspect requirements/provenance or project prerequisites. |
 | `iteris evidence <key> <receipt.json>`, `iteris cancel <key>` | Submit external evidence or cancel persisted work. |
 | `iteris describe [key \| --all] [--rewrite] [--dry-run]` | Refresh the description, review and completion parts of published pull requests from the final diff and the saved run. A current description is kept unless `--rewrite` is given. `--all` also heals and tidies older pull requests, merged or closed. |
@@ -294,7 +295,7 @@ Iteris is built to finish a backlog over hours or days, so a failed attempt neve
 4. reschedules the ticket with backoff and continues the queue;
 5. starts a fresh instance whose prompt includes the ticket and the journal of earlier failures. If review blocked a commit, a repair instance fixes that commit before review runs again.
 
-Within one attempt, up to `recovery.attempts` immediate repairs (default 2) run before the ticket is rescheduled. Fresh attempts are unlimited by default; set `recovery.maxTaskAttempts` to stop a ticket after that many failures. A stopped ticket keeps its journal and resumes with a fresh budget through `iteris resume`. Waits for external evidence and provider outages are probed with backoff and do not count. Tasks left blocked by earlier Iteris versions rejoin the loop automatically. Later attempts use the harness selection current when they start, so switching models with `/model` applies to a stuck ticket's next attempt.
+Within one attempt, up to `recovery.attempts` immediate repairs (default 2) run before the ticket is rescheduled. Fresh attempts are unlimited by default; set `recovery.maxTaskAttempts` to stop a ticket after that many failures. An instance that finds the ticket needs something only a person or another ticket can supply (a device, production logs, credentials, a decision, another ticket's merged result) says what is missing and prints `<task>blocked</task>`; the ticket then stops at once and asks you. Select it in the live view, press Enter, type your answer and press Enter again (or run `iteris answer <task-key> "…"`): a fresh instance continues the ticket with your answer in its prompt. A ticket stopped by `recovery.maxTaskAttempts` keeps its journal and resumes with a fresh budget through `iteris resume`. Waits for external evidence and provider outages are probed with backoff and do not count. While a pull request's CI is still running, Iteris checks it again every `continuation.ciSeconds` (default 600, ten minutes); set it lower or higher in `.iteris.json`. Tasks left blocked by earlier Iteris versions rejoin the loop automatically. Later attempts use the harness selection current when they start, so switching models with `/model` applies to a stuck ticket's next attempt.
 
 State lives in `.iteris/tasks/<stable-key>/run.json`; Markdown reports are views. Keys include repository, provider, source namespace and stable source ID. Artifacts, plans, logs and review checkpoints live under the task's `artifacts/` directory. Legacy folders remain intact during migration. See [the lifecycle guide](docs/lifecycle.md) for all commands, schemas and recovery rules.
 
@@ -354,7 +355,7 @@ npm run eval:review -- --case zero-default --harness codex
 | Custom tasks look stale or downloaded files are invalid | Run `iteris refresh` to fetch and convert them again. |
 | A queue reports an active or stale lock | Confirm the previous Iteris process has stopped, then remove `.iteris/active.json` if the lock is stale. |
 | A ticket keeps retrying | Read `.iteris/tasks/<key>/attempts.md` (the key is shown by `iteris status`) for every failed attempt's cause and last output. Fix a shared prerequisite, switch `/model`, or cancel with `iteris cancel <key>`. |
-| A ticket is blocked | It reached `recovery.maxTaskAttempts` or recovery is disabled. Read its `attempts.md`, then run `iteris resume` to grant a fresh attempt budget. |
+| A ticket is blocked | Its reason says why. `Needs you: …` means an instance could not continue without something only you can supply: answer it in the live view (Enter on the task) or with `iteris answer <key> "…"`, or drop it with `iteris cancel <key>`. Otherwise it reached `recovery.maxTaskAttempts` or recovery is disabled: read its `attempts.md`, then run `iteris resume` to grant a fresh attempt budget. |
 
 Follow [Upgrading](#upgrading) to update Iteris itself. `iteris setup` checks harness prerequisites and authentication; it does not update global tools.
 

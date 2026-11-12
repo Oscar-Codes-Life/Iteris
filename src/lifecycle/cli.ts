@@ -9,6 +9,8 @@ import { runWorker } from './worker.js';
 import { keepAwake } from '../harness/awake.js';
 import { acquireRun, hasActiveRun } from '../state/active.js';
 import { requestCancellation } from './cancellation.js';
+import { submitAnswer } from './answers.js';
+import { awaitingPerson } from './attempts.js';
 import { resolveTaskConfig } from './config.js';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -16,7 +18,7 @@ import { generatePrDescription } from '../agent/pr-description.js';
 import { updatePrSections, listIterisPrs, hasPlaceholderDescription, prChanges, updatePrBody, healPublishedBody, tidyPublishedBody, REVIEW_START, REVIEW_END } from '../github/pr.js';
 import { loadReportText } from '../review/report.js';
 export async function lifecycleCommand(command: string, args: string[], config: IterisConfig, cwd: string): Promise<boolean> {
-    if (!['status', 'resume', 'doctor', 'evidence', 'cancel', 'describe'].includes(command))
+    if (!['status', 'resume', 'doctor', 'evidence', 'cancel', 'describe', 'answer'].includes(command))
         return false;
     if (command === 'status') {
         const runs = args[0] ? [await readRun(cwd, args[0])].filter(Boolean) : await listRuns(cwd, config.repo);
@@ -166,6 +168,16 @@ export async function lifecycleCommand(command: string, args: string[], config: 
             }
         }
         console.log('Cancellation recorded. The active task stops at the next cancellation checkpoint.');
+        return true;
+    }
+    if (command === 'answer') {
+        const text = args.slice(1).join(' ').trim();
+        if (!text)
+            throw new Error('Usage: iteris answer <task-key> "your answer"');
+        if (!awaitingPerson((await readRun(cwd, key))!))
+            throw new Error('That task is not waiting for an answer. iteris status shows what each task needs.');
+        await submitAnswer(cwd, key, text);
+        console.log(await hasActiveRun(cwd) ? 'Answer saved. The running queue starts a fresh instance for this task.' : 'Answer saved. Run iteris to continue the task.');
         return true;
     }
     const filename = args[1];

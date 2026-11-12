@@ -22,7 +22,8 @@ import { importLegacyArtifacts } from './migration.js';
 import { cancellationScope, cancellationRequested } from './cancellation.js';
 import { checkpointPartialWork } from './commit.js';
 import { localPlannedChecks } from './planning.js';
-import { recordAttempt, consumeRetry, latestAttempt, attemptBriefing, resumableBlocked, type AttemptInput } from './attempts.js';
+import { recordAttempt, consumeRetry, latestAttempt, attemptBriefing, resumableBlocked, awaitingPerson, type AttemptInput } from './attempts.js';
+import { takeAnswer, answerWaiting } from './answers.js';
 import type { TicketState } from '../types.js';
 export type WorkerOptions = {
     config: IterisConfig;
@@ -35,9 +36,11 @@ export type WorkerOptions = {
     adapter?: (config: IterisConfig) => TaskSourceAdapter;
     now?: () => number;
     sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+    /** A person can answer here (the live view): keep watching while a task waits for an answer. */
+    answers?: boolean;
 };
 export function schedulingOrder(runs: TaskRun[], now = Date.now(), force = false): TaskRun[] {
-    return runs.filter(run => ['queued', 'active'].includes(run.state) || (run.state === 'waiting' && (force || !run.dependencies.length || run.dependencies.some(d => Date.parse(d.nextRetryAt) <= now))) || (run.state === 'blocked' && (force || resumableBlocked(run)))).sort((a, b) => Number(a.state === 'waiting') - Number(b.state === 'waiting') || a.createdAt.localeCompare(b.createdAt));
+    return runs.filter(run => ['queued', 'active'].includes(run.state) || (run.state === 'waiting' && (force || !run.dependencies.length || run.dependencies.some(d => Date.parse(d.nextRetryAt) <= now))) || (run.state === 'blocked' && (resumableBlocked(run) || (force && !awaitingPerson(run))))).sort((a, b) => Number(a.state === 'waiting') - Number(b.state === 'waiting') || a.createdAt.localeCompare(b.createdAt));
 }
 async function pause(ms: number, signal?: AbortSignal) {
     if (signal?.aborted)
@@ -80,6 +83,11 @@ async function workQueue(options: WorkerOptions): Promise<void> {
                     run.phase = 'cancelled';
                     run.reason = 'Cancelled explicitly';
                     await saveRun(cwd, run);
+                }
+                // A person's answer schedules a fresh instance for the task that asked.
+                else if (await takeAnswer(cwd, run, now())) {
+                    await saveRun(cwd, run);
+                    callbacks.onLogLine(run.ticket.number, '[continuation] Your answer was received; a fresh instance continues the task.');
                 }
             const resumeRun = async (run: TaskRun) => {
                 if (signal?.aborted)
@@ -153,14 +161,16 @@ async function workQueue(options: WorkerOptions): Promise<void> {
                         // A fresh repair instance runs before review whenever the last verdict concerned this exact commit.
                         const repairFirst = async (reason: string, failure: Pick<AttemptInput, 'phase' | 'kind'>): Promise<boolean> => {
                             snapshot._deadline = now() + snapshot.timeout * 1000;
-                            const before = head(cwd), logLines: string[] = [], outcome: { reason?: string } = {};
+                            const before = head(cwd), logLines: string[] = [], outcome: { reason?: string; needsPerson?: boolean } = {};
                             const repaired = await recoverFailedTicket({ ticket, config: snapshot, cwd, state: { ticket, status: 'blocked', branch: run.branch, logLines: [], elapsedMs: 0, failureReason: reason }, plan: run.plan ?? '', signal: taskSignal, history: attemptBriefing(run), outcome, onLogLine: line => { logLines.push(line); callbacks.onLogLine(ticket.number, line); } });
                             if (taskSignal.aborted)
                                 return false;
                             if (!repaired) {
                                 // No change: the next fresh attempt re-runs the full pass for a new verdict
                                 // instead of repeating the same repair. Failed CI always repairs first.
-                                await fail({ ...failure, status: 'failed', reason: outcome.reason ?? 'Repair produced no new commit', head: before, logTail: logLines });
+                                await fail(outcome.needsPerson
+                                    ? { phase: failure.phase, status: 'needs-person', kind: 'capability', reason: outcome.reason ?? 'The instance gave no explanation.', needsPerson: true, needsRepair: true, head: before, logTail: logLines }
+                                    : { ...failure, status: 'failed', reason: outcome.reason ?? 'Repair produced no new commit', head: before, logTail: logLines });
                                 return false;
                             }
                             consumeRetry(run);
@@ -252,13 +262,30 @@ async function workQueue(options: WorkerOptions): Promise<void> {
         force = false;
         if (options.once || !config.continuation.watch || signal?.aborted)
             return;
-        const waiting = (await listRuns(cwd, config.repo)).filter(run => ['queued', 'active', 'waiting'].includes(run.state) || resumableBlocked(run));
-        if (!waiting.length)
+        const all = await listRuns(cwd, config.repo);
+        const waiting = all.filter(run => ['queued', 'active', 'waiting'].includes(run.state) || resumableBlocked(run));
+        const asked = options.answers ? all.filter(awaitingPerson) : [];
+        if (!waiting.length && !asked.length)
             return;
         const next = Math.min(...waiting.flatMap(run => run.dependencies.map(d => Date.parse(d.nextRetryAt))));
-        await (options.sleep ?? pause)(Math.max(1, Math.min(60000, Number.isFinite(next) ? next - now() : config.continuation.initialSeconds * 1000)), signal);
+        const delay = Math.max(1, Math.min(60000, Number.isFinite(next) ? next - now() : config.continuation.initialSeconds * 1000));
+        if (options.sleep || !asked.length)
+            await (options.sleep ?? pause)(delay, signal);
+        else {
+            // An answer should start its task at once, not at the end of the wait.
+            for (const until = Date.now() + delay; Date.now() < until && !signal?.aborted;) {
+                if ((await Promise.all(asked.map(run => answerWaiting(cwd, run.key)))).some(Boolean))
+                    break;
+                await pause(Math.min(1000, Math.max(1, until - Date.now())), signal);
+            }
+        }
     } while (!signal?.aborted);
 }
 export async function unfinishedTickets(cwd: string, config: IterisConfig): Promise<Ticket[]> {
-    return (await listRuns(cwd, config.repo)).filter(run => ['queued', 'active', 'waiting'].includes(run.state) || resumableBlocked(run)).map(run => ({ ...run.ticket, source: run.source }));
+    const runs = await listRuns(cwd, config.repo), answered = new Set<string>();
+    // A task that was answered while no queue was running is work again.
+    for (const run of runs.filter(awaitingPerson))
+        if (await answerWaiting(cwd, run.key))
+            answered.add(run.key);
+    return runs.filter(run => ['queued', 'active', 'waiting'].includes(run.state) || resumableBlocked(run) || answered.has(run.key)).map(run => ({ ...run.ticket, source: run.source }));
 }
