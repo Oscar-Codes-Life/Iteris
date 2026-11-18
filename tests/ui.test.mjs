@@ -64,6 +64,17 @@ test('the instances view separates tasks that wait by themselves from tasks that
  view.rerender(React.createElement(Instances,{states,selected:3,workspace:{mode:'worktree',concurrency:3}}));await wait(80);assert.match(last(),/Waiting for a task slot/);
 });
 
+test('an answered task stops counting as needing the person while it waits for a slot',async t=>{
+ const {Instances}=await import('../dist/ui/Instances.js');const {stripVTControlCharacters}=await import('node:util');
+ const stdin=new PassThrough();stdin.isTTY=true;stdin.setRawMode=()=>{};stdin.ref=()=>{};stdin.unref=()=>{};
+ const stdout=new PassThrough();stdout.columns=100;stdout.rows=40;stdout.isTTY=true;const frames=[];stdout.on('data',chunk=>frames.push(stripVTControlCharacters(chunk.toString())));
+ const state=(number,answered)=>({runKey:String(number),ticket:{number,title:`Task ${number}`},branch:`iteris/${number}`,status:'blocked',failureReason:'Needs you: Which devices can I use?',answered,elapsedMs:0,logLines:[]});
+ const view=render(React.createElement(Instances,{states:[state(1,true),state(2,false)],selected:0,workspace:{mode:'worktree',concurrency:3},answer:{draft:null}}),{stdin,stdout,stderr:stdout,debug:true,exitOnCtrlC:false});t.after(()=>view.unmount());
+ await wait(80);const frame=frames.findLast(frame=>frame.includes('parallel tasks'));
+ assert.match(frame,/1 waiting/);assert.match(frame,/1 need you/);assert.match(frame,/◷ #1 Task 1[\s\S]*answered/);assert.match(frame,/! #2 Task 2[\s\S]*blocked/);
+ assert.match(frame,/You answered this task/);assert.match(frame,/Answer received · continues as soon as a task slot is free · Enter adds to your answer/);
+});
+
 for(const columns of [50,80,120]) test(`instances render long titles and paths within ${columns} columns`,async t=>{
  const {Instances}=await import('../dist/ui/Instances.js');const {Box,Text}=await import('ink');const {stripVTControlCharacters}=await import('node:util');
  const stdin=new PassThrough();stdin.isTTY=true;stdin.setRawMode=()=>{};stdin.ref=()=>{};stdin.unref=()=>{};
@@ -111,5 +122,7 @@ test('a stopped task shows what it needs and a text field whose answer is saved 
  ui.stdin.write('quit the device part,\njust keep the unit tests');await wait(60);ui.stdin.write('\u007f');await wait(60);ui.stdin.write('s');await wait(60);
  assert.equal(await answerWaiting(cwd,run.key),false);ui.stdin.write('\r');await wait(150);
  assert.match(ui.output(),/Answer saved · run iteris to continue this task/);
+ // With no queue running nothing takes the answer, so after the next refresh the task still needs the person.
+ await wait(1200);const latest=ui.output().split('live project overview').at(-1);assert.match(latest,/1 need you/);assert.match(latest,/Iteris needs your help to continue this task/);
  assert.equal(await takeAnswer(cwd,run),true);assert.equal(run.answers[0].text,'quit the device part, just keep the unit tests');assert.match(run.answers[0].question,/^I need an iPhone/);
 });

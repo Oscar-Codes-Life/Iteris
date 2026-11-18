@@ -14,7 +14,7 @@ export type AnswerField = {draft: string | null; note?: string};
  * Escape closes it. While it is open every key belongs to it, so the view's own shortcuts must stand aside:
  * `handle` returns true for a key it used.
  */
-export function useAnswer(cwd: string, current: TicketState | undefined): AnswerField & {handle: (input: string, key: Key) => boolean} {
+export function useAnswer(cwd: string, current: TicketState | undefined, onSent?: (key: string) => void): AnswerField & {handle: (input: string, key: Key) => boolean} {
 	const [draft, setDraft] = useState<string | null>(null);
 	const [notes, setNotes] = useState<Record<string, string>>({});
 	const key = current?.runKey, asking = !!key && question(current) !== undefined;
@@ -34,7 +34,10 @@ export function useAnswer(cwd: string, current: TicketState | undefined): Answer
 			if (!draft.trim()) return true;
 			setDraft(null);
 			const note = (text: string) => setNotes(previous => ({...previous, [key]: text}));
-			void submitAnswer(cwd, key, draft).then(async () => note(await hasActiveRun(cwd) ? 'Answer sent · a fresh instance continues this task on the queue\'s next round' : 'Answer saved · run iteris to continue this task'), error => note(`Could not save the answer: ${error instanceof Error ? error.message : String(error)}`));
+			void submitAnswer(cwd, key, draft).then(async () => {
+				if (!await hasActiveRun(cwd)) {note('Answer saved · run iteris to continue this task'); return;}
+				onSent?.(key); note('Answer sent · a fresh instance continues this task as soon as a task slot is free');
+			}, error => note(`Could not save the answer: ${error instanceof Error ? error.message : String(error)}`));
 		}
 		else if (pressed.backspace || pressed.delete) setDraft(value => value?.slice(0, -1) ?? '');
 		else if (!pressed.ctrl && !pressed.meta && !pressed.tab && input) {

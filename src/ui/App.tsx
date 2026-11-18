@@ -95,7 +95,8 @@ export function App({config, tickets, cwd, resume = false}: {config: IterisConfi
 		gate.current = configure(parts[0]!, parts[1], {picker: pick, cwd, active: true}).then(next => {setPending(next);}, failure => {setError(failure instanceof Error ? failure.message : String(failure));}).finally(() => setBusy(false));
 	}
 	const list = [...states.values()], current = view === 'instances' ? list[Math.min(selected, Math.max(0, list.length - 1))] : undefined;
-	const answer = useAnswer(cwd, current);
+	// The queue takes the answer when a slot is free; until then the task no longer needs the person.
+	const answer = useAnswer(cwd, current, key => setStates(previous => {const state = previous.get(key); return state ? new Map(previous).set(key, {...state, answered: true}) : previous;}));
 	useInput((input, key) => {
 		if (dialog || busy) return;
 		if (commandText === null && answer.handle(input, key)) return;

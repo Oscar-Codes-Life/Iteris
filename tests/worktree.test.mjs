@@ -104,6 +104,14 @@ test('workspace settings persist without harness discovery and invalid paralleli
  await assert.rejects(configure('workspace','unknown',{cwd}));
 });
 
+test('pool starts work that joins while it runs, asks only when a slot is free, and ends with its last job',async()=>{
+ const finished=[];let asks=0;
+ await runPool([1],2,async value=>{await new Promise(r=>setTimeout(r,value===1?200:10));finished.push(value);},undefined,async()=>++asks===3?[2]:[],20);
+ assert.deepEqual(finished,[2,1],'the joining job ran while the first one held its slot');
+ const calls=asks;await new Promise(r=>setTimeout(r,60));assert.equal(asks,calls,'nothing is asked once the pool ends');
+ asks=0;await runPool([1],1,async()=>{await new Promise(r=>setTimeout(r,100));},undefined,async()=>{asks++;return [];},10);
+ assert.equal(asks,2,'a full pool is asked only when a slot frees');
+});
 test('pool stops starting jobs on failure and drains every started job',async()=>{
  const started=[],finished=[];
  await assert.rejects(runPool([1,2,3],2,async value=>{started.push(value);await new Promise(r=>setTimeout(r,value===1?10:40));finished.push(value);if(value===1)throw new Error('failure');}),/failure/);

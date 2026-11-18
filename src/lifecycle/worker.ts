@@ -23,7 +23,7 @@ import { cancellationScope, cancellationRequested } from './cancellation.js';
 import { checkpointPartialWork } from './commit.js';
 import { localPlannedChecks } from './planning.js';
 import { recordAttempt, consumeRetry, latestAttempt, attemptBriefing, resumableBlocked, awaitingPerson, type AttemptInput } from './attempts.js';
-import { takeAnswer, answerWaiting } from './answers.js';
+import { takeAnswer, takeAnswers, answerWaiting } from './answers.js';
 import type { TicketState } from '../types.js';
 export type WorkerOptions = {
     config: IterisConfig;
@@ -89,175 +89,17 @@ async function workQueue(options: WorkerOptions): Promise<void> {
                     await saveRun(cwd, run);
                     callbacks.onLogLine(run.ticket.number, '[continuation] Your answer was received; a fresh instance continues the task.');
                 }
-            const resumeRun = async (run: TaskRun) => {
-                if (signal?.aborted)
-                    return;
-                const cancellation = await cancellationScope(cwd, run.key, signal), taskSignal = cancellation.signal;
-                const snapshot = { ...config, provider: run.source.provider, _requirements: run.requirements, _plannedChecks: localPlannedChecks(run) };
-                const root = cwd;
-                const notify = async (state: TicketState) => {
-                    callbacks.onStatusChange(state.ticket.number, state);
-                    try { await callbacks.onAttemptFailed?.(state.ticket.number, state); }
-                    catch (error) { callbacks.onLogLine(state.ticket.number, `[continuation] Attempt notification failed: ${String(error)}`); }
-                };
-                // Journal a failure and report it. Returns false when the attempt cap stopped the task.
-                const fail = async (input: AttemptInput, target: TaskRun = run): Promise<boolean> => {
-                    const record = recordAttempt(target, snapshot, input);
-                    await saveRun(cwd, target);
-                    callbacks.onLogLine(target.ticket.number, `[continuation] ${target.reason}`);
-                    await notify({ ticket: target.ticket, runKey: target.key, status: record.disposition === 'stopped' ? 'blocked' : record.disposition === 'retry' ? 'retrying' : 'waiting', branch: target.branch, workspace: target.workspace, failureReason: target.reason, logLines: input.logTail ?? [], elapsedMs: 0, attempt: { number: record.number, status: record.status, disposition: record.disposition, ...(record.nextRetryAt ? { nextRetryAt: record.nextRetryAt } : {}) } });
-                    return record.disposition !== 'stopped';
-                };
-                const head = (cwd: string) => { try { return git(cwd, ['rev-parse', 'HEAD']).trim(); } catch { return undefined; } };
-                // A blocked task selected here re-enters the attempt loop (legacy abandonment or an explicit resume).
-                if (run.state === 'blocked') {
-                    run.state = 'queued';
-                    await saveRun(cwd, run);
-                }
-                try {
-                    const adapter = options.adapter?.(snapshot) ?? sourceAdapter(snapshot, cwd);
-                    const ticket = { ...await adapter.refresh({ ...run.ticket, source: run.source }), branch: run.branch };
-                    await rebindLegacyIdentity(cwd, run, ticket, snapshot);
-                    if (taskFingerprint(ticket) !== run.fingerprint) {
-                        run.state = 'queued';
-                        run.reason = 'Task content changed';
-                        await saveRun(cwd, run);
-                    }
-                    const workspaceLogs: string[] = [];
-                    const taskCwd = await prepareTaskWorkspace(root, run, snapshot, message => {workspaceLogs.push(message); callbacks.onLogLine(ticket.number, message);});
-                    if (workspaceLogs.length) await appendLog(run.artifacts, workspaceLogs.join('\n') + '\n');
-                    await inTaskWorkspace(root, run.key, async () => {
-                        const cwd = taskCwd;
-                        let branchExists = false;
-                        try {
-                            git(cwd, ['rev-parse', '--verify', `refs/heads/${run.branch}`]);
-                            branchExists = true;
-                        }
-                        catch { /* implementation may not have created the branch yet */ }
-                        // Edits left by a stopped instance become a checkpoint, never a permanent dirty-tree failure.
-                        if (branchExists && checkpointPartialWork(cwd, run.branch, `Checkpoint partial work from an interrupted attempt on ${ticket.title}`))
-                            callbacks.onLogLine(ticket.number, '[continuation] Committed partial work left by the previous instance.');
-                        if (branchExists && run.branch !== git(cwd, ['branch', '--show-current']).trim()) {
-                            assertClean(cwd);
-                            git(cwd, ['checkout', run.branch]);
-                        }
-                        if (run.phase === 'reconciliation') {
-                            git(cwd, ['fetch', 'origin', snapshot.baseBranch]);
-                            if (run.publication) {
-                                assertClean(cwd);
-                                git(cwd, ['fetch', 'origin', run.branch]);
-                                git(cwd, ['merge', '--ff-only', 'FETCH_HEAD']);
-                                run.implementation = { head: git(cwd, ['rev-parse', 'HEAD']).trim(), fingerprint: run.fingerprint };
-                                await saveRun(cwd, run);
-                            }
-                        }
-                        // A successful review may be reused only with the same environment,
-                        // current HEAD, base, task content and configured verification policy.
-                        snapshot._execution = await prepareEnvironment(snapshot, cwd, taskSignal, message => callbacks.onLogLine(ticket.number, message), setupBudget(cwd, run, snapshot));
-                        // This pass is the scheduled fresh attempt; a new failure schedules the next one.
-                        const retrying = consumeRetry(run);
-                        run.dependencies = run.dependencies.filter(d => d.id !== 'continuation' && d.id !== 'preflight' && d.kind !== 'environment');
-                        await saveRun(cwd, run);
-                        // A fresh repair instance runs before review whenever the last verdict concerned this exact commit.
-                        const repairFirst = async (reason: string, failure: Pick<AttemptInput, 'phase' | 'kind'>): Promise<boolean> => {
-                            snapshot._deadline = now() + snapshot.timeout * 1000;
-                            const before = head(cwd), logLines: string[] = [], outcome: { reason?: string; needsPerson?: boolean } = {};
-                            const repaired = await recoverFailedTicket({ ticket, config: snapshot, cwd, state: { ticket, status: 'blocked', branch: run.branch, logLines: [], elapsedMs: 0, failureReason: reason }, plan: run.plan ?? '', signal: taskSignal, history: attemptBriefing(run), outcome, onLogLine: line => { logLines.push(line); callbacks.onLogLine(ticket.number, line); } });
-                            if (taskSignal.aborted)
-                                return false;
-                            if (!repaired) {
-                                // No change: the next fresh attempt re-runs the full pass for a new verdict
-                                // instead of repeating the same repair. Failed CI always repairs first.
-                                await fail(outcome.needsPerson
-                                    ? { phase: failure.phase, status: 'needs-person', kind: 'capability', reason: outcome.reason ?? 'The instance gave no explanation.', needsPerson: true, needsRepair: true, head: before, logTail: logLines }
-                                    : { ...failure, status: 'failed', reason: outcome.reason ?? 'Repair produced no new commit', head: before, logTail: logLines });
-                                return false;
-                            }
-                            consumeRetry(run);
-                            run.implementation = { head: git(cwd, ['rev-parse', 'HEAD']).trim(), fingerprint: run.fingerprint };
-                            await saveRun(cwd, run);
-                            return true;
-                        };
-                        const failedCi = run.dependencies.find(d => d.kind === 'test');
-                        if (failedCi) {
-                            const current = git(cwd, ['rev-parse', 'HEAD']).trim();
-                            recordFailure(run, snapshot, 'test', { stage: failedCi.id, checks: snapshot.verification.requiredCiChecks ?? 'discovered' }, current, 'CI invariant remains failed');
-                            if (!await fail({ phase: 'ci', status: 'failed', kind: 'test', reason: `Required CI failed on ${current.slice(0, 12)}: ${failedCi.description}`, head: current, needsRepair: true }))
-                                return;
-                            if (!await repairFirst(failedCi.description, { phase: 'repair', kind: 'test' }))
-                                return;
-                            run.dependencies = run.dependencies.filter(d => d.id !== failedCi.id);
-                            await saveRun(cwd, run);
-                        }
-                        else if (retrying) {
-                            const last = latestAttempt(run), current = head(cwd);
-                            if (last?.needsRepair && current && last.head === current && run.implementation?.head === current) {
-                                callbacks.onLogLine(ticket.number, `[continuation] Starting a fresh repair instance for attempt ${last.number}: ${last.reason}`);
-                                if (!await repairFirst(last.reason, { phase: 'repair', kind: last.kind }))
-                                    return;
-                            }
-                        }
-                        let passed = false;
-                        if (run.publication && run.fingerprint === taskFingerprint(ticket)) {
-                            // The published commit was reviewed against its published base. A base that moved on
-                            // since then is judged by the completion pass (still mergeable or not), not by re-reviewing.
-                            const pinned = snapshot as typeof snapshot & { _base?: string };
-                            try {
-                                git(cwd, ['cat-file', '-e', `${run.publication.base}^{commit}`]);
-                                pinned._base = run.publication.base;
-                            }
-                            catch { /* unknown base object: fall back to the tracking ref */ }
-                            try {
-                                const context = captureContext(ticket, snapshot, cwd, run.plan ?? await import('../review/context.js').then(m => m.savedPlan(run.artifacts)), run.branch);
-                                passed = !!await loadPassedReview(path.join(run.artifacts, 'review'), context, snapshot.workflow.externalEvidence === 'advisory');
-                            }
-                            finally {
-                                delete pinned._base;
-                            }
-                        }
-                        if (passed && !run.dependencies.some(d => d.kind === 'test')) {
-                            clearVerifiedLocalDependencies(run);
-                            await advanceCompletion(snapshot, run, cwd, options.services, taskSignal);
-                            const state = { ticket, status: run.state === 'complete' ? 'done' as const : run.state === 'queued' ? 'pending' as const : 'waiting' as const, branch: run.branch, prUrl: run.publication?.url, prNumber: run.publication?.number, logLines: [], elapsedMs: 0, runKey: run.key, remaining: run.requirements.filter(r => r.status !== 'verified').map(r => r.text), failureReason: run.reason };
-                            callbacks.onStatusChange(ticket.number, {...state, workspace: run.workspace});
-                            if (run.state === 'complete')
-                                callbacks.onComplete(ticket.number, {...state, workspace: run.workspace});
-                        }
-                        else {
-                            // Refresh the base before obtaining new independent evidence.
-                            git(cwd, ['fetch', 'origin', snapshot.baseBranch]);
-                            await runAllTickets([ticket], snapshot, cwd, callbacks, taskSignal, options.services, true);
-                        }
-                    });
-                }
-                catch (error) {
-                    if (taskSignal.aborted)
-                        return;
-                    const failure = classifyFailure(error, run.phase), reason = error instanceof Error ? error.message : String(error);
-                    // Nested passes may have journaled attempts since this pass began; build on the saved record.
-                    const latest = await readRun(cwd, run.key).catch(() => undefined) ?? run;
-                    if (['complete', 'cancelled'].includes(latest.state))
-                        return;
-                    // Keep probing: setup exhaustion, provider outages and host errors resolve
-                    // later without a person restarting the queue. The journal records why.
-                    waitFor(latest, snapshot, 'continuation', failure.kind, reason, failure.nextAction);
-                    await fail({ phase: 'continuation', status: 'waiting', kind: failure.kind, reason, schedule: false }, latest);
-                }
-                finally {
-                    if (cancellation.cancelled()) {
-                        const current = await readRun(cwd, run.key) ?? run;
-                        current.state = 'cancelled';
-                        current.phase = 'cancelled';
-                        current.reason = 'Cancelled explicitly';
-                        await saveRun(cwd, current);
-                    }
-                    cancellation.dispose();
-                }
-            };
             const eligible = schedulingOrder(runs, now(), force).filter(run => run.state !== 'cancelled');
+            // Keys this pass has queued or is running; an answer to one of them waits until it is done.
+            const pending = new Set(eligible.map(run => run.key));
+            const resumeRun = async (run: TaskRun) => {
+                try { await continueRun(run, config, options); }
+                finally { pending.delete(run.key); }
+            };
+            const listed = () => listRuns(cwd, config.repo);
             const local = eligible.filter(run => (run.workspace?.mode ?? config.workspace.mode) === 'local');
-            await runPool(local, 1, resumeRun, signal);
-            await runPool(eligible.filter(run => !local.includes(run)), config.workspace.concurrency, resumeRun, signal);
+            await runPool(local, 1, resumeRun, signal, answeredTasks(options, config, 'local', listed, pending));
+            await runPool(eligible.filter(run => !local.includes(run)), config.workspace.concurrency, resumeRun, signal, answeredTasks(options, config, 'worktree', listed, pending));
         } finally {await release();}
         force = false;
         if (options.once || !config.continuation.watch || signal?.aborted)
@@ -280,6 +122,202 @@ async function workQueue(options: WorkerOptions): Promise<void> {
             }
         }
     } while (!signal?.aborted);
+}
+/**
+ * Lets a person's answer start its task while a pass is still running, instead of after the pass, which can
+ * take hours. Returns the `more` source for runPool: the answered tasks among `candidates` that use this
+ * workspace mode. Each one joins `pending`; the caller removes it when its instance is done.
+ */
+export function answeredTasks(options: WorkerOptions, config: IterisConfig, mode: 'local' | 'worktree', candidates: () => Promise<TaskRun[]>, pending: Set<string>): () => Promise<TaskRun[]> {
+    const { cwd, callbacks } = options;
+    return async () => {
+        let runs: TaskRun[];
+        // A failed listing is retried on the next poll.
+        try { runs = (await candidates()).filter(run => (run.workspace?.mode ?? config.workspace.mode) === mode); }
+        catch { return []; }
+        const ready: TaskRun[] = [];
+        for (const run of runs) {
+            try { ready.push(...await takeAnswers(cwd, [run], pending, (options.now ?? Date.now)())); }
+            catch (error) { callbacks.onLogLine(run.ticket.number, `[continuation] Could not take your answer: ${error instanceof Error ? error.message : String(error)}`); }
+        }
+        for (const run of ready) {
+            pending.add(run.key);
+            callbacks.onLogLine(run.ticket.number, '[continuation] Your answer was received; a fresh instance continues the task.');
+            callbacks.onStatusChange(run.ticket.number, { ticket: run.ticket, runKey: run.key, status: 'waiting', branch: run.branch, workspace: run.workspace, failureReason: run.reason, logLines: [], elapsedMs: 0 });
+        }
+        return ready;
+    };
+}
+/**
+ * Continues one task with a fresh instance. A worker pass runs every eligible task through it, and a pass
+ * picks up a task the moment a person answers it (see `answeredRuns`), so both continue the same way.
+ */
+export async function continueRun(run: TaskRun, config: IterisConfig, options: WorkerOptions): Promise<void> {
+    const { cwd, callbacks, signal } = options;
+    const now = options.now ?? Date.now;
+    if (signal?.aborted)
+        return;
+    const cancellation = await cancellationScope(cwd, run.key, signal), taskSignal = cancellation.signal;
+    const snapshot = { ...config, provider: run.source.provider, _requirements: run.requirements, _plannedChecks: localPlannedChecks(run) };
+    const root = cwd;
+    const notify = async (state: TicketState) => {
+        callbacks.onStatusChange(state.ticket.number, state);
+        try { await callbacks.onAttemptFailed?.(state.ticket.number, state); }
+        catch (error) { callbacks.onLogLine(state.ticket.number, `[continuation] Attempt notification failed: ${String(error)}`); }
+    };
+    // Journal a failure and report it. Returns false when the attempt cap stopped the task.
+    const fail = async (input: AttemptInput, target: TaskRun = run): Promise<boolean> => {
+        const record = recordAttempt(target, snapshot, input);
+        await saveRun(cwd, target);
+        callbacks.onLogLine(target.ticket.number, `[continuation] ${target.reason}`);
+        await notify({ ticket: target.ticket, runKey: target.key, status: record.disposition === 'stopped' ? 'blocked' : record.disposition === 'retry' ? 'retrying' : 'waiting', branch: target.branch, workspace: target.workspace, failureReason: target.reason, logLines: input.logTail ?? [], elapsedMs: 0, attempt: { number: record.number, status: record.status, disposition: record.disposition, ...(record.nextRetryAt ? { nextRetryAt: record.nextRetryAt } : {}) } });
+        return record.disposition !== 'stopped';
+    };
+    const head = (cwd: string) => { try { return git(cwd, ['rev-parse', 'HEAD']).trim(); } catch { return undefined; } };
+    // A blocked task selected here re-enters the attempt loop (legacy abandonment or an explicit resume).
+    if (run.state === 'blocked') {
+        run.state = 'queued';
+        await saveRun(cwd, run);
+    }
+    try {
+        const adapter = options.adapter?.(snapshot) ?? sourceAdapter(snapshot, cwd);
+        const ticket = { ...await adapter.refresh({ ...run.ticket, source: run.source }), branch: run.branch };
+        await rebindLegacyIdentity(cwd, run, ticket, snapshot);
+        if (taskFingerprint(ticket) !== run.fingerprint) {
+            run.state = 'queued';
+            run.reason = 'Task content changed';
+            await saveRun(cwd, run);
+        }
+        const workspaceLogs: string[] = [];
+        const taskCwd = await prepareTaskWorkspace(root, run, snapshot, message => {workspaceLogs.push(message); callbacks.onLogLine(ticket.number, message);});
+        if (workspaceLogs.length) await appendLog(run.artifacts, workspaceLogs.join('\n') + '\n');
+        await inTaskWorkspace(root, run.key, async () => {
+            const cwd = taskCwd;
+            let branchExists = false;
+            try {
+                git(cwd, ['rev-parse', '--verify', `refs/heads/${run.branch}`]);
+                branchExists = true;
+            }
+            catch { /* implementation may not have created the branch yet */ }
+            // Edits left by a stopped instance become a checkpoint, never a permanent dirty-tree failure.
+            if (branchExists && checkpointPartialWork(cwd, run.branch, `Checkpoint partial work from an interrupted attempt on ${ticket.title}`))
+                callbacks.onLogLine(ticket.number, '[continuation] Committed partial work left by the previous instance.');
+            if (branchExists && run.branch !== git(cwd, ['branch', '--show-current']).trim()) {
+                assertClean(cwd);
+                git(cwd, ['checkout', run.branch]);
+            }
+            if (run.phase === 'reconciliation') {
+                git(cwd, ['fetch', 'origin', snapshot.baseBranch]);
+                if (run.publication) {
+                    assertClean(cwd);
+                    git(cwd, ['fetch', 'origin', run.branch]);
+                    git(cwd, ['merge', '--ff-only', 'FETCH_HEAD']);
+                    run.implementation = { head: git(cwd, ['rev-parse', 'HEAD']).trim(), fingerprint: run.fingerprint };
+                    await saveRun(cwd, run);
+                }
+            }
+            // A successful review may be reused only with the same environment,
+            // current HEAD, base, task content and configured verification policy.
+            snapshot._execution = await prepareEnvironment(snapshot, cwd, taskSignal, message => callbacks.onLogLine(ticket.number, message), setupBudget(cwd, run, snapshot));
+            // This pass is the scheduled fresh attempt; a new failure schedules the next one.
+            const retrying = consumeRetry(run);
+            run.dependencies = run.dependencies.filter(d => d.id !== 'continuation' && d.id !== 'preflight' && d.kind !== 'environment');
+            await saveRun(cwd, run);
+            // A fresh repair instance runs before review whenever the last verdict concerned this exact commit.
+            const repairFirst = async (reason: string, failure: Pick<AttemptInput, 'phase' | 'kind'>): Promise<boolean> => {
+                snapshot._deadline = now() + snapshot.timeout * 1000;
+                const before = head(cwd), logLines: string[] = [], outcome: { reason?: string; needsPerson?: boolean } = {};
+                const repaired = await recoverFailedTicket({ ticket, config: snapshot, cwd, state: { ticket, status: 'blocked', branch: run.branch, logLines: [], elapsedMs: 0, failureReason: reason }, plan: run.plan ?? '', signal: taskSignal, history: attemptBriefing(run), outcome, onLogLine: line => { logLines.push(line); callbacks.onLogLine(ticket.number, line); } });
+                if (taskSignal.aborted)
+                    return false;
+                if (!repaired) {
+                    // No change: the next fresh attempt re-runs the full pass for a new verdict
+                    // instead of repeating the same repair. Failed CI always repairs first.
+                    await fail(outcome.needsPerson
+                        ? { phase: failure.phase, status: 'needs-person', kind: 'capability', reason: outcome.reason ?? 'The instance gave no explanation.', needsPerson: true, needsRepair: true, head: before, logTail: logLines }
+                        : { ...failure, status: 'failed', reason: outcome.reason ?? 'Repair produced no new commit', head: before, logTail: logLines });
+                    return false;
+                }
+                consumeRetry(run);
+                run.implementation = { head: git(cwd, ['rev-parse', 'HEAD']).trim(), fingerprint: run.fingerprint };
+                await saveRun(cwd, run);
+                return true;
+            };
+            const failedCi = run.dependencies.find(d => d.kind === 'test');
+            if (failedCi) {
+                const current = git(cwd, ['rev-parse', 'HEAD']).trim();
+                recordFailure(run, snapshot, 'test', { stage: failedCi.id, checks: snapshot.verification.requiredCiChecks ?? 'discovered' }, current, 'CI invariant remains failed');
+                if (!await fail({ phase: 'ci', status: 'failed', kind: 'test', reason: `Required CI failed on ${current.slice(0, 12)}: ${failedCi.description}`, head: current, needsRepair: true }))
+                    return;
+                if (!await repairFirst(failedCi.description, { phase: 'repair', kind: 'test' }))
+                    return;
+                run.dependencies = run.dependencies.filter(d => d.id !== failedCi.id);
+                await saveRun(cwd, run);
+            }
+            else if (retrying) {
+                const last = latestAttempt(run), current = head(cwd);
+                if (last?.needsRepair && current && last.head === current && run.implementation?.head === current) {
+                    callbacks.onLogLine(ticket.number, `[continuation] Starting a fresh repair instance for attempt ${last.number}: ${last.reason}`);
+                    if (!await repairFirst(last.reason, { phase: 'repair', kind: last.kind }))
+                        return;
+                }
+            }
+            let passed = false;
+            if (run.publication && run.fingerprint === taskFingerprint(ticket)) {
+                // The published commit was reviewed against its published base. A base that moved on
+                // since then is judged by the completion pass (still mergeable or not), not by re-reviewing.
+                const pinned = snapshot as typeof snapshot & { _base?: string };
+                try {
+                    git(cwd, ['cat-file', '-e', `${run.publication.base}^{commit}`]);
+                    pinned._base = run.publication.base;
+                }
+                catch { /* unknown base object: fall back to the tracking ref */ }
+                try {
+                    const context = captureContext(ticket, snapshot, cwd, run.plan ?? await import('../review/context.js').then(m => m.savedPlan(run.artifacts)), run.branch);
+                    passed = !!await loadPassedReview(path.join(run.artifacts, 'review'), context, snapshot.workflow.externalEvidence === 'advisory');
+                }
+                finally {
+                    delete pinned._base;
+                }
+            }
+            if (passed && !run.dependencies.some(d => d.kind === 'test')) {
+                clearVerifiedLocalDependencies(run);
+                await advanceCompletion(snapshot, run, cwd, options.services, taskSignal);
+                const state = { ticket, status: run.state === 'complete' ? 'done' as const : run.state === 'queued' ? 'pending' as const : 'waiting' as const, branch: run.branch, prUrl: run.publication?.url, prNumber: run.publication?.number, logLines: [], elapsedMs: 0, runKey: run.key, remaining: run.requirements.filter(r => r.status !== 'verified').map(r => r.text), failureReason: run.reason };
+                callbacks.onStatusChange(ticket.number, {...state, workspace: run.workspace});
+                if (run.state === 'complete')
+                    callbacks.onComplete(ticket.number, {...state, workspace: run.workspace});
+            }
+            else {
+                // Refresh the base before obtaining new independent evidence.
+                git(cwd, ['fetch', 'origin', snapshot.baseBranch]);
+                await runAllTickets([ticket], snapshot, cwd, callbacks, taskSignal, options.services, true);
+            }
+        });
+    }
+    catch (error) {
+        if (taskSignal.aborted)
+            return;
+        const failure = classifyFailure(error, run.phase), reason = error instanceof Error ? error.message : String(error);
+        // Nested passes may have journaled attempts since this pass began; build on the saved record.
+        const latest = await readRun(cwd, run.key).catch(() => undefined) ?? run;
+        if (['complete', 'cancelled'].includes(latest.state))
+            return;
+        // Keep probing: setup exhaustion, provider outages and host errors resolve
+        // later without a person restarting the queue. The journal records why.
+        waitFor(latest, snapshot, 'continuation', failure.kind, reason, failure.nextAction);
+        await fail({ phase: 'continuation', status: 'waiting', kind: failure.kind, reason, schedule: false }, latest);
+    }
+    finally {
+        if (cancellation.cancelled()) {
+            const current = await readRun(cwd, run.key) ?? run;
+            current.state = 'cancelled';
+            current.phase = 'cancelled';
+            current.reason = 'Cancelled explicitly';
+            await saveRun(cwd, current);
+        }
+        cancellation.dispose();
+    }
 }
 export async function unfinishedTickets(cwd: string, config: IterisConfig): Promise<Ticket[]> {
     const runs = await listRuns(cwd, config.repo), answered = new Set<string>();

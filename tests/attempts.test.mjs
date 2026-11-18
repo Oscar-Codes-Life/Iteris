@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
-import {readFile} from 'node:fs/promises';
+import {readFile, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {atomicWriteConfig} from '../dist/config.js';
 import {runAllTickets} from '../dist/agent/runner.js';
@@ -187,6 +187,34 @@ test('a live queue keeps watching a task that asked and continues it as soon as 
 	await queue;
 	assert.equal((await readRun(cwd, key)).state, 'complete');
 	assert.ok(Date.now() - answered < 30_000);
+});
+
+test('an answer continues its task during the first pass while another task still holds a slot', async t => {
+	const {cwd} = await reviewRepository(t), tools = await temporary(t), gate = path.join(tools, 'release');
+	// #2 holds its slot until the test releases it; #1 asks for a person until it is given an answer.
+	await executable(tools, 'codex', fakeAgent.replace("if (process.env.FAKE_IMPLEMENT === '1'", `if (prompt.startsWith('You are an autonomous')) {
+ const number = Number((prompt.match(/Ticket: #(\\d+)/) || [])[1]), deadline = Date.now() + 60000;
+ if (number === 2) while (!fs.existsSync(process.env.GATE) && Date.now() < deadline) await new Promise(r => setTimeout(r, 20));
+ if (number === 1 && !prompt.includes('## Answers from the person')) {process.env.FAKE_BLOCKED = '1'; delete process.env.FAKE_IMPLEMENT;}
+ }
+ if (process.env.FAKE_IMPLEMENT === '1'`));
+	environment(t, {PATH: `${tools}:${process.env.PATH}`, GATE: gate, FAKE_IMPLEMENT: '1', FAKE_MODE: undefined, FAKE_BLOCKED: undefined, REVIEW_SCENARIO: undefined, CAPTURE: path.join(cwd, 'calls.jsonl')});
+	const cfg = config('codex'); cfg.planMode = false; cfg.workspace = {mode: 'worktree', concurrency: 2}; cfg.continuation.watch = false; await atomicWriteConfig(cfg, cwd);
+	const api = {...services(), source: () => ({refresh: async task => task})}, key = taskKey(ticket(1), cfg), seen = [];
+	const until = async (check, what) => {for (const deadline = Date.now() + 30000; !await check();) {if (Date.now() > deadline) assert.fail(`Timed out waiting until ${what}`); await new Promise(r => setTimeout(r, 50));}};
+	const pass = runAllTickets([ticket(1), ticket(2)], cfg, cwd, {...quiet, onStatusChange: (number, state) => {if (number === 1) seen.push(state.status);}}, undefined, api);
+	t.after(() => writeFile(gate, '').catch(() => {}));
+	await until(async () => {const run = await readRun(cwd, key); return !!run && awaitingPerson(run);}, '#1 asks for a person');
+	await submitAnswer(cwd, key, 'The export is in docs/logs.csv.');
+	const answered = async () => (await calls(cwd)).some(call => call.prompt.startsWith('You are an autonomous') && /Answer: The export is in docs\/logs\.csv\./.test(call.prompt));
+	await until(answered, '#1 continues with the answer');
+	assert.equal((await readRun(cwd, taskKey(ticket(2), cfg))).state, 'active', '#2 still holds its slot');
+	assert.equal(await answerWaiting(cwd, key), false);
+	await writeFile(gate, '');
+	await pass;
+	const run = await readRun(cwd, key);
+	assert.ok(['waiting', 'complete'].includes(run.state), run.reason); assert.equal(run.answers.length, 1);
+	assert.ok(seen.indexOf('blocked') < seen.lastIndexOf('running'), 'the view sees #1 run again after it stopped');
 });
 
 test('a repair instance that needs a person stops the task instead of scheduling another repair', async t => {

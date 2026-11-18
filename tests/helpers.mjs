@@ -169,7 +169,8 @@ export async function reviewRepository(t, existing) {
  git('config','user.email','test@example.com'); git('config','user.name','Test');
  await writeFile(path.join(cwd,'.git/info/exclude'), '\n.iteris/\n.tasks/\n.iteris.json\ncalls.jsonl\nclaude\ncodex\n');
  await writeFile(path.join(cwd,'feature.txt'), 'base\n'); git('add','feature.txt'); git('commit','-qm','base');
- execFileSync('git',['init','--bare','-q',remote]); git('remote','add','origin',remote); git('push','-q','origin','main');
+ // Name the remote's branch: with no init.defaultBranch its HEAD would name a missing master, and clones of it start empty.
+ execFileSync('git',['init','--bare','-q','-b','main',remote]); git('remote','add','origin',remote); git('push','-q','origin','main');
  return {cwd, remote, git};
 }
 

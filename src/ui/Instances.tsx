@@ -8,12 +8,18 @@ export const activeStatuses = new Set(['preparing', 'planning', 'running', 'revi
 const waiting = new Set(['waiting', 'retrying']);
 /** Nothing more happens to these until a person acts. */
 const needsYou = new Set(['failed', 'blocked', 'incomplete', 'stale']);
-const color = (state: TicketState) => state.status === 'done' ? 'green' : needsYou.has(state.status) ? 'red' : waiting.has(state.status) ? 'yellow' : activeStatuses.has(state.status) ? 'cyan' : 'gray';
-const icon = (state: TicketState) => state.status === 'done' ? '✓' : needsYou.has(state.status) ? '!' : waiting.has(state.status) ? '◷' : activeStatuses.has(state.status) ? '●' : '○';
+/** An answered task no longer needs the person: it waits for a slot like a scheduled retry. */
+const needsPerson = (state: TicketState) => needsYou.has(state.status) && !state.answered;
+const waits = (state: TicketState) => waiting.has(state.status) || !!state.answered;
+const color = (state: TicketState) => state.status === 'done' ? 'green' : needsPerson(state) ? 'red' : waits(state) ? 'yellow' : activeStatuses.has(state.status) ? 'cyan' : 'gray';
+const icon = (state: TicketState) => state.status === 'done' ? '✓' : needsPerson(state) ? '!' : waits(state) ? '◷' : activeStatuses.has(state.status) ? '●' : '○';
+const label = (state: TicketState) => state.answered ? 'answered' : state.status;
+const continuing = 'Answer received · continues as soon as a task slot is free';
 /** What the task is doing while no instance is attached to it. */
 const idle = (state: TicketState) => state.status === 'pending' ? 'Waiting for a task slot'
 	: state.status === 'waiting' ? 'No instance running · Iteris checks again by itself'
 	: state.status === 'retrying' ? `No instance running · a fresh one starts${state.attempt?.nextRetryAt ? ` after ${new Date(state.attempt.nextRetryAt).toLocaleTimeString()}` : ' later'}`
+	: state.answered ? continuing
 	: question(state) !== undefined ? 'Stopped · waiting for your answer'
 	: state.status === 'blocked' ? 'Stopped · run iteris resume to try again, or iteris cancel <task key> to drop it'
 	: state.status === 'done' ? 'Finished' : 'No instance running';
@@ -48,8 +54,8 @@ export function Instances({states, selected, workspace, answer}: {states: Ticket
 			<Text bold color="cyan">{states.filter(state => activeStatuses.has(state.status)).length} {columns < 65 ? 'active' : 'running'}</Text>
 			<Text dimColor>{states.filter(state => state.status === 'pending').length} queued</Text>
 			<Text color="green">{states.filter(state => state.status === 'done').length} {columns < 65 ? 'done' : 'complete'}</Text>
-			<Text color="yellow">{states.filter(state => waiting.has(state.status)).length} waiting</Text>
-				<Text color="red">{states.filter(state => needsYou.has(state.status)).length} {columns < 65 ? 'stopped' : 'need you'}</Text>
+			<Text color="yellow">{states.filter(waits).length} waiting</Text>
+				<Text color="red">{states.filter(needsPerson).length} {columns < 65 ? 'stopped' : 'need you'}</Text>
 		</Box>
 		<Text dimColor>{workspace.mode === 'worktree' ? `Worktrees · up to ${workspace.concurrency} parallel tasks` : 'Local checkout · one task at a time'}</Text>
 		<Box flexDirection="column" marginTop={1}>
@@ -63,7 +69,7 @@ export function Instances({states, selected, workspace, answer}: {states: Ticket
 						<Text bold={chosen} wrap="truncate">#{state.ticket.number} {state.ticket.title}</Text>
 					</Box>
 					<Box paddingLeft={narrow ? 4 : 1} width={narrow ? undefined : 36} flexShrink={0}>
-						<Box width={14}><Text color={color(state)}>{state.status}</Text></Box>
+						<Box width={14}><Text color={color(state)}>{label(state)}</Text></Box>
 						<Box width={12}><Text dimColor>{state.selection?.harness ?? '—'}</Text></Box>
 						<Text dimColor>{state.startedAt ? elapsed(state.elapsedMs) : '—'}</Text>
 					</Box>
@@ -79,12 +85,12 @@ export function Instances({states, selected, workspace, answer}: {states: Ticket
 			{current.prUrl && <Text color="green" wrap="truncate">PR {current.prUrl}</Text>}
 			{current.failureReason && asked === undefined && <Text color={stopped ? 'red' : 'yellow'} wrap={stopped ? 'wrap' : 'truncate'}>{stopped ? clip(current.failureReason) : current.failureReason}</Text>}
 			{asked !== undefined ? <Box flexDirection="column" marginTop={1}>
-				<Text bold color="yellow">Iteris needs your help to continue this task</Text>
+				<Text bold color="yellow">{current.answered ? 'You answered this task' : 'Iteris needs your help to continue this task'}</Text>
 				<Text wrap="wrap">{clip(asked)}</Text>
 				{answer?.draft != null ? <Box flexDirection="column" marginTop={1}>
 					<Text bold>Your answer <Text dimColor>· Enter sends · Esc cancels</Text></Text>
 					<Text color="cyan" wrap="wrap">› {answer.draft.slice(-room)}▌</Text>
-				</Box> : <Box marginTop={1}><Text color="cyan" wrap="truncate">{answer?.note ?? (answer ? 'Press Enter to type your answer' : 'Answer with: iteris answer <task key> "your answer"')}</Text></Box>}
+				</Box> : <Box marginTop={1}><Text color="cyan" wrap="truncate">{answer?.note ?? (current.answered ? `${continuing}${answer ? ' · Enter adds to your answer' : ''}` : answer ? 'Press Enter to type your answer' : 'Answer with: iteris answer <task key> "your answer"')}</Text></Box>}
 			</Box> : <>
 			<Box marginTop={1}><Text bold dimColor>{current.selection?.harness === 'codex' ? 'Codex' : current.selection?.harness === 'claude' ? 'Claude Code' : 'Task'} output</Text></Box>
 			{current.logLines.length ? current.logLines.slice(-Math.max(1, Math.min(5, rows - 26))).map((line, index) => <Text key={index} wrap="truncate">› {line}</Text>) : <Text dimColor>Waiting for output…</Text>}
