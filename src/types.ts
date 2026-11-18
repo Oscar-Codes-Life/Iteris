@@ -32,6 +32,8 @@ export type TicketState = {
 	prNumber?: number;
 	reviewPending?: string;
 	failureReason?: string;
+	/** A person answered this stopped task; a fresh instance continues it when a task slot is free. */
+	answered?: boolean;
 	/** Set when this pass failed and was journaled; retry means a fresh instance is scheduled. */
 	attempt?: {number: number; status: string; disposition: 'retry' | 'waiting' | 'stopped'; nextRetryAt?: string; needsRepair?: boolean};
 	startedAt?: Date;

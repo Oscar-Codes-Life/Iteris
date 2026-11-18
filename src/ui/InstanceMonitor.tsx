@@ -6,6 +6,8 @@ import type {IterisConfig, TicketState} from '../types.js';
 import {listRuns} from '../lifecycle/state.js';
 import {retryScheduled} from '../lifecycle/attempts.js';
 import {hasActiveRun} from '../state/active.js';
+import {answerWaiting} from '../lifecycle/answers.js';
+import {awaitingPerson} from '../lifecycle/attempts.js';
 import {Instances} from './Instances.js';
 import {useAnswer, question} from './answer.js';
 
@@ -24,7 +26,8 @@ export async function readInstances(cwd: string, config: IterisConfig): Promise<
 		return {...saved, ticket: run.ticket, runKey: run.key, branch: run.branch, workspace: run.workspace, status, logLines,
 			startedAt: saved.startedAt ? new Date(saved.startedAt) : undefined,
 			elapsedMs: run.state === 'active' && active && saved.startedAt ? Date.now() - new Date(saved.startedAt).getTime() : saved.elapsedMs ?? 0,
-			prUrl: run.publication?.url, failureReason: run.state === 'active' && !active ? 'Interrupted · run iteris resume to continue' : run.reason};
+			prUrl: run.publication?.url, failureReason: run.state === 'active' && !active ? 'Interrupted · run iteris resume to continue' : run.reason,
+			answered: awaitingPerson(run) && await answerWaiting(cwd, run.key)};
 	}));
 }
 

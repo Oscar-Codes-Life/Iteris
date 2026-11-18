@@ -36,7 +36,7 @@ import {planningSchema,applyPlanningPack,localPlannedChecks} from '../lifecycle/
 import {parseOrRecoverReport} from './schema-recovery.js';
 import {importLegacyArtifacts} from '../lifecycle/migration.js';
 import {cancellationScope} from '../lifecycle/cancellation.js';
-import {githubTaskRepository} from '../lifecycle/adapters.js';
+import {githubTaskRepository, type TaskSourceAdapter} from '../lifecycle/adapters.js';
 import {evidenceNote} from '../lifecycle/evidence.js';
 import {tidyBranch} from './tidy.js';
 
@@ -52,7 +52,9 @@ export type RunnerCallbacks = {
 	onAttemptFailed?: (ticketNumber: number, state: TicketState) => void | Promise<void>;
 	beforeTicket?: () => Promise<IterisConfig>;
 };
-export type RunnerServices = CompletionServices & {findPr: typeof findPrForBranch; createPr: typeof createPullRequest; addLabel: typeof addLabelToIssue; moveCard: typeof moveCardOnComplete; updateReview?: typeof updatePrReview; updateSections?: typeof updatePrSections};
+export type RunnerServices = CompletionServices & {findPr: typeof findPrForBranch; createPr: typeof createPullRequest; addLabel: typeof addLabelToIssue; moveCard: typeof moveCardOnComplete; updateReview?: typeof updatePrReview; updateSections?: typeof updatePrSections;
+	/** Reads a task back from its source before an answered task continues; the configured source by default. */
+	source?: (config: IterisConfig) => TaskSourceAdapter};
 const defaultServices: RunnerServices = {findPr: findPrForBranch, createPr: createPullRequest, addLabel: addLabelToIssue, moveCard: moveCardOnComplete, updateReview: updatePrReview, updateSections: updatePrSections,draft:setGithubDraft,status:updatePrLifecycle};
 export async function runAllTickets(tickets: Ticket[], config: IterisConfig, cwd: string, callbacks: RunnerCallbacks, externalSignal?: AbortSignal, services: RunnerServices = defaultServices, ownsRepositoryLock = false): Promise<void> {
 	// Duplicate source entries must never launch two writers in the same checkout.
@@ -174,8 +176,25 @@ export async function runAllTickets(tickets: Ticket[], config: IterisConfig, cwd
 		const saved = await Promise.all(tickets.map(ticket => ensureRun(cwd, ticket, config, '', ticketBranch(ticket))));
 		const local = tickets.filter((_, index) => (saved[index]?.workspace?.mode ?? config.workspace.mode) === 'local');
 		const isolated = tickets.filter(ticket => !local.includes(ticket));
-		await runPool(local, 1, runQueuedTicket, controller.signal);
-		await runPool(isolated, config.workspace.concurrency, runQueuedTicket, controller.signal);
+		// A task that stopped to ask continues as soon as its answer arrives and a slot is free, not after the
+		// whole pass. The nested passes of a continuation leave this to the queue that owns the lock.
+		type Work = {ticket: Ticket} | {run: TaskRun};
+		const pending = new Set(tickets.map(ticket => taskKey(ticket, config)));
+		const worker = ownsRepositoryLock ? undefined : await import('../lifecycle/worker.js');
+		const options = {config, cwd, callbacks, signal: controller.signal, services: services === defaultServices ? undefined : services, adapter: services.source};
+		const perform = async (work: Work) => {
+			try {
+				if ('run' in work) await worker!.continueRun(work.run, config, options);
+				else await runQueuedTicket(work.ticket);
+			} finally {pending.delete('run' in work ? work.run.key : taskKey(work.ticket, config));}
+		};
+		const asked = async () => (await Promise.all(tickets.map(ticket => readRun(cwd, taskKey(ticket, config))))).filter((run): run is TaskRun => !!run);
+		const answered = (mode: 'local' | 'worktree') => {
+			const source = worker?.answeredTasks(options, config, mode, asked, pending);
+			return source && (async () => (await source()).map((run): Work => ({run})));
+		};
+		await runPool(local.map((ticket): Work => ({ticket})), 1, perform, controller.signal, answered('local'));
+		await runPool(isolated.map((ticket): Work => ({ticket})), config.workspace.concurrency, perform, controller.signal, answered('worktree'));
 	} finally {
 		process.off('SIGINT', abort); process.off('SIGTERM', abort);
 		externalSignal?.removeEventListener('abort', abort);

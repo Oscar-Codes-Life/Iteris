@@ -2,7 +2,7 @@ import {stateRoot} from '../state/workspace.js';
 import {readFile, unlink} from 'node:fs/promises';
 import path from 'node:path';
 import {z} from 'zod';
-import {atomicJson, type TaskRun} from './state.js';
+import {atomicJson, saveRun, type TaskRun} from './state.js';
 import {ATTEMPT_DEPENDENCY, awaitingPerson, personQuestion} from './attempts.js';
 
 /**
@@ -49,4 +49,20 @@ export async function takeAnswer(cwd: string, run: TaskRun, now = Date.now()): P
 	}
 	await unlink(filename(cwd, run.key)).catch(() => {});
 	return true;
+}
+
+/**
+ * Takes the waiting answers of these tasks and returns the tasks they let continue, saved and ready for a
+ * fresh instance. A task in `busy` is queued or still finishing the instance that asked, so its answer stays
+ * for a later call.
+ */
+export async function takeAnswers(cwd: string, runs: TaskRun[], busy: ReadonlySet<string>, now = Date.now()): Promise<TaskRun[]> {
+	const ready: TaskRun[] = [];
+	for (const run of runs) {
+		if (busy.has(run.key) || !awaitingPerson(run) || !await answerWaiting(cwd, run.key)) continue;
+		await takeAnswer(cwd, run, now);
+		await saveRun(cwd, run);
+		ready.push(run);
+	}
+	return ready;
 }
