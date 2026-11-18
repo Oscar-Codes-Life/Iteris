@@ -27,7 +27,8 @@ export async function readInstances(cwd: string, config: IterisConfig): Promise<
 			startedAt: saved.startedAt ? new Date(saved.startedAt) : undefined,
 			elapsedMs: run.state === 'active' && active && saved.startedAt ? Date.now() - new Date(saved.startedAt).getTime() : saved.elapsedMs ?? 0,
 			prUrl: run.publication?.url, failureReason: run.state === 'active' && !active ? 'Interrupted · run iteris resume to continue' : run.reason,
-			answered: awaitingPerson(run) && await answerWaiting(cwd, run.key)};
+			// Without a queue nothing takes the answer, so the task still needs the person to run iteris.
+			answered: active && awaitingPerson(run) && await answerWaiting(cwd, run.key)};
 	}));
 }
 

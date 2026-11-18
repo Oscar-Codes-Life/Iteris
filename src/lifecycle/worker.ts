@@ -131,10 +131,15 @@ async function workQueue(options: WorkerOptions): Promise<void> {
 export function answeredTasks(options: WorkerOptions, config: IterisConfig, mode: 'local' | 'worktree', candidates: () => Promise<TaskRun[]>, pending: Set<string>): () => Promise<TaskRun[]> {
     const { cwd, callbacks } = options;
     return async () => {
-        let ready: TaskRun[];
-        // A failed look is retried on the next poll, and the next pass takes the answer in any case.
-        try { ready = await takeAnswers(cwd, (await candidates()).filter(run => (run.workspace?.mode ?? config.workspace.mode) === mode), pending, (options.now ?? Date.now)()); }
+        let runs: TaskRun[];
+        // A failed listing is retried on the next poll.
+        try { runs = (await candidates()).filter(run => (run.workspace?.mode ?? config.workspace.mode) === mode); }
         catch { return []; }
+        const ready: TaskRun[] = [];
+        for (const run of runs) {
+            try { ready.push(...await takeAnswers(cwd, [run], pending, (options.now ?? Date.now)())); }
+            catch (error) { callbacks.onLogLine(run.ticket.number, `[continuation] Could not take your answer: ${error instanceof Error ? error.message : String(error)}`); }
+        }
         for (const run of ready) {
             pending.add(run.key);
             callbacks.onLogLine(run.ticket.number, '[continuation] Your answer was received; a fresh instance continues the task.');

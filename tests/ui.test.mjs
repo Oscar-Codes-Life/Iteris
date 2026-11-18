@@ -122,5 +122,7 @@ test('a stopped task shows what it needs and a text field whose answer is saved 
  ui.stdin.write('quit the device part,\njust keep the unit tests');await wait(60);ui.stdin.write('\u007f');await wait(60);ui.stdin.write('s');await wait(60);
  assert.equal(await answerWaiting(cwd,run.key),false);ui.stdin.write('\r');await wait(150);
  assert.match(ui.output(),/Answer saved · run iteris to continue this task/);
+ // With no queue running nothing takes the answer, so after the next refresh the task still needs the person.
+ await wait(1200);const latest=ui.output().split('live project overview').at(-1);assert.match(latest,/1 need you/);assert.match(latest,/Iteris needs your help to continue this task/);
  assert.equal(await takeAnswer(cwd,run),true);assert.equal(run.answers[0].text,'quit the device part, just keep the unit tests');assert.match(run.answers[0].question,/^I need an iPhone/);
 });
